@@ -1,0 +1,491 @@
+openapi: 3.0.3
+info:
+  title: AgentGate API
+  description: API dokumentasi untuk AgentGate - Open Source API Gateway untuk LLM
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: https://api.agentgate.io
+    description: Production server
+
+paths:
+  /v1/models:
+    get:
+      summary: List Available Models
+      description: Mengembalikan daftar semua model yang tersedia dari semua provider
+      operationId: listModels
+      tags:
+        - Models
+      responses:
+        '200':
+          description: Daftar model berhasil diambil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
+              examples:
+                modelList:
+                  value:
+                    object: "list"
+                    data:
+                      - id: "gpt-4"
+                        provider: "openai"
+                      - id: "claude-3-opus"
+                        provider: "anthropic"
+
+  /v1/chat/completions:
+    post:
+      summary: Create Chat Completion
+      description: Mengirimkan permintaan chat ke LLM. Jika provider tidak ditentukan, sistem akan merouting berdasarkan model
+      operationId: createChatCompletion
+      tags:
+        - Chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+            example:
+              model: "gpt-4"
+              messages:
+                - role: "user"
+                  content: "Hello, how are you?"
+              temperature: 0.7
+      responses:
+        '200':
+          description: Chat completion berhasil dibuat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+        '400':
+          description: Permintaan tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Model atau provider tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /health:
+    get:
+      summary: Health Check
+      description: Memeriksa ketersediaan layanan
+      operationId: healthCheck
+      tags:
+        - System
+      responses:
+        '200':
+          description: Layanan sehat
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "OK"
+
+  /admin/provider:
+    post:
+      summary: Add Provider
+      description: Menambahkan provider LLM baru ke dalam registry
+      operationId: addProvider
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddProviderRequest'
+            examples:
+              basicProvider:
+                value:
+                  id: "openai"
+                  bin: "/usr/local/bin/openai-cli"
+                  models:
+                    - "gpt-4"
+                    - "gpt-3.5-turbo"
+              derivedProvider:
+                value:
+                  id: "anthropic"
+                  models:
+                    - "claude-3-opus"
+                    - "claude-3-sonnet"
+      responses:
+        '200':
+          description: Provider berhasil ditambahkan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                status: "ok"
+
+  /admin/key:
+    post:
+      summary: Add API Key
+      description: Menambahkan atau memperbarui API key untuk provider tertentu
+      operationId: addKey
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddKeyRequest'
+            example:
+              provider: "openai"
+              key: "sk-***"
+      responses:
+        '200':
+          description: API key berhasil ditambahkan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                status: "ok"
+                provider: "openai"
+
+  /admin/proxy:
+    post:
+      summary: Proxy Request
+      description: Membuat permintaan proxy ke target tertentu
+      operationId: proxyRequest
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProxyRequest'
+            example:
+              target: "https://example-proxy.com"
+      responses:
+        '200':
+          description: Permintaan proxy berhasil dikirim
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                status: "ok"
+                target: "https://example-proxy.com"
+
+  /admin/skill:
+    post:
+      summary: Add Skill
+      description: Menambahkan skill/tool baru ke dalam sistem
+      operationId: addSkill
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddSkillRequest'
+            example:
+              name: "web-scraper"
+              description: "Skill untuk scraping web"
+              command: "python3 /opt/skills/scraper.py"
+      responses:
+        '200':
+          description: Skill berhasil ditambahkan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                status: "ok"
+                skill: "web-scraper"
+
+  /admin/mcp:
+    post:
+      summary: Add MCP Server
+      description: Menambahkan MCP (Model Context Protocol) server baru
+      operationId: addMcp
+      tags:
+        - Admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddMcpRequest'
+            example:
+              name: "mcp-filesystem"
+              command: "npx"
+              args:
+                - "-y"
+                - "@modelcontextprotocol/server-filesystem"
+                - "/home/user/docs"
+      responses:
+        '200':
+          description: MCP server berhasil ditambahkan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                status: "ok"
+                mcp: "mcp-filesystem"
+
+components:
+  schemas:
+    ModelsResponse:
+      type: object
+      properties:
+        object:
+          type: string
+          example: "list"
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelInfo'
+
+    ModelInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          description: ID model
+          example: "gpt-4"
+        provider:
+          type: string
+          description: Nama provider
+          example: "openai"
+
+    ChatCompletionRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          description: ID model yang akan digunakan
+          example: "gpt-4"
+        provider:
+          type: string
+          nullable: true
+          description: ID provider (opsional, jika tidak disertakan sistem akan merouting otomatis)
+          example: "openai"
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        temperature:
+          type: number
+          nullable: true
+          description: Sampling temperature
+          minimum: 0
+          maximum: 2
+          example: 0.7
+        max_tokens:
+          type: integer
+          nullable: true
+          description: Maksimum token output
+          example: 2048
+        top_p:
+          type: number
+          nullable: true
+          description: Nucleus sampling
+          example: 1.0
+        stream:
+          type: boolean
+          nullable: true
+          description: Jika true, menggunakan streaming response
+          example: false
+        stop:
+          type: array
+          nullable: true
+          items:
+            type: string
+          description: Sequence untuk menghentikan generasi
+        user:
+          type: string
+          nullable: true
+          description: ID pengguna
+      required:
+        - model
+        - messages
+
+    ChatMessage:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+          description: Peran pengirim pesan
+        content:
+          type: string
+          description: Konten pesan
+        name:
+          type: string
+          nullable: true
+          description: Nama entitas (untuk role tool)
+      required:
+        - role
+        - content
+
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "chatcmpl-12345"
+        object:
+          type: string
+          example: "chat.completion"
+        created:
+          type: integer
+          example: 1677652278
+        model:
+          type: string
+          example: "gpt-4"
+        choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/Choice'
+        usage:
+          $ref: '#/components/schemas/Usage'
+
+    Choice:
+      type: object
+      properties:
+        index:
+          type: integer
+          example: 0
+        message:
+          $ref: '#/components/schemas/ChatMessage'
+        finish_reason:
+          type: string
+          example: "stop"
+
+    Usage:
+      type: object
+      properties:
+        prompt_tokens:
+          type: integer
+          example: 9
+        completion_tokens:
+          type: integer
+          example: 12
+        total_tokens:
+          type: integer
+          example: 21
+
+    AddProviderRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          description: ID unik provider
+          example: "openai"
+        bin:
+          type: string
+          nullable: true
+          description: Path binary CLI provider (opsional)
+          example: "/usr/local/bin/openai-cli"
+        models:
+          type: array
+          items:
+            type: string
+          description: Daftar model yang didukung provider
+          example: ["gpt-4", "gpt-3.5-turbo"]
+      required:
+        - id
+        - models
+
+    AddKeyRequest:
+      type: object
+      properties:
+        provider:
+          type: string
+          description: ID provider
+          example: "openai"
+        key:
+          type: string
+          description: API key untuk provider
+          example: "sk-..."
+      required:
+        - provider
+        - key
+
+    ProxyRequest:
+      type: object
+      properties:
+        target:
+          type: string
+          description: URL target proxy
+          example: "https://api.openai.com"
+      required:
+        - target
+
+    AddSkillRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Nama skill
+          example: "web-scraper"
+        description:
+          type: string
+          description: Deskripsi skill
+          example: "Skill untuk scraping web"
+        command:
+          type: string
+          description: Command untuk mengeksekusi skill
+          example: "python3 /opt/skills/scraper.py"
+      required:
+        - name
+        - description
+        - command
+
+    AddMcpRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Nama MCP server
+          example: "mcp-filesystem"
+        command:
+          type: string
+          description: Command untuk menjalankan MCP server
+          example: "npx"
+        args:
+          type: array
+          items:
+            type: string
+          description: Argumen tambahan untuk command
+          example: ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/docs"]
+      required:
+        - name
+        - command
+
+    SuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "ok"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: integer
+              example: 404
+            message:
+              type: string
+              example: "Model not found"
+      required:
+        - error
