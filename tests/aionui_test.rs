@@ -39,7 +39,7 @@ async fn test_aionui() {
     let client = reqwest::Client::new();
     let request = r#"
 {
-  "model": "opencode/beam-free",
+  "model": "9router/free-forever",
   "messages": [
     {"role": "user", "content": "Hello"}
   ]
@@ -47,7 +47,7 @@ async fn test_aionui() {
 "#;
     let resp = client
         .post("http://localhost:8787/v1/chat/completions")
-        .json(&serde_json::from_str::<serde_json::Value>(r#"{ "model": "opencode/beam-free", "messages": [{"role": "user", "content": "Hello"}] }"#).unwrap())
+        .json(&serde_json::from_str::<serde_json::Value>(r#"{ "model": "9router/free-forever", "messages": [{"role": "user", "content": "Hello"}] }"#).unwrap())
         .send()
         .await
         .expect("request failed");

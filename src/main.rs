@@ -75,6 +75,48 @@ async fn main() -> Result<()> {
                     .await;
             }
             let app = api().with_state(Arc::new(registry));
+            // Wire CORS if enabled in config
+            let app = if config.server.cors {
+                use tower_http::cors::{Any, CorsLayer};
+                app.layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
+            } else {
+                app
+            };
+            // Bearer auth guard when api_keys configured
+            let api_keys = config.server.api_keys.clone();
+            let app = if !api_keys.is_empty() {
+                app.layer(axum::middleware::from_fn(move |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
+                    let keys = api_keys.clone();
+                    async move {
+                        // Allow health/root without auth
+                        let path = req.uri().path();
+                        if path == "/health" || path == "/" {
+                            return next.run(req).await;
+                        }
+                        let auth = req.headers().get(axum::http::header::AUTHORIZATION);
+                        let ok = auth
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|s| s.strip_prefix("Bearer "))
+                            .map(|t| keys.iter().any(|k| k == t))
+                            .unwrap_or(false);
+                        if ok {
+                            next.run(req).await
+                        } else {
+                            axum::response::Response::builder()
+                                .status(axum::http::StatusCode::UNAUTHORIZED)
+                                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                                .body(axum::body::Body::from(r#"{"error":{"message":"Invalid API key","type":"invalid_request_error"}}"#))
+                                .unwrap()
+                        }
+                    }
+                }))
+            } else {
+                app
+            };
+            // Warn if binding non-loopback without keys
+            if config.server.api_keys.is_empty() && (host == "0.0.0.0" || host == "::") {
+                tracing::warn!("Binding to {} without api_keys: service is open to the network", host);
+            }
             tracing::info!("Starting server on {}", bind_addr);
             let listener = TcpListener::bind(bind_addr.as_str()).await?;
             axum::serve(listener, app).await?;

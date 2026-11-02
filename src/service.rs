@@ -56,14 +56,17 @@ impl ServiceRegistry {
         let providers = self.providers.read().await;
         let result: Vec<crate::types::Provider> = providers
             .iter()
-            .map(|(id, provider)| crate::types::Provider {
-                id: id.clone(),
-                name: id.clone(),
-                enabled: provider.is_available(),
-                bin: provider.bin().unwrap_or_default(),
-                models: provider.models(),
-                is_available: provider.is_available(),
-                last_checked: None,
+            .map(|(id, provider)| {
+                let models = provider.scan_models().unwrap_or_else(|_| provider.models());
+                crate::types::Provider {
+                    id: id.clone(),
+                    name: id.clone(),
+                    enabled: provider.is_available(),
+                    bin: provider.bin().unwrap_or_default(),
+                    models,
+                    is_available: provider.is_available(),
+                    last_checked: None,
+                }
             })
             .collect();
         Ok(result)
@@ -83,16 +86,8 @@ impl ServiceRegistry {
         }
 
         // Log request payload to file before sending to CLI
-        {
-            use std::fs::OpenOptions;
-            use std::io::Write;
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("log.txt")
-                .expect("cannot open log.txt");
-            writeln!(file, "=== REQUEST ===\nmodel: {}\nprovider: {:?}\nmessages: {:?}\n", request.model, request.provider, request.messages).ok();
-        }
+        // Removed file logging to prevent accumulation
+        info!("Sending request to provider...");
 
         let provider_id = if let Some(id) = request.provider.as_ref() {
             info!("Using explicit provider: {}", id);
@@ -124,16 +119,6 @@ impl ServiceRegistry {
         // Log response payload after CLI execution
         let result = match response {
             ProviderResponse::Success { content: text, reasoning } => {
-                {
-                    use std::fs::OpenOptions;
-                    use std::io::Write;
-                    let mut resp_file = OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("log.txt")
-                        .expect("cannot open log.txt");
-                    writeln!(resp_file, "=== RESPONSE ===\nmodel: {}\nprovider: {}\nresponse: {}\nreasoning: {:?}\n", model, provider_id, text, reasoning).ok();
-                }
                 info!("Provider '{}' success, response length={}", provider_id, text.len());
                 
                 // If stream is requested, we can optionally format or wrap, but for OpenAI compatibility on non-streaming/streaming:

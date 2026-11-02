@@ -231,12 +231,14 @@ impl CliProvider for CliProviderImpl {
 }
 
 /// Parse CLI output. Supports OpenCode `--format json` (JSONL with reasoning/text events)
-/// and falls back to plain text.
+/// and falls back to plain text with <think>...</think> extraction.
 fn parse_cli_output(cleaned: &str) -> (String, Option<String>) {
     let lines: Vec<&str> = cleaned.lines().filter(|l| !l.trim().is_empty()).collect();
     if lines.is_empty() {
         return (String::new(), None);
     }
+    
+    // 1. Try JSONL parsing
     let mut all_json = true;
     for line in &lines {
         if serde_json::from_str::<serde_json::Value>(line.trim()).is_err() {
@@ -244,37 +246,53 @@ fn parse_cli_output(cleaned: &str) -> (String, Option<String>) {
             break;
         }
     }
-    if !all_json {
-        return (cleaned.trim().to_string(), None);
-    }
-    let mut reasoning = String::new();
-    let mut texts: Vec<String> = Vec::new();
-    for line in &lines {
-        let v: serde_json::Value = match serde_json::from_str(line.trim()) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let typ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
-        let part = v.get("part");
-        match typ {
-            "reasoning" => {
-                if let Some(text) = part.and_then(|p| p.get("text")).and_then(|t| t.as_str()) {
-                    if !reasoning.is_empty() && !reasoning.ends_with('\n') {
-                        reasoning.push('\n');
+    
+    if all_json {
+        let mut reasoning = String::new();
+        let mut texts: Vec<String> = Vec::new();
+        for line in &lines {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) {
+                let typ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+                let part = v.get("part");
+                match typ {
+                    "reasoning" => {
+                        if let Some(text) = part.and_then(|p| p.get("text")).and_then(|t| t.as_str()) {
+                            if !reasoning.is_empty() && !reasoning.ends_with('\n') { reasoning.push('\n'); }
+                            reasoning.push_str(text);
+                        }
                     }
-                    reasoning.push_str(text);
+                    "text" => {
+                        if let Some(text) = part.and_then(|p| p.get("text")).and_then(|t| t.as_str()) {
+                            texts.push(text.to_string());
+                        }
+                    }
+                    _ => {}
                 }
             }
-            "text" => {
-                if let Some(text) = part.and_then(|p| p.get("text")).and_then(|t| t.as_str()) {
-                    texts.push(text.to_string());
-                }
+        }
+        let content = texts.join("\n\n");
+        let reasoning = if reasoning.trim().is_empty() { None } else { Some(reasoning) };
+        return (content, reasoning);
+    }
+
+    // 2. Fallback: Extract <think>...</think> from plain text
+    let mut reasoning = None;
+    let mut content = cleaned.to_string();
+
+    if let Some(start_idx) = cleaned.find("<think>") {
+        if let Some(end_idx) = cleaned.find("</think>") {
+            if end_idx > start_idx {
+                let think_block = &cleaned[start_idx + 7..end_idx];
+                reasoning = Some(think_block.trim().to_string());
+                
+                let mut clean_content = String::new();
+                clean_content.push_str(&cleaned[..start_idx]);
+                clean_content.push_str(&cleaned[end_idx + 8..]);
+                content = clean_content.trim().to_string();
             }
-            _ => {}
         }
     }
-    let content = texts.join("\n\n");
-    let reasoning = if reasoning.trim().is_empty() { None } else { Some(reasoning) };
+
     (content, reasoning)
 }
 

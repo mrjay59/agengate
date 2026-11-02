@@ -14,6 +14,7 @@ use tracing::info;
 
 pub fn api() -> Router<Arc<ServiceRegistry>> {
     Router::new()
+        .route("/", get(root_info))
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/health", get(health_check))
@@ -22,6 +23,24 @@ pub fn api() -> Router<Arc<ServiceRegistry>> {
         .route("/admin/proxy", post(proxy))
         .route("/admin/skill", post(add_skill))
         .route("/admin/mcp", post(add_mcp))
+}
+
+async fn root_info(State(registry): State<Arc<ServiceRegistry>>) -> Json<serde_json::Value> {
+    let providers = registry.list_providers().await.unwrap_or_default();
+    Json(serde_json::json!({
+        "name": "agentgate",
+        "version": env!("CARGO_PKG_VERSION"),
+        "providers": providers.iter().map(|p| serde_json::json!({
+            "id": p.id,
+            "available": p.is_available,
+            "models": p.models,
+        })).collect::<Vec<_>>(),
+        "endpoints": {
+            "health": "/health",
+            "models": "/v1/models",
+            "chat": "/v1/chat/completions"
+        }
+    }))
 }
 
 async fn list_models(
@@ -38,6 +57,9 @@ async fn chat_completions(
     use axum::response::IntoResponse;
     println!("[API] Request received: model={}, stream={:?}, messages={}",
         request.model, request.stream, request.messages.len());
+    
+    // Umpan balik instan di terminal agar user tahu request diproses
+    println!("[STATUS] Processing request for model: {}...", request.model);
 
     let is_stream = request.stream.unwrap_or(false);
     let response = registry.chat_completion(request).await?;
@@ -45,6 +67,10 @@ async fn chat_completions(
     if is_stream {
         let content = response.choices.first().map(|c| c.message.content.clone()).unwrap_or_default();
         let reasoning = response.choices.first().and_then(|c| c.message.reasoning_content.clone()).unwrap_or_default();
+        
+        if !reasoning.is_empty() {
+            println!("[DEBUG] Reasoning content found, length: {}", reasoning.len());
+        }
         let mut frames = String::new();
         if !reasoning.trim().is_empty() {
             let reasoning_json = serde_json::json!({
