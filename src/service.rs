@@ -33,7 +33,7 @@ impl ServiceRegistry {
     pub async fn list_models(&self, _provider_filter: Option<&str>) -> Result<ModelsResponse, AppError> {
         let providers = self.providers.read().await;
         let mut models = Vec::new();
-        
+
         for (id, provider) in providers.iter() {
             if let Ok(model_list) = provider.scan_models() {
                 for model_id in model_list {
@@ -45,7 +45,7 @@ impl ServiceRegistry {
                 }
             }
         }
-        
+
         Ok(ModelsResponse {
             object: "list".to_string(),
             data: models,
@@ -71,22 +71,42 @@ impl ServiceRegistry {
 
     pub async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
+        mut request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, AppError> {
-        let provider_id = request.provider.as_ref().map(|s| s.clone())
-            .or_else(|| {
-                let models = futures::executor::block_on(self.list_models(None)).ok();
-                models.and_then(|m| {
-                    m.data
-                        .iter()
-                        .find(|model| model.id == request.model)
-                        .map(|model| model.provider.clone())
-                })
-            });
+        info!("ChatCompletion request: model='{}', provider_opt={:?}, messages={}", request.model, request.provider, request.messages.len());
+        
+        // Sanitize messages: map 'tool' role to 'assistant' for compatibility
+        for msg in &mut request.messages {
+            if msg.role == crate::types::MessageRole::Tool {
+                msg.role = crate::types::MessageRole::Assistant;
+            }
+        }
 
-        let provider_id = match provider_id {
-            Some(id) => id,
-            None => return Err(AppError::ModelNotFound(request.model.clone())),
+        // Log request payload to file before sending to CLI
+        {
+            use std::fs::OpenOptions;
+            use std::io::Write;
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("log.txt")
+                .expect("cannot open log.txt");
+            writeln!(file, "=== REQUEST ===\nmodel: {}\nprovider: {:?}\nmessages: {:?}\n", request.model, request.provider, request.messages).ok();
+        }
+
+        let provider_id = if let Some(id) = request.provider.as_ref() {
+            info!("Using explicit provider: {}", id);
+            id.clone()
+        } else {
+            let models = self.list_models(None).await?;
+            models.data
+                .iter()
+                .find(|model| model.id == request.model)
+                .map(|model| model.provider.clone())
+                .ok_or_else(|| {
+                    info!("Provider not found for model='{}'", request.model);
+                    AppError::ModelNotFound(request.model.clone())
+                })?
         };
 
         let providers = self.providers.read().await;
@@ -94,41 +114,63 @@ impl ServiceRegistry {
             .get(&provider_id)
             .ok_or(AppError::ProviderNotFound(provider_id.clone()))?;
 
+        let is_stream = request.stream.unwrap_or(false);
         let model = request.model.clone();
         let response = provider
             .send_chat_completion(&model, request)
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        match response {
-            ProviderResponse::Success(text) => Ok(ChatCompletionResponse {
-                id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
-                object: "chat.completion".to_string(),
-                created: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                model: model.clone(),
-                choices: vec![crate::types::Choice {
-                    index: 0,
-                    message: crate::types::ChatMessage {
-                        role: crate::types::MessageRole::Assistant,
-                        content: text,
+        // Log response payload after CLI execution
+        let result = match response {
+            ProviderResponse::Success(text) => {
+                {
+                    use std::fs::OpenOptions;
+                    use std::io::Write;
+                    let mut resp_file = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("log.txt")
+                        .expect("cannot open log.txt");
+                    writeln!(resp_file, "=== RESPONSE ===\nmodel: {}\nprovider: {}\nresponse: {}\n", model, provider_id, text).ok();
+                }
+                info!("Provider '{}' success, response length={}", provider_id, text.len());
+                
+                // If stream is requested, we can optionally format or wrap, but for OpenAI compatibility on non-streaming/streaming:
+                ChatCompletionResponse {
+                    id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                    object: if is_stream { "chat.completion.chunk".to_string() } else { "chat.completion".to_string() },
+                    created: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    model: model.clone(),
+                    choices: vec![crate::types::Choice {
+                        index: 0,
+                        message: crate::types::ChatMessage {
+                            role: crate::types::MessageRole::Assistant,
+                            content: text,
+                        },
+                        finish_reason: "stop".to_string(),
+                    }],
+                    usage: crate::types::Usage {
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        total_tokens: 0,
                     },
-                    finish_reason: "stop".to_string(),
-                }],
-                usage: crate::types::Usage {
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    total_tokens: 0,
-                },
-            }),
-            ProviderResponse::Error(e) => Err(AppError::Internal(e)),
-        }
+                }
+            }
+            ProviderResponse::Error(e) => {
+                info!("Provider '{}' error: {}", provider_id, e);
+                return Err(AppError::Internal(e));
+            }
+        };
+
+        Ok(result)
     }
 
     pub async fn add_provider(&mut self, request: AddProviderRequest) -> Result<(), AppError> {
-        info!("Adding provider: {}", request.id);
+        println!("Adding provider: {}", request.id);
         self.add_providers.write().await.push(request);
         Ok(())
     }

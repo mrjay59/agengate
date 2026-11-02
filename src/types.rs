@@ -122,6 +122,7 @@ pub struct Choice {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: MessageRole,
+    #[serde(default)]
     pub content: String,
 }
 
@@ -132,6 +133,7 @@ pub enum MessageRole {
     System,
     User,
     Assistant,
+    Tool,
 }
 
 /// Streaming delta

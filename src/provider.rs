@@ -2,6 +2,8 @@ use crate::config::ProviderConfig;
 use crate::types::ChatCompletionRequest;
 use async_trait::async_trait;
 use std::process::Command;
+use tokio::process::Command as TokioCommand;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone)]
 pub enum ProviderResponse {
@@ -76,12 +78,11 @@ impl CliProvider for CliProviderImpl {
         // Windows: try common extensions for PATH search
         if cfg!(target_os = "windows") {
             for ext in &[".cmd", ".bat", ".exe", ".ps1"] {
-                if bin.to_lowercase().ends_with(ext) {
-                    continue;
-                }
-                let candidate = format!("{}{}", bin, ext);
-                if which::which(&candidate).is_ok() {
-                    return true;
+                if !bin.to_lowercase().ends_with(ext) {
+                    let candidate = format!("{}{}", bin, ext);
+                    if which::which(&candidate).is_ok() {
+                        return true;
+                    }
                 }
             }
         }
@@ -140,14 +141,20 @@ impl CliProvider for CliProviderImpl {
             .collect::<Vec<String>>()
             .join("\n");
 
-        let use_stdin = cmd_template.contains(&"--prompt-stdin".to_string()) || !cmd_template.iter().any(|arg| arg.contains("{prompt}"));
+        let use_stdin = cmd_template.contains(&"--prompt-stdin".to_string()) 
+            || !cmd_template.iter().any(|arg| arg.contains("{prompt}"))
+            || prompt.len() > 2000; // Force stdin for long prompts to avoid Windows CLI limits
 
         // Replace placeholders {model} and {prompt}
         let cmd_args: Vec<String> = cmd_template
             .into_iter()
             .map(|arg| {
                 let mut a = arg.replace("{model}", model);
-                a = a.replace("{prompt}", &prompt);
+                if !use_stdin {
+                    a = a.replace("{prompt}", &prompt);
+                } else {
+                    a = a.replace("{prompt}", ""); // Remove prompt from args if using stdin
+                }
                 a
             })
             .collect();
@@ -178,11 +185,11 @@ impl CliProvider for CliProviderImpl {
             match bin_path {
                 Some(b) => {
                     let mut cmd = if b.contains(".cmd") || b.contains(".bat") || b.contains(".ps1") {
-                        let mut c = Command::new("cmd");
+                        let mut c = TokioCommand::new("cmd");
                         c.arg("/C").arg(&b);
                         c
                     } else {
-                        Command::new(&b)
+                        TokioCommand::new(&b)
                     };
                     cmd.args(&cmd_args)
                         .stdin(if use_stdin { std::process::Stdio::piped() } else { std::process::Stdio::null() })
@@ -194,15 +201,16 @@ impl CliProvider for CliProviderImpl {
             }
         };
 
-        // Write prompt to stdin if required
+        // Write prompt to stdin if required, then close to signal EOF
         if use_stdin {
-            use std::io::Write;
             if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(prompt.as_bytes())?;
+                stdin.write_all(prompt.as_bytes()).await?;
+                // Explicitly close stdin to signal EOF to CLI
+                drop(stdin);
             }
         }
 
-        let output = child.wait_with_output()?;
+        let output = child.wait_with_output().await?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let cleaned = if self.strip_ansi {
