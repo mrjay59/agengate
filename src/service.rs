@@ -123,7 +123,7 @@ impl ServiceRegistry {
 
         // Log response payload after CLI execution
         let result = match response {
-            ProviderResponse::Success(text) => {
+            ProviderResponse::Success { content: text, reasoning } => {
                 {
                     use std::fs::OpenOptions;
                     use std::io::Write;
@@ -132,7 +132,7 @@ impl ServiceRegistry {
                         .append(true)
                         .open("log.txt")
                         .expect("cannot open log.txt");
-                    writeln!(resp_file, "=== RESPONSE ===\nmodel: {}\nprovider: {}\nresponse: {}\n", model, provider_id, text).ok();
+                    writeln!(resp_file, "=== RESPONSE ===\nmodel: {}\nprovider: {}\nresponse: {}\nreasoning: {:?}\n", model, provider_id, text, reasoning).ok();
                 }
                 info!("Provider '{}' success, response length={}", provider_id, text.len());
                 
@@ -150,6 +150,7 @@ impl ServiceRegistry {
                         message: crate::types::ChatMessage {
                             role: crate::types::MessageRole::Assistant,
                             content: text,
+                            reasoning_content: reasoning,
                         },
                         finish_reason: "stop".to_string(),
                     }],

@@ -7,6 +7,7 @@ Jembatan antara AionUi dan CLI agent. Menyediakan endpoint HTTP kompatibel OpenA
 - Kompatibel OpenAI Chat Completions (streaming & non-streaming).
 - Mendukung provider CLI (opencode, aionrs, claude, dll).
 - Sanitasi pesan `tool` → `assistant` agar provider ketat tetap menerima.
+- Mendukung `reasoning_content` / thinking (OpenCode: `--thinking --format json`) untuk stream & non-stream.
 - Cross-platform: Windows, Linux x86_64, Linux ARM64.
 
 ## Build
@@ -96,7 +97,7 @@ port = 8080
 id = "opencode"
 bin = "opencode"
 models = ["opencode/beam-free"]
-chat_cmd = ["run", "{model}", "--prompt-stdin"]
+chat_cmd = ["run", "--model", "{model}", "--thinking", "--format", "json", "{prompt}"]
 strip_ansi = true
 ```
 

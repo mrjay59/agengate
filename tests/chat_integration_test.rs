@@ -9,7 +9,7 @@ async fn test_chat_completion() {
     let req = ChatCompletionRequest {
         model: "9router/ag-poli".to_string(),
         provider: None,
-        messages: vec![ChatMessage { role: MessageRole::User, content: "Hello world".to_string() }],
+        messages: vec![ChatMessage { role: MessageRole::User, content: "Hello world".to_string(), reasoning_content: None }],
         temperature: None,
         max_tokens: None,
         top_p: None,

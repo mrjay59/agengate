@@ -7,7 +7,10 @@ use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone)]
 pub enum ProviderResponse {
-    Success(String),
+    Success {
+        content: String,
+        reasoning: Option<String>,
+    },
     Error(String),
 }
 
@@ -222,8 +225,57 @@ impl CliProvider for CliProviderImpl {
         if cleaned.trim().is_empty() && !stderr.trim().is_empty() {
             return Ok(ProviderResponse::Error(stderr.trim().to_string()));
         }
-        Ok(ProviderResponse::Success(cleaned.trim().to_string()))
+        let (content, reasoning) = parse_cli_output(cleaned.trim());
+        Ok(ProviderResponse::Success { content, reasoning })
     }
+}
+
+/// Parse CLI output. Supports OpenCode `--format json` (JSONL with reasoning/text events)
+/// and falls back to plain text.
+fn parse_cli_output(cleaned: &str) -> (String, Option<String>) {
+    let lines: Vec<&str> = cleaned.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return (String::new(), None);
+    }
+    let mut all_json = true;
+    for line in &lines {
+        if serde_json::from_str::<serde_json::Value>(line.trim()).is_err() {
+            all_json = false;
+            break;
+        }
+    }
+    if !all_json {
+        return (cleaned.trim().to_string(), None);
+    }
+    let mut reasoning = String::new();
+    let mut texts: Vec<String> = Vec::new();
+    for line in &lines {
+        let v: serde_json::Value = match serde_json::from_str(line.trim()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let typ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+        let part = v.get("part");
+        match typ {
+            "reasoning" => {
+                if let Some(text) = part.and_then(|p| p.get("text")).and_then(|t| t.as_str()) {
+                    if !reasoning.is_empty() && !reasoning.ends_with('\n') {
+                        reasoning.push('\n');
+                    }
+                    reasoning.push_str(text);
+                }
+            }
+            "text" => {
+                if let Some(text) = part.and_then(|p| p.get("text")).and_then(|t| t.as_str()) {
+                    texts.push(text.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    let content = texts.join("\n\n");
+    let reasoning = if reasoning.trim().is_empty() { None } else { Some(reasoning) };
+    (content, reasoning)
 }
 
 impl CliProviderImpl {

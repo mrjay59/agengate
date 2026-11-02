@@ -18,7 +18,7 @@ model_cache_ttl_secs = 300
 id = "opencode"
 bin = "opencode"
 models_cmd = ["models"]
-chat_cmd = ["run", "--model", "{model}", "{prompt}"]
+chat_cmd = ["run", "--model", "{model}", "--thinking", "--format", "json", "{prompt}"]
 strip_ansi = true
 enabled = true
 

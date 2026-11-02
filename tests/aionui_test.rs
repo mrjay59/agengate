@@ -1,5 +1,5 @@
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 
 #[derive(Serialize)]
@@ -47,12 +47,12 @@ async fn test_aionui() {
 "#;
     let resp = client
         .post("http://localhost:8787/v1/chat/completions")
-        .json(&serde_json::from_str(r#"{ "model": "opencode/beam-free", "messages": [{"role": "user", "content": "Hello"}] }"#)
+        .json(&serde_json::from_str::<serde_json::Value>(r#"{ "model": "opencode/beam-free", "messages": [{"role": "user", "content": "Hello"}] }"#).unwrap())
         .send()
         .await
         .expect("request failed");
     assert!(resp.status().is_success(), "status: {}", resp.status());
     let chat_resp: ChatResponse = resp.json().await.expect("bad json");
-    assert!(!responses.choices.is_empty(), "no choices");
-    assert!(responses.choices[0].message.content.is_different(regex!(r"\\s+")));
+    assert!(!chat_resp.choices.is_empty(), "no choices");
+    assert!(!chat_resp.choices[0].message.content.trim().is_empty(), "empty reply");
 }

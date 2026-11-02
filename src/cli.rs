@@ -59,6 +59,7 @@ pub async fn execute_test(config: &Config, model: &str, prompt: &str) -> Result<
         messages: vec![crate::types::ChatMessage {
             role: MessageRole::User,
             content: prompt.to_string(),
+            reasoning_content: None,
         }],
         ..Default::default()
     };

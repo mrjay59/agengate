@@ -44,17 +44,36 @@ async fn chat_completions(
 
     if is_stream {
         let content = response.choices.first().map(|c| c.message.content.clone()).unwrap_or_default();
-        let chunk_json = serde_json::json!({
-            "id": response.id,
-            "object": "chat.completion.chunk",
-            "created": response.created,
-            "model": response.model,
-            "choices": [{
-                "index": 0,
-                "delta": { "content": content },
-                "finish_reason": null
-            }]
-        });
+        let reasoning = response.choices.first().and_then(|c| c.message.reasoning_content.clone()).unwrap_or_default();
+        let mut frames = String::new();
+        if !reasoning.trim().is_empty() {
+            let reasoning_json = serde_json::json!({
+                "id": response.id,
+                "object": "chat.completion.chunk",
+                "created": response.created,
+                "model": response.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": { "reasoning_content": reasoning },
+                    "finish_reason": null
+                }]
+            });
+            frames.push_str(&format!("data: {}\n\n", reasoning_json.to_string()));
+        }
+        if !content.trim().is_empty() {
+            let content_json = serde_json::json!({
+                "id": response.id,
+                "object": "chat.completion.chunk",
+                "created": response.created,
+                "model": response.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": { "content": content },
+                    "finish_reason": null
+                }]
+            });
+            frames.push_str(&format!("data: {}\n\n", content_json.to_string()));
+        }
         let done_json = serde_json::json!({
             "id": response.id,
             "object": "chat.completion.chunk",
@@ -66,9 +85,8 @@ async fn chat_completions(
                 "finish_reason": "stop"
             }]
         });
-        let sse_data = format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n", chunk_json.to_string(), done_json.to_string());
-        
-        let mut res = sse_data.into_response();
+        frames.push_str(&format!("data: {}\n\ndata: [DONE]\n\n", done_json.to_string()));
+        let mut res = frames.into_response();
         res.headers_mut().insert(axum::http::header::CONTENT_TYPE, "text/event-stream".parse().unwrap());
         Ok(res)
     } else {

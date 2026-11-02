@@ -106,6 +106,7 @@ async fn main() -> Result<()> {
                 messages: vec![ChatMessage {
                     role: MessageRole::User,
                     content: prompt.clone(),
+                    reasoning_content: None,
                 }],
                 ..Default::default()
             };
