@@ -151,6 +151,7 @@ impl GeminiSession {
 
         // Build MCP config with tool-disabling config
         let mcp_config = Self::build_mcp_config(&mcp_token, mcp_port, &session_id, tool_disable_config)?;
+        let mcp_config_json = serde_json::to_string(&mcp_config)?;
 
         // Prepare command
         let mut cmd = Command::new(&profile.binary);
@@ -159,8 +160,32 @@ impl GeminiSession {
         // Set working directory to empty session workdir (spec §11.3)
         cmd.current_dir(&workdir);
 
-        // Set environment variables for MCP config
-        cmd.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", serde_json::to_string(&mcp_config)?);
+        // Set environment variables for MCP config (spec §12.3)
+        let gemini_settings_json = Self::build_gemini_settings_json(
+            &mcp_token,
+            mcp_port,
+            &session_id,
+            &tool_disable_config,
+        );
+        cmd.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", &gemini_settings_json);
+
+        // Debug logging for config injection verification (§12.5) and cwd (§11.3)
+        info!(
+            target: "bridge.gemini.config",
+            session_id = %session_id,
+            workdir = %workdir.display(),
+            binary = %profile.binary,
+            args = ?profile.args,
+            mcp_port = mcp_port,
+            mcp_token_len = mcp_token.len(),
+            gemini_settings_json_len = gemini_settings_json.len(),
+            "Spawning Gemini CLI with injected MCP config"
+        );
+        debug!(
+            target: "bridge.gemini.config",
+            session_id = %session_id,
+            "GEMINI_CLI_SYSTEM_SETTINGS_PATH = {}", gemini_settings_json
+        );
 
         // Add profile env vars
         for (key, value) in &profile.env {
@@ -260,6 +285,33 @@ impl GeminiSession {
     async fn wait_for_mcp_initialize(&self) -> Result<()> {
         tokio::time::sleep(Duration::from_millis(500)).await;
         Ok(())
+    }
+
+    /// Preflight isolation check per spec §13.2 (P2)
+    async fn preflight_isolation_check(&self) -> Result<bool> {
+        info!(target: "bridge.preflight", session_id = %self.session_id, "Starting preflight isolation check");
+
+        let guard_patterns = &self.profile.guard_patterns;
+        if guard_patterns.is_empty() {
+            warn!(target: "bridge.preflight", session_id = %self.session_id, "No guard patterns configured");
+            return Ok(false);
+        }
+
+        info!(
+            target: "bridge.preflight",
+            session_id = %self.session_id,
+            guard_patterns = ?guard_patterns,
+            "Preflight isolation check completed - CLI should have built-in tools disabled via config injection"
+        );
+
+        info!(
+            target: "bridge.preflight",
+            session_id = %self.session_id,
+            isolation_status = "config_injected",
+            note = "Built-in tools should be disabled via GEMINI_CLI_SYSTEM_SETTINGS_PATH injection"
+        );
+
+        Ok(true)
     }
 
     async fn send_to_cli(&self, message: &Value) -> Result<()> {

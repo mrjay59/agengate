@@ -202,12 +202,12 @@ impl BridgeServer {
         parked.remove(run_id)
     }
 
-    /// Execute a tool call
+    /// Execute a tool call - parks run, forwards to client, waits for result
     pub async fn execute_tool(
         &self,
         run_id: &str,
         tool_name: &str,
-        _args: serde_json::Value,
+        args: serde_json::Value,
         _workspace: &str,
     ) -> Result<ToolResult> {
         // Guard: Check if tool is bridge tool
@@ -216,25 +216,48 @@ impl BridgeServer {
             return Err(anyhow!("tool_isolation_violation: {} is not a bridge tool", tool_name));
         }
 
-        let mcp_id = uuid::Uuid::new_v4().to_string();
-        let tx = {
-            let mut pending = self.pending_calls.lock().await;
-            let (tx, rx) = oneshot::channel();
-            pending.insert(mcp_id.clone(), tx);
-            rx
+        // Get the run
+        let mut runs = self.runs.write().await;
+        let mut run = match runs.get_mut(run_id) {
+            Some(r) => r.clone(),
+            None => return Err(anyhow!("Run not found: {}", run_id)),
         };
-        // Notify CLI via MCP? Actually CLI will call tools/list and tools/call via MCP.
-        // We need to inform CLI that a tool call is pending. The CLI will send a tools/call request
-        // to the bridge server via MCP. We'll handle that in bridge_mcp endpoint when method is "tools/call".
-        // So we just wait for the client to send the result via bridge_resolve.
-        match tokio::time::timeout(std::time::Duration::from_secs(self.config.call_ttl_secs), tx).await {
-            Ok(Ok(res)) => Ok(res),
+
+        // Park the run with tool call info
+        let tool_call_id = uuid::Uuid::new_v4().to_string();
+        let mcp_id = tool_call_id.clone();
+        run.park(tool_call_id.clone(), tool_name.to_string());
+
+        // Store the tool call for later resolution
+        let (tx, rx) = oneshot::channel();
+        self.pending_calls.lock().await.insert(mcp_id.clone(), tx);
+
+        // Re-insert the parked run
+        self.park_run(run.clone()).await?;
+
+        // Drop lock before await
+        drop(runs);
+
+        info!(event = "bridge.tool_call.hold", mcp_id = %mcp_id, tool = %tool_name, run_id = %run_id, args = %args);
+
+        // Forward tool call to client (Device A) via BridgeClient
+        // The client will execute the tool and send result back via bridge/resolve
+        // We need to signal the client that a tool call is waiting
+        // This is done via the MCP tools/call endpoint which the CLI polls/calls
+
+        // Wait for client to execute tool and send result via bridge/resolve
+        match tokio::time::timeout(std::time::Duration::from_secs(self.config.call_ttl_secs), rx).await {
+            Ok(Ok(result)) => {
+                info!(event = "bridge.tool_call.resolved", mcp_id = %mcp_id, tool = %tool_name);
+                Ok(result)
+            },
             Ok(Err(_)) => {
                 self.pending_calls.lock().await.remove(&mcp_id);
                 Err(anyhow::anyhow!("channel closed"))
-            }
+            },
             Err(_) => {
                 self.pending_calls.lock().await.remove(&mcp_id);
+                info!(event = "bridge.tool_call.timeout", mcp_id = %mcp_id, tool = %tool_name);
                 Err(anyhow::anyhow!("timeout menunggu hasil dari client"))
             }
         }
