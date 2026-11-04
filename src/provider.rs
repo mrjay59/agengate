@@ -634,6 +634,27 @@ impl CliProviderImpl {
         }
 
         // Newline-separated list
+        // Table format (e.g., Ollama list) or newline-separated list
+        // Skip header starting with "NAME"
+        let mut lines = cleaned.lines();
+        let first = lines.next();
+        let has_header = if let Some(l) = first {
+            l.trim_start().starts_with("NAME")
+        } else {
+            false
+        };
+        let lines_iter = if has_header { lines } else { cleaned.lines() };
+        let models: Vec<String> = lines_iter
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                line.split_whitespace().next().unwrap_or("").to_string()
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !models.is_empty() {
+            return models;
+        }
+        // Fallback: newline-separated list
         cleaned
             .lines()
             .filter(|line| !line.is_empty())
