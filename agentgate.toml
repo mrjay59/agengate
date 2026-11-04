@@ -21,6 +21,7 @@ models_cmd = ["models"]
 chat_cmd = ["run", "--model", "{model}", "--thinking", "--format", "json", "{prompt}"]
 strip_ansi = true
 enabled = true
+models = ["opencode/beam-free", "opencode/beam", "opencode/codestral"]
 
 [[provider]]
 id = "gemini"
