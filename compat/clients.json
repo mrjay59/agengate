@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "updated": "2026-11-04",
+  "notes": "Client / intermediary reasoning compatibility matrix. Treat entries marked unknown as unverified until doctor --probe-reasoning is run through the real chain (agentgate -> 9router -> client).",
+  "formats": [
+    {
+      "id": "reasoning_content",
+      "sse_field": "delta.reasoning_content",
+      "recommended_for": ["DeepSeek-style UIs", "OpenAI-compatible SDKs", "AionUi first attempt"],
+      "risks": ["Intermediate proxies may drop unknown delta fields"]
+    },
+    {
+      "id": "reasoning",
+      "sse_field": "delta.reasoning",
+      "recommended_for": ["OpenRouter-style UIs"],
+      "risks": ["Some UIs read only reasoning_content"]
+    },
+    {
+      "id": "both",
+      "sse_field": "delta.reasoning_content + delta.reasoning",
+      "recommended_for": ["Unknown client", "Migration"],
+      "risks": ["Doubles reasoning bandwidth"]
+    },
+    {
+      "id": "think_tags",
+      "sse_field": "delta.content (<think>...</think>)",
+      "recommended_for": ["UIs that only parse inline think tags"],
+      "risks": ["Pollutes content for programmatic clients", "Loses out to output compression/rewriting"]
+    },
+    {
+      "id": "none",
+      "sse_field": "none",
+      "recommended_for": ["Programmatic clients", "Bandwidth-sensitive deployments"],
+      "risks": ["No visible reasoning"]
+    }
+  ],
+  "clients": [
+    {
+      "id": "aionui",
+      "transport": "OpenAI-compatible SSE",
+      "reasoning_fields": ["unknown"],
+      "think_tag_parser": "unknown",
+      "recommended_format": "reasoning_content",
+      "fallback_format": "think_tags",
+      "status": "unverified",
+      "verified_with": null
+    },
+    {
+      "id": "deepseek-style-ui",
+      "transport": "OpenAI-compatible SSE",
+      "reasoning_fields": ["reasoning_content", "reasoning", "thinking"],
+      "think_tag_parser": "some",
+      "recommended_format": "reasoning_content",
+      "fallback_format": "both",
+      "status": "known",
+      "verified_with": null
+    },
+    {
+      "id": "openrouter-style-ui",
+      "transport": "OpenAI-compatible SSE",
+      "reasoning_fields": ["reasoning"],
+      "think_tag_parser": "some",
+      "recommended_format": "reasoning",
+      "fallback_format": "both",
+      "status": "known",
+      "verified_with": null
+    },
+    {
+      "id": "programmatic-sdk",
+      "transport": "OpenAI-compatible SSE / JSON",
+      "reasoning_fields": ["reasoning_content"],
+      "think_tag_parser": "no",
+      "recommended_format": "none",
+      "fallback_format": "reasoning_content",
+      "status": "known",
+      "verified_with": null
+    }
+  ],
+  "intermediaries": [
+    {
+      "id": "9router",
+      "responsibilities": ["format translation", "optional output compression", "optional context compression"],
+      "preserves_reasoning_fields": "unknown",
+      "preserves_think_tags": "unknown",
+      "buffers_sse": "unknown",
+      "status": "unverified",
+      "verification": [
+        "curl -N through 9router to /probe/reasoning/reasoning_content",
+        "Repeat with Compress LLM output ON and OFF",
+        "Record which format still arrives incrementally"
+      ]
+    }
+  ],
+  "decision_log": []
+}

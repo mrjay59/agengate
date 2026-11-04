@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="agentgate icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="gate" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <rect x="68" y="56" width="28" height="144" rx="10" fill="url(#gate)"/>
+  <rect x="160" y="56" width="28" height="144" rx="10" fill="url(#gate)"/>
+  <rect x="68" y="56" width="120" height="28" rx="10" fill="url(#gate)"/>
+  <rect x="102" y="92" width="8" height="108" rx="4" fill="#94a3b8" opacity="0.55"/>
+  <rect x="124" y="92" width="8" height="108" rx="4" fill="#94a3b8" opacity="0.55"/>
+  <rect x="146" y="92" width="8" height="108" rx="4" fill="#94a3b8" opacity="0.55"/>
+  <circle cx="128" cy="132" r="18" fill="#0b1220"/>
+  <rect x="121" y="132" width="14" height="30" rx="5" fill="#0b1220"/>
+</svg>

@@ -1,9 +1,19 @@
 use crate::config::ProviderConfig;
+use crate::reasoning::parser::ReasoningParser;
+use crate::reasoning::{FinishReason, ReasoningKind, RunEvent};
 use crate::types::ChatCompletionRequest;
 use async_trait::async_trait;
 use std::process::Command;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command as TokioCommand;
-use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
+
+pub mod ollama_native;
+
+/// Determine if a provider is native (model-api) rather than cli-agent
+pub fn is_native_provider(provider_id: &str) -> bool {
+    provider_id == "ollama"
+}
 
 #[derive(Debug, Clone)]
 pub enum ProviderResponse {
@@ -28,6 +38,72 @@ pub trait CliProvider: Send + Sync {
         model: &str,
         request: ChatCompletionRequest,
     ) -> Result<ProviderResponse, anyhow::Error>;
+
+    /// Stream a chat completion as [`RunEvent`]s.
+    ///
+    /// Providers that can read incremental CLI/stdout output should override
+    /// this. The default implementation adapts the aggregated
+    /// [`send_chat_completion`](Self::send_chat_completion) result so every
+    /// existing provider keeps working.
+    async fn send_chat_completion_stream(
+        &self,
+        model: &str,
+        request: ChatCompletionRequest,
+        tx: mpsc::Sender<RunEvent>,
+    ) -> Result<(), anyhow::Error> {
+        match self.send_chat_completion(model, request).await? {
+            ProviderResponse::Success { content, reasoning } => {
+                if let Some(reasoning) = reasoning.filter(|r| !r.trim().is_empty()) {
+                    if tx
+                        .send(RunEvent::ReasoningStart {
+                            block: 0,
+                            kind: ReasoningKind::Raw,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        return Ok(());
+                    }
+                    if tx
+                        .send(RunEvent::ReasoningDelta {
+                            block: 0,
+                            text: reasoning,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        return Ok(());
+                    }
+                    if tx
+                        .send(RunEvent::ReasoningEnd { block: 0 })
+                        .await
+                        .is_err()
+                    {
+                        return Ok(());
+                    }
+                }
+                if !content.is_empty()
+                    && tx.send(RunEvent::Text { text: content }).await.is_err()
+                {
+                    return Ok(());
+                }
+                let _ = tx
+                    .send(RunEvent::Done {
+                        reason: FinishReason::Stop,
+                    })
+                    .await;
+            }
+            ProviderResponse::Error(message) => {
+                let _ = tx
+                    .send(RunEvent::Error {
+                        message,
+                        code: Some("provider_error".to_string()),
+                    })
+                    .await;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct CliProviderImpl {
@@ -131,81 +207,11 @@ impl CliProvider for CliProviderImpl {
         model: &str,
         request: ChatCompletionRequest,
     ) -> Result<ProviderResponse, anyhow::Error> {
-        // Prepare command args
-        let cmd_template = match &self.chat_cmd {
-            Some(c) => c.clone(),
-            None => return Err(anyhow::anyhow!("No chat_cmd defined for provider {}", self.id)),
-        };
-        // Build prompt from messages
-        let prompt = request
-            .messages
-            .into_iter()
-            .map(|msg| msg.content)
-            .collect::<Vec<String>>()
-            .join("\n");
-
-        let use_stdin = cmd_template.contains(&"--prompt-stdin".to_string()) 
-            || !cmd_template.iter().any(|arg| arg.contains("{prompt}"))
-            || prompt.len() > 2000; // Force stdin for long prompts to avoid Windows CLI limits
-
-        // Replace placeholders {model} and {prompt}
-        let cmd_args: Vec<String> = cmd_template
-            .into_iter()
-            .map(|arg| {
-                let mut a = arg.replace("{model}", model);
-                if !use_stdin {
-                    a = a.replace("{prompt}", &prompt);
-                } else {
-                    a = a.replace("{prompt}", ""); // Remove prompt from args if using stdin
-                }
-                a
-            })
-            .collect();
-
-        let bin = self.bin.as_ref().ok_or_else(|| anyhow::anyhow!("No binary configured for provider {}", self.id))?;
-
-        // Spawn process
-        let mut child = {
-            let bin_path = if std::path::Path::new(bin).exists() {
-                Some(bin.to_string())
-            } else if cfg!(target_os = "windows") {
-                let mut found = None;
-                for ext in &[".cmd", ".bat", ".exe", ".ps1"] {
-                    if bin.to_lowercase().ends_with(ext) { continue; }
-                    let candidate = format!("{}{}", bin, ext);
-                    if which::which(&candidate).is_ok() {
-                        found = Some(candidate);
-                        break;
-                    }
-                }
-                found
-            } else if which::which(bin).is_ok() {
-                Some(bin.to_string())
-            } else {
-                None
-            };
-
-            match bin_path {
-                Some(b) => {
-                    let mut cmd = if b.contains(".cmd") || b.contains(".bat") || b.contains(".ps1") {
-                        let mut c = TokioCommand::new("cmd");
-                        c.arg("/C").arg(&b);
-                        c
-                    } else {
-                        TokioCommand::new(&b)
-                    };
-                    cmd.args(&cmd_args)
-                        .stdin(if use_stdin { std::process::Stdio::piped() } else { std::process::Stdio::null() })
-                        .stdout(std::process::Stdio::piped())
-                        .stderr(std::process::Stdio::piped())
-                        .spawn()?
-                }
-                None => return Err(anyhow::anyhow!("Binary not found for provider {}", self.id)),
-            }
-        };
+        let (mut cmd, stdin_prompt) = self.build_chat_command(model, &request)?;
+        let mut child = cmd.spawn()?;
 
         // Write prompt to stdin if required, then close to signal EOF
-        if use_stdin {
+        if let Some(prompt) = stdin_prompt {
             if let Some(mut stdin) = child.stdin.take() {
                 stdin.write_all(prompt.as_bytes()).await?;
                 // Explicitly close stdin to signal EOF to CLI
@@ -228,6 +234,129 @@ impl CliProvider for CliProviderImpl {
         let (content, reasoning) = parse_cli_output(cleaned.trim());
         Ok(ProviderResponse::Success { content, reasoning })
     }
+
+    /// RS0: read CLI stdout incrementally and forward events immediately.
+    async fn send_chat_completion_stream(
+        &self,
+        model: &str,
+        request: ChatCompletionRequest,
+        tx: mpsc::Sender<RunEvent>,
+    ) -> Result<(), anyhow::Error> {
+        let (mut cmd, stdin_prompt) = self.build_chat_command(model, &request)?;
+        let mut child = cmd.spawn()?;
+
+        if let Some(prompt) = stdin_prompt {
+            if let Some(mut stdin) = child.stdin.take() {
+                if let Err(err) = stdin.write_all(prompt.as_bytes()).await {
+                    let _ = child.kill().await;
+                    return Err(err.into());
+                }
+                drop(stdin);
+            }
+        }
+
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                let _ = child.kill().await;
+                return Err(anyhow::anyhow!(
+                    "stdout not captured for provider {}",
+                    self.id
+                ));
+            }
+        };
+
+        // Drain stderr concurrently so a chatty CLI cannot fill the pipe and
+        // deadlock while we are still reading stdout.
+        let stderr_task = child.stderr.take().map(|mut stderr| {
+            tokio::spawn(async move {
+                let mut buf = String::new();
+                let _ = stderr.read_to_string(&mut buf).await;
+                buf
+            })
+        });
+
+        let mut reader = tokio::io::BufReader::new(stdout);
+        let mut parser = ReasoningParser::new();
+        let mut saw_event = false;
+        let mut line_buf: Vec<u8> = Vec::new();
+        let mut stream_error: Option<String> = None;
+
+        loop {
+            line_buf.clear();
+            let read = tokio::select! {
+                _ = tx.closed() => {
+                    // Client went away: stop the child immediately.
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    return Ok(());
+                }
+                result = reader.read_until(b'\n', &mut line_buf) => result,
+            };
+
+            match read {
+                Ok(0) => break,
+                Ok(_) => {
+                    // Lossy conversion also covers non-UTF-8 / binary stdout.
+                    let line = String::from_utf8_lossy(&line_buf);
+                    for event in parser.parse_line(&line) {
+                        saw_event = true;
+                        if tx.send(event).await.is_err() {
+                            let _ = child.kill().await;
+                            let _ = child.wait().await;
+                            return Ok(());
+                        }
+                    }
+                }
+                Err(err) => {
+                    stream_error = Some(err.to_string());
+                    break;
+                }
+            }
+        }
+
+        let stderr = match stderr_task {
+            Some(task) => task.await.unwrap_or_default(),
+            None => String::new(),
+        };
+        let status = child.wait().await?;
+        tracing::info!("CLI finished: provider={}, status={}, stderr_bytes={}", self.id, status, stderr.len());
+        if !stderr.trim().is_empty() {
+            tracing::debug!("CLI stderr: {}", stderr.trim());
+        }
+
+        if let Some(err) = stream_error {
+            let _ = tx
+                .send(RunEvent::Error {
+                    message: err,
+                    code: Some("stream_error".to_string()),
+                })
+                .await;
+            return Ok(());
+        }
+
+        if !saw_event && !status.success() {
+            let message = if stderr.trim().is_empty() {
+                format!("CLI exited with status {}", status)
+            } else {
+                stderr.trim().to_string()
+            };
+            let _ = tx
+                .send(RunEvent::Error {
+                    message,
+                    code: Some("provider_error".to_string()),
+                })
+                .await;
+            return Ok(());
+        }
+
+        for event in parser.finish() {
+            if tx.send(event).await.is_err() {
+                break;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Parse CLI output. Supports OpenCode `--format json` (JSONL with reasoning/text events)
@@ -238,40 +367,36 @@ fn parse_cli_output(cleaned: &str) -> (String, Option<String>) {
         return (String::new(), None);
     }
     
-    // 1. Try JSONL parsing
-    let mut all_json = true;
-    for line in &lines {
-        if serde_json::from_str::<serde_json::Value>(line.trim()).is_err() {
-            all_json = false;
-            break;
-        }
-    }
-    
+    // 1. Try JSONL parsing through the shared tolerant parser so Claude,
+    //    Gemini, and OpenCode event shapes all end up in the same model.
+    let all_json = lines
+        .iter()
+        .all(|line| serde_json::from_str::<serde_json::Value>(line.trim()).is_ok());
+
     if all_json {
+        let mut parser = ReasoningParser::new();
         let mut reasoning = String::new();
         let mut texts: Vec<String> = Vec::new();
         for line in &lines {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) {
-                let typ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
-                let part = v.get("part");
-                match typ {
-                    "reasoning" => {
-                        if let Some(text) = part.and_then(|p| p.get("text")).and_then(|t| t.as_str()) {
-                            if !reasoning.is_empty() && !reasoning.ends_with('\n') { reasoning.push('\n'); }
-                            reasoning.push_str(text);
-                        }
-                    }
-                    "text" => {
-                        if let Some(text) = part.and_then(|p| p.get("text")).and_then(|t| t.as_str()) {
-                            texts.push(text.to_string());
-                        }
-                    }
+            for event in parser.parse_line(line) {
+                match event {
+                    RunEvent::ReasoningDelta { text, .. } => reasoning.push_str(&text),
+                    RunEvent::Text { text } => texts.push(text),
                     _ => {}
                 }
             }
         }
+        for event in parser.finish() {
+            if let RunEvent::Text { text } = event {
+                texts.push(text);
+            }
+        }
         let content = texts.join("\n\n");
-        let reasoning = if reasoning.trim().is_empty() { None } else { Some(reasoning) };
+        let reasoning = if reasoning.trim().is_empty() {
+            None
+        } else {
+            Some(reasoning)
+        };
         return (content, reasoning);
     }
 
@@ -307,6 +432,104 @@ impl CliProviderImpl {
             models: config.models,
             is_available: false,
         }
+    }
+
+    /// Resolve a configured binary to a runnable path on this platform.
+    fn resolve_binary(&self, bin: &str) -> Option<String> {
+        if std::path::Path::new(bin).exists() {
+            return Some(bin.to_string());
+        }
+
+        // Windows: try extensions (prefer .cmd over extensionless).
+        if cfg!(target_os = "windows") {
+            for ext in &[".cmd", ".bat", ".exe", ".ps1"] {
+                if bin.to_lowercase().ends_with(ext) {
+                    continue;
+                }
+                let candidate = format!("{}{}", bin, ext);
+                if which::which(&candidate).is_ok() {
+                    return Some(candidate);
+                }
+            }
+        }
+
+        if which::which(bin).is_ok() {
+            return Some(bin.to_string());
+        }
+
+        None
+    }
+
+    /// Build the chat command and the optional prompt that must be written to
+    /// stdin. Shared by the aggregated and streaming paths so both behave the
+    /// same way.
+    fn build_chat_command(
+        &self,
+        model: &str,
+        request: &ChatCompletionRequest,
+    ) -> Result<(TokioCommand, Option<String>), anyhow::Error> {
+        let cmd_template = match &self.chat_cmd {
+            Some(c) => c.clone(),
+            None => return Err(anyhow::anyhow!("No chat_cmd defined for provider {}", self.id)),
+        };
+
+        // Build prompt from messages.
+        let prompt = request
+            .messages
+            .iter()
+            .filter_map(|msg| msg.content.clone())
+            .collect::<Vec<String>>()
+            .join("\n");
+
+        let use_stdin = cmd_template.contains(&"--prompt-stdin".to_string())
+            || !cmd_template.iter().any(|arg| arg.contains("{prompt}"))
+            || prompt.len() > 2000; // Avoid Windows CLI argument limits.
+
+        // Replace placeholders {model} and {prompt}; the --prompt-stdin marker
+        // is a config-level directive, not an argument for the CLI.
+        let cmd_args: Vec<String> = cmd_template
+            .into_iter()
+            .filter(|arg| arg != "--prompt-stdin")
+            .map(|arg| {
+                let mut a = arg.replace("{model}", model);
+                if use_stdin {
+                    a = a.replace("{prompt}", "");
+                } else {
+                    a = a.replace("{prompt}", &prompt);
+                }
+                a
+            })
+            .collect();
+
+        let bin = self
+            .bin
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No binary configured for provider {}", self.id))?;
+        let resolved = self
+            .resolve_binary(bin)
+            .ok_or_else(|| anyhow::anyhow!("Binary not found for provider {}", self.id))?;
+
+        let mut cmd = if resolved.contains(".cmd")
+            || resolved.contains(".bat")
+            || resolved.contains(".ps1")
+        {
+            let mut c = TokioCommand::new("cmd");
+            c.arg("/C").arg(&resolved);
+            c
+        } else {
+            TokioCommand::new(&resolved)
+        };
+
+        cmd.args(&cmd_args)
+            .stdin(if use_stdin {
+                std::process::Stdio::piped()
+            } else {
+                std::process::Stdio::null()
+            })
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        Ok((cmd, if use_stdin { Some(prompt) } else { None }))
     }
 
     /// Execute command with platform-aware binary resolution

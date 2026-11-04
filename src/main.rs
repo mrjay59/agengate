@@ -47,6 +47,27 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         force: bool,
     },
+    /// Diagnostics: provider/reasoning report, client matrix, synthetic probe
+    Doctor {
+        /// Serve timestamped synthetic reasoning streams (no model call)
+        #[arg(long, default_value_t = false)]
+        probe_reasoning: bool,
+        /// Print the embedded client/9router matrix and exit
+        #[arg(long, default_value_t = false)]
+        matrix: bool,
+        /// Bind host for the probe server
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Bind port for the probe server
+        #[arg(long, default_value_t = 8799)]
+        port: u16,
+        /// Stop the probe server after N seconds
+        #[arg(long, default_value_t = 120)]
+        seconds: u64,
+        /// Keep the probe server running until Ctrl+C
+        #[arg(long, default_value_t = false)]
+        follow: bool,
+    },
 }
 
 #[tokio::main]
@@ -60,7 +81,13 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let config = load_config().await?;
+    let config = match &args.config {
+        Some(path) => {
+            let content = tokio::fs::read_to_string(path).await?;
+            toml::from_str::<agentgate::config::Config>(&content)?
+        }
+        None => load_config().await?,
+    };
 
     match &args.command {
         Commands::Serve { host, port } => {
@@ -68,12 +95,13 @@ async fn main() -> Result<()> {
             let host = host.as_deref().unwrap_or(&config.server.host);
             let port = port.unwrap_or(config.server.port);
             let bind_addr = format!("{}:{}", host, port);
-            let mut registry = ServiceRegistry::new();
+            let mut registry = ServiceRegistry::new().with_reasoning(config.reasoning.clone());
             for provider_cfg in &config.provider {
                 registry
                     .register(Box::new(CliProviderImpl::new(provider_cfg.clone())))
                     .await;
             }
+            registry.bridge.start_cleanup_task().await;
             let app = api().with_state(Arc::new(registry));
             // Wire CORS if enabled in config
             let app = if config.server.cors {
@@ -122,7 +150,7 @@ async fn main() -> Result<()> {
             axum::serve(listener, app).await?;
         }
         Commands::Models { provider } => {
-            let mut registry = ServiceRegistry::new();
+            let mut registry = ServiceRegistry::new().with_reasoning(config.reasoning.clone());
             for provider_cfg in &config.provider {
                 registry
                     .register(Box::new(CliProviderImpl::new(provider_cfg.clone())))
@@ -137,7 +165,7 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Test { model, prompt } => {
-            let mut registry = ServiceRegistry::new();
+            let mut registry = ServiceRegistry::new().with_reasoning(config.reasoning.clone());
             for provider_cfg in &config.provider {
                 registry
                     .register(Box::new(CliProviderImpl::new(provider_cfg.clone())))
@@ -147,18 +175,45 @@ async fn main() -> Result<()> {
                 model: model.clone(),
                 messages: vec![ChatMessage {
                     role: MessageRole::User,
-                    content: prompt.clone(),
+                    content: Some(prompt.clone()),
                     reasoning_content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
                 }],
                 ..Default::default()
             };
             let response = registry.chat_completion(request).await?;
             println!("Model: {}", response.model);
-            println!("Content: {}", response.choices[0].message.content);
+            println!("Content: {}", response.choices[0].message.content.as_deref().unwrap_or(""));
         }
         Commands::Init { force } => {
             agentgate::config::write_default_config(*force).await?;
             println!("Config file written to default location.");
+        }
+        Commands::Doctor {
+            probe_reasoning,
+            matrix,
+            host,
+            port,
+            seconds,
+            follow,
+        } => {
+            if *matrix {
+                agentgate::doctor::print_matrix();
+            } else if *probe_reasoning {
+                let window = if *follow { None } else { Some(*seconds) };
+                agentgate::doctor::run_probe(host, *port, window).await?;
+            } else {
+                let mut registry =
+                    ServiceRegistry::new().with_reasoning(config.reasoning.clone());
+                for provider_cfg in &config.provider {
+                    registry
+                        .register(Box::new(CliProviderImpl::new(provider_cfg.clone())))
+                        .await;
+                }
+                agentgate::doctor::run_report(&registry).await;
+            }
         }
     }
 

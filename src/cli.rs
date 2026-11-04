@@ -58,15 +58,18 @@ pub async fn execute_test(config: &Config, model: &str, prompt: &str) -> Result<
         model: model.to_string(),
         messages: vec![crate::types::ChatMessage {
             role: MessageRole::User,
-            content: prompt.to_string(),
+            content: Some(prompt.to_string()),
             reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
         }],
         ..Default::default()
     };
 
     let response = registry.chat_completion(request).await?;
     println!("Model: {}", response.model);
-    println!("Content: {}", response.choices[0].message.content);
+    println!("Content: {}", response.choices[0].message.content.as_deref().unwrap_or(""));
     Ok(())
 }
 

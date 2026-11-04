@@ -11,6 +11,7 @@ async fn test_provider_not_available() {
         models_cmd: None,
         chat_cmd: None,
         strip_ansi: false,
+        ..Default::default()
     };
     let provider = CliProviderImpl::new(config);
     assert!(!provider.check_available().await);
@@ -26,6 +27,7 @@ async fn test_provider_set_available() {
         models_cmd: None,
         chat_cmd: None,
         strip_ansi: false,
+        ..Default::default()
     };
     let mut provider = CliProviderImpl::new(config);
     assert!(!provider.is_available());
@@ -45,6 +47,7 @@ async fn test_provider_scan_models() {
         models_cmd: None,
         chat_cmd: None,
         strip_ansi: false,
+        ..Default::default()
     };
     let provider = CliProviderImpl::new(config);
     let models = provider.scan_models().unwrap();
@@ -63,6 +66,7 @@ async fn test_parse_models_output_ansi() {
         models_cmd: Some(vec!["models".into()]),
         chat_cmd: None,
         strip_ansi: true,
+        ..Default::default()
     };
     let provider = CliProviderImpl::new(config);
     // test parsing logic via a helper or direct test of output parsing

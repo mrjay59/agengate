@@ -20,7 +20,10 @@ impl CliProvider for DummyProvider {
         Ok(vec!["m1".into()])
     }
     async fn send_chat_completion(&self, _model: &str, _request: ChatCompletionRequest) -> Result<agentgate::provider::ProviderResponse, anyhow::Error> {
-        Err(anyhow::anyhow!("not implemented"))
+        Ok(agentgate::provider::ProviderResponse::Success {
+            content: "answer".to_string(),
+            reasoning: Some("thinking about it".to_string()),
+        })
     }
 }
 
@@ -67,4 +70,70 @@ async fn test_health_check() {
         .unwrap();
     let resp: Response = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+async fn chat_stream(
+    headers: &[(&str, &str)],
+    request_body: serde_json::Value,
+) -> (axum::http::HeaderMap, String) {
+    let mut registry = ServiceRegistry::new();
+    registry.register(Box::new(DummyProvider)).await;
+    let app = api().with_state(Arc::new(registry));
+    let mut builder = Request::builder()
+        .uri("/v1/chat/completions")
+        .method(axum::http::Method::POST)
+        .header("content-type", "application/json");
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let req = builder.body(Body::from(request_body.to_string())).unwrap();
+    let resp: Response = app.oneshot(req).await.unwrap();
+    let status = resp.status();
+    let response_headers = resp.headers().clone();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    (response_headers, body)
+}
+
+#[tokio::test]
+async fn test_streaming_emits_reasoning_then_text_then_done() {
+    let (_headers, body) = chat_stream(
+        &[],
+        serde_json::json!({
+            "model": "m1",
+            "stream": true,
+            "messages": [{"role": "user", "content": "hi"}]
+        }),
+    )
+    .await;
+
+    assert!(body.contains("\"reasoning_content\":\"thinking about it\""), "{body}");
+    assert!(body.contains("answer"), "{body}");
+    assert!(body.contains("\"finish_reason\":\"stop\""), "{body}");
+    assert!(body.contains("[DONE]"), "{body}");
+    // Reasoning must precede the answer.
+    let reasoning = body.find("thinking about it").unwrap();
+    let answer = body.find("answer").unwrap();
+    assert!(reasoning < answer, "reasoning must precede text");
+}
+
+#[tokio::test]
+async fn test_streaming_none_format_suppresses_reasoning() {
+    let (headers, body) = chat_stream(
+        &[("x-agentgate-reasoning", "none")],
+        serde_json::json!({
+            "model": "m1",
+            "stream": true,
+            "messages": [{"role": "user", "content": "hi"}]
+        }),
+    )
+    .await;
+
+    assert_eq!(headers["x-agentgate-reasoning-format"], "none");
+    assert!(!body.contains("reasoning_content"), "{body}");
+    assert!(!body.contains("thinking about it"), "{body}");
+    assert!(body.contains("answer"), "{body}");
 }

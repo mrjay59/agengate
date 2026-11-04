@@ -10,13 +10,48 @@ workdir = "."
 max_concurrency_per_provider = 2
 model_cache_ttl_secs = 300
 
-[provider.opencode]
+# Reasoning / thinking streaming (see docs/reasoning.md).
+# Every value below is optional; these are the defaults.
+[reasoning]
+enabled = true
+# reasoning_content | reasoning | both | think_tags | none | passthrough
+format = "reasoning_content"
+# Send "content": null alongside reasoning deltas (OpenAI-compatible UIs).
+null_content = true
+# Emit the assistant role chunk before the CLI produces output (lower TTFB).
+early_role_chunk = true
+# Coalescing window: flush reasoning/text after N ms or N bytes.
+flush_ms = 40
+flush_bytes = 256
+# Hard per-turn limits (RS8). Truncation emits a marker once.
+max_chars_per_turn = 200000
+max_blocks_per_turn = 64
+# Fallback when the CLI/model exposes no reasoning: activity | none | induce.
+fallback = "activity"
+activity_via_reasoning = true
+activity_args = false
+activity_min_interval_ms = 1500
+# Label language for synthesized activity: id | en.
+activity_lang = "id"
+activity_prefix = "⏳ "
+# Marker for omitted thinking blocks: activity | none.
+omitted_marker = "activity"
+# Best-effort redaction of reasoning/activity before it reaches clients.
+redact_patterns = [
+  '(?i)api[_-]?key\s*[:=]\s*\S+',
+  'sk-[A-Za-z0-9_-]{16,}',
+]
+
+[[provider]]
+id = "opencode"
 enabled = true
 
-[provider.copilot]
+[[provider]]
+id = "copilot"
 enabled = true
 models = ["gpt-4o", "claude-3-5-sonnet"]
 
-[provider.gemini]
+[[provider]]
+id = "gemini"
 enabled = true
 models = ["gemini-2.5-pro", "gemini-2.5-flash"]

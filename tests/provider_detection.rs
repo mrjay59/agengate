@@ -37,6 +37,7 @@ fn test_parse_models_output_plain() {
         models_cmd: None,
         chat_cmd: None,
         strip_ansi: true,
+        ..Default::default()
     };
     let provider = CliProviderImpl::new(config);
 
@@ -55,6 +56,7 @@ fn test_parse_models_output_json_array() {
         models_cmd: None,
         chat_cmd: None,
         strip_ansi: false,
+        ..Default::default()
     };
     let provider = CliProviderImpl::new(config);
 
@@ -73,6 +75,7 @@ fn test_parse_models_output_json_object() {
         models_cmd: None,
         chat_cmd: None,
         strip_ansi: false,
+        ..Default::default()
     };
     let provider = CliProviderImpl::new(config);
 
@@ -91,6 +94,7 @@ fn test_parse_models_output_with_ansi() {
         models_cmd: None,
         chat_cmd: None,
         strip_ansi: true,
+        ..Default::default()
     };
     let provider = CliProviderImpl::new(config);
 
@@ -109,6 +113,7 @@ fn test_check_available_opencode() {
         models_cmd: None,
         chat_cmd: None,
         strip_ansi: true,
+        ..Default::default()
     };
 
     let provider = CliProviderImpl::new(config);
@@ -117,6 +122,26 @@ fn test_check_available_opencode() {
 
     #[cfg(target_os = "windows")]
     assert!(result, "opencode.cmd should be detected on Windows");
+}
+
+#[tokio::test]
+async fn test_check_available_ollama() {
+    let config = ProviderConfig {
+        id: "ollama".to_string(),
+        enabled: true,
+        bin: Some("ollama".to_string()),
+        models: vec![],
+        models_cmd: None,
+        chat_cmd: None,
+        strip_ansi: false,
+        ..Default::default()
+    };
+
+    let provider = CliProviderImpl::new(config);
+    let result = provider.check_available().await;
+    println!("ollama check_available result: {}", result);
+    // Must not panic; availability depends on the host environment.
+    let _ = result;
 }
 
 #[test]

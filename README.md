@@ -99,6 +99,15 @@ bin = "opencode"
 models = ["opencode/beam-free"]
 chat_cmd = ["run", "--model", "{model}", "--thinking", "--format", "json", "{prompt}"]
 strip_ansi = true
+
+[[provider]]
+id = "ollama"
+bin = "ollama"
+models_cmd = ["list"]
+chat_cmd = ["run", "{model}"]
+strip_ansi = true
+enabled = true
+models = ["llama3", "deepseek-r1", "phi3"]
 ```
 
 Parameter penting:

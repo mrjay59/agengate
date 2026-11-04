@@ -23,15 +23,6 @@ strip_ansi = true
 enabled = true
 
 [[provider]]
-id = "copilot"
-bin = "gh"
-models_cmd = ["api", "v1/copilot/models", "--jq", ".data[].name"]
-chat_cmd = ["api", "v1/copilot/chat", "--method", "POST", "--input", "-"]
-strip_ansi = true
-enabled = true
-models = ["gpt-4o", "claude-3-5-sonnet"]
-
-[[provider]]
 id = "gemini"
 bin = "gemini"
 models_cmd = ["list", "--format", "json"]
@@ -39,3 +30,18 @@ chat_cmd = ["generate", "--model", "{model}", "--prompt-stdin"]
 strip_ansi = true
 enabled = true
 models = ["gemini-2.5-pro", "gemini-2.5-flash"]
+
+[[provider]]
+id = "ollama"
+bin = "ollama"
+models_cmd = ["list"]
+chat_cmd = ["run", "{model}"]
+strip_ansi = true
+enabled = true
+models = ["llama3", "deepseek-r1", "phi3"]
+
+[reasoning]
+enabled = true
+format = "reasoning_content"
+null_content = false
+early_role_chunk = true
