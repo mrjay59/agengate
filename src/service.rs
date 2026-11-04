@@ -102,8 +102,14 @@ impl ServiceRegistry {
         for (id, provider) in providers.iter() {
             if let Ok(model_list) = provider.scan_models() {
                 for model_id in model_list {
+                    // Prefix model ID with provider ID (e.g., "ollama/qwen2.5-coder:7b")
+                    let prefixed_id = if model_id.contains('/') {
+                        model_id.clone() // Already has provider prefix
+                    } else {
+                        format!("{}/{}", id, model_id)
+                    };
                     models.push(Model {
-                        id: model_id.clone(),
+                        id: prefixed_id,
                         provider: id.clone(),
                         name: model_id.clone(),
                     });
@@ -141,7 +147,17 @@ impl ServiceRegistry {
         let result: Vec<crate::types::Provider> = providers
             .iter()
             .map(|(id, provider)| {
-                let models = provider.scan_models().unwrap_or_else(|_| provider.models());
+                let raw_models = provider.scan_models().unwrap_or_else(|_| provider.models());
+                let models: Vec<String> = raw_models
+                    .into_iter()
+                    .map(|m| {
+                        if m.contains('/') {
+                            m
+                        } else {
+                            format!("{}/{}", id, m)
+                        }
+                    })
+                    .collect();
                 crate::types::Provider {
                     id: id.clone(),
                     name: id.clone(),
