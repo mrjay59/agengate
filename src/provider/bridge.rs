@@ -1,13 +1,12 @@
 //! Provider bridge trait — adapter layer that connects
 //! CLI agents (OpenCode, Gemini, Claude) to AgentGate's MCP bridge server.
 
-use crate::bridge::{Run, ToolResult, ToolSchema};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::Mutex;
 
@@ -15,9 +14,16 @@ use tokio::sync::Mutex;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
     pub r#type: String,
-    pub url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<HashMap<String, String>>,
 }
 
 /// MCP configuration for CLI agents
@@ -37,6 +43,13 @@ pub struct BridgeConfig {
     pub port: u16,
     pub model: String,
     pub profile_name: String,
+    /// Base directory for session workdirs (default: /tmp/agentgate)
+    #[serde(default = "default_data_dir")]
+    pub data_dir: Option<PathBuf>,
+}
+
+fn default_data_dir() -> Option<PathBuf> {
+    Some(PathBuf::from("/tmp/agentgate"))
 }
 
 impl Default for BridgeConfig {
@@ -46,6 +59,7 @@ impl Default for BridgeConfig {
             port: 8080,
             model: "default".to_string(),
             profile_name: "opencode".to_string(),
+            data_dir: default_data_dir(),
         }
     }
 }
@@ -97,6 +111,13 @@ pub struct BridgeToolResult {
     pub is_error: bool,
 }
 
+/// Output from a bridge session completion
+#[derive(Debug, Clone, Default)]
+pub struct SessionOutput {
+    pub content: String,
+    pub reasoning: Option<String>,
+}
+
 /// Bridge session trait for managing CLI bridge processes
 #[async_trait]
 pub trait BridgeSession: Send + Sync {
@@ -105,7 +126,7 @@ pub trait BridgeSession: Send + Sync {
     async fn send_user_message(&self, text: &str) -> Result<()>;
     async fn send_tool_result(&self, result: BridgeToolResult) -> Result<()>;
     async fn close(&self) -> Result<()>;
-    async fn wait_for_completion(&self) -> Result<()>;
+    async fn wait_for_completion(&self) -> Result<SessionOutput>;
 }
 
 /// Bridge provider factory trait

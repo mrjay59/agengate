@@ -2,13 +2,13 @@ use crate::config::ProviderConfig;
 use crate::reasoning::parser::ReasoningParser;
 use crate::reasoning::{FinishReason, ReasoningKind, RunEvent};
 use crate::types::ChatCompletionRequest;
+use anyhow::Context;
 use async_trait::async_trait;
 use std::process::Command;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::mpsc;
-
-pub mod ollama_native;
+use uuid;
 
 /// Determine if a provider is native (model-api) rather than cli-agent
 pub fn is_native_provider(provider_id: &str) -> bool {
@@ -207,7 +207,13 @@ impl CliProvider for CliProviderImpl {
         model: &str,
         request: ChatCompletionRequest,
     ) -> Result<ProviderResponse, anyhow::Error> {
-        let (mut cmd, stdin_prompt) = self.build_chat_command(model, &request)?;
+        // Create empty session workdir per spec §11.3
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let data_dir = std::path::PathBuf::from("/tmp/agentgate");
+        let workdir = data_dir.join("sessions").join(&session_id).join("work");
+        tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
+
+        let (mut cmd, stdin_prompt) = self.build_chat_command(model, &request, Some(&workdir))?;
         let mut child = cmd.spawn()?;
 
         // Write prompt to stdin if required, then close to signal EOF
@@ -242,7 +248,13 @@ impl CliProvider for CliProviderImpl {
         request: ChatCompletionRequest,
         tx: mpsc::Sender<RunEvent>,
     ) -> Result<(), anyhow::Error> {
-        let (mut cmd, stdin_prompt) = self.build_chat_command(model, &request)?;
+        // Create empty session workdir per spec §11.3
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let data_dir = std::path::PathBuf::from("/tmp/agentgate");
+        let workdir = data_dir.join("sessions").join(&session_id).join("work");
+        tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
+
+        let (mut cmd, stdin_prompt) = self.build_chat_command(model, &request, Some(&workdir))?;
         let mut child = cmd.spawn()?;
 
         if let Some(prompt) = stdin_prompt {
@@ -467,6 +479,7 @@ impl CliProviderImpl {
         &self,
         model: &str,
         request: &ChatCompletionRequest,
+        workdir: Option<&std::path::Path>,
     ) -> Result<(TokioCommand, Option<String>), anyhow::Error> {
         let cmd_template = match &self.chat_cmd {
             Some(c) => c.clone(),
@@ -519,6 +532,11 @@ impl CliProviderImpl {
         } else {
             TokioCommand::new(&resolved)
         };
+
+        // Set working directory to empty session workdir (spec §11.3)
+        if let Some(dir) = workdir {
+            cmd.current_dir(dir);
+        }
 
         cmd.args(&cmd_args)
             .stdin(if use_stdin {
@@ -667,4 +685,213 @@ impl CliProviderImpl {
 /// Strip all ANSI escape codes from text
 pub fn strip_ansi_codes(text: &str) -> String {
     String::from_utf8_lossy(&strip_ansi_escapes::strip(text)).to_string()
+}
+
+pub mod ollama_native;
+pub mod bridge;
+
+use crate::provider::bridge::{BridgeProviderV2, BridgeConfig, BridgeSession, create_bridge_factory_v2, SessionOutput};
+use crate::bridge::BridgeClient;
+use std::sync::Arc;
+
+/// A CLI provider that uses the bridge architecture (MCP bridge to Device A).
+/// Used for OpenCode, Gemini, and Claude CLI agents per spec_tooling.md.
+pub struct BridgeCliProvider {
+    pub id: String,
+    pub bin: Option<String>,
+    pub models: Vec<String>,
+    pub is_available: bool,
+    factory: Box<dyn crate::provider::bridge::BridgeProviderFactory + Send + Sync>,
+}
+
+impl BridgeCliProvider {
+    pub fn new(config: crate::config::ProviderConfig) -> Option<Self> {
+        // Determine which bridge factory to use based on provider ID
+        let factory = create_bridge_factory_v2(&config.id)?;
+
+        Some(Self {
+            id: config.id,
+            bin: config.bin.clone(),
+            models: config.models.clone(),
+            is_available: false,
+            factory,
+        })
+    }
+}
+
+#[async_trait]
+impl CliProvider for BridgeCliProvider {
+    fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    fn bin(&self) -> Option<String> {
+        self.bin.clone()
+    }
+
+    fn models(&self) -> Vec<String> {
+        self.models.clone()
+    }
+
+    fn is_available(&self) -> bool {
+        self.is_available
+    }
+
+    fn set_available(&mut self, available: bool) {
+        self.is_available = available;
+    }
+
+    async fn check_available(&self) -> bool {
+        // For bridge providers, check if the CLI binary is available
+        let bin = match &self.bin {
+            Some(b) => b,
+            None => return false,
+        };
+
+        // Direct path check
+        if std::path::Path::new(bin).exists() {
+            return true;
+        }
+
+        // PATH search via which crate
+        if which::which(bin).is_ok() {
+            return true;
+        }
+
+        // Windows: try common extensions
+        if cfg!(target_os = "windows") {
+            for ext in &[".cmd", ".bat", ".exe", ".ps1"] {
+                if !bin.to_lowercase().ends_with(ext) {
+                    let candidate = format!("{}{}", bin, ext);
+                    if which::which(&candidate).is_ok() {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> {
+        // For bridge providers, return configured models (CLI agents don't typically have model listing)
+        Ok(self.models.clone())
+    }
+
+    async fn send_chat_completion(
+        &self,
+        model: &str,
+        request: crate::types::ChatCompletionRequest,
+    ) -> Result<ProviderResponse, anyhow::Error> {
+        use uuid::Uuid;
+
+        // Create bridge config
+        let session_id = Uuid::new_v4().to_string();
+        let data_dir = std::path::PathBuf::from("/tmp/agentgate");
+        let workdir = data_dir.join("sessions").join(&session_id).join("work");
+        tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
+
+        let bridge_config = BridgeConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8786, // AgentGate bridge port
+            model: model.to_string(),
+            profile_name: self.factory.default_profile().name.clone(),
+            data_dir: Some(data_dir.clone()),
+        };
+
+        // Create bridge provider from factory
+        let provider = self.factory.create(bridge_config.clone()).await?;
+
+        // Create bridge client
+        let client = Arc::new(BridgeClient {
+            host: "127.0.0.1".to_string(),
+            port: 8786,
+        });
+
+        // Start bridge session (spawns CLI with MCP config)
+        let session = provider.start_bridge(bridge_config, client).await?;
+
+        // Send user message to CLI
+        let user_message = request
+            .messages
+            .iter()
+            .filter_map(|msg| msg.content.clone())
+            .collect::<Vec<String>>()
+            .join("\n");
+
+        if !user_message.trim().is_empty() {
+            session.send_user_message(&user_message).await?;
+        }
+
+        // Wait for completion (handles tool calls via bridge)
+        let output = session.wait_for_completion().await?;
+
+        Ok(ProviderResponse::Success {
+            content: output.content,
+            reasoning: output.reasoning,
+        })
+    }
+
+    async fn send_chat_completion_stream(
+        &self,
+        model: &str,
+        request: crate::types::ChatCompletionRequest,
+        tx: tokio::sync::mpsc::Sender<crate::reasoning::RunEvent>,
+    ) -> Result<(), anyhow::Error> {
+        use uuid::Uuid;
+
+        // Create bridge config
+        let session_id = Uuid::new_v4().to_string();
+        let data_dir = std::path::PathBuf::from("/tmp/agentgate");
+        let workdir = data_dir.join("sessions").join(&session_id).join("work");
+        tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
+
+        let bridge_config = BridgeConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8786,
+            model: model.to_string(),
+            profile_name: self.factory.default_profile().name.clone(),
+            data_dir: Some(data_dir.clone()),
+        };
+
+        // Create bridge provider from factory
+        let provider = self.factory.create(bridge_config.clone()).await?;
+
+        // Create bridge client
+        let client = Arc::new(BridgeClient {
+            host: "127.0.0.1".to_string(),
+            port: 8786,
+        });
+
+        // Start bridge session
+        let session = provider.start_bridge(bridge_config, client).await?;
+
+        // Send user message
+        let user_message = request
+            .messages
+            .iter()
+            .filter_map(|msg| msg.content.clone())
+            .collect::<Vec<String>>()
+            .join("\n");
+
+        if !user_message.trim().is_empty() {
+            session.send_user_message(&user_message).await?;
+        }
+
+        // Wait for completion and stream events
+        let output = session.wait_for_completion().await?;
+
+        // Stream the result as events
+        if let Some(reasoning) = output.reasoning.filter(|r| !r.trim().is_empty()) {
+            if tx.send(crate::reasoning::RunEvent::ReasoningStart { block: 0, kind: crate::reasoning::ReasoningKind::Raw }).await.is_err() { return Ok(()); }
+            if tx.send(crate::reasoning::RunEvent::ReasoningDelta { block: 0, text: reasoning }).await.is_err() { return Ok(()); }
+            if tx.send(crate::reasoning::RunEvent::ReasoningEnd { block: 0 }).await.is_err() { return Ok(()); }
+        }
+        if !output.content.is_empty() {
+            if tx.send(crate::reasoning::RunEvent::Text { text: output.content }).await.is_err() { return Ok(()); }
+        }
+        let _ = tx.send(crate::reasoning::RunEvent::Done { reason: crate::reasoning::FinishReason::Stop }).await;
+
+        Ok(())
+    }
 }

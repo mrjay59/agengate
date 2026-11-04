@@ -10,7 +10,7 @@ use tokio::time::interval;
 use tracing::{debug, info};
 
 /// Bridge client for handling tool calls from CLI agents
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct BridgeClient {
     pub host: String,
     pub port: u16,

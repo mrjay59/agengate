@@ -3,7 +3,7 @@
 use crate::bridge::{BridgeClient, Run, ToolResult, ToolSchema};
 use crate::provider::bridge::{
     BridgeConfig, BridgeProfile, BridgeProviderFactory, BridgeProviderV2, BridgeSession,
-    BridgeToolResult, McpConfig, McpServerConfig, ToolCall,
+    BridgeToolResult, McpConfig, McpServerConfig, ToolCall, SessionOutput,
 };
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -149,7 +149,7 @@ impl OpenCodeSession {
         fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
 
         // Build MCP config with tool-disabling config
-        let mcp_config = Self::build_mcp_config(&mcp_token, mcp_port, &session_id, tool_disable_config)?;
+        let mcp_config = Self::build_mcp_config(&mcp_token, mcp_port, &session_id, &tool_disable_config)?;
 
         // Prepare command
         let mut cmd = Command::new(&profile.binary);
@@ -249,18 +249,21 @@ impl OpenCodeSession {
         Ok(session)
     }
 
-    fn build_mcp_config(token: &str, port: u16, session_id: &str, tool_disable_config: Value) -> Result<McpConfig> {
+    fn build_mcp_config(token: &str, port: u16, session_id: &str, tool_disable_config: &Value) -> Result<McpConfig> {
         let mut mcp_servers = HashMap::new();
         mcp_servers.insert(
             "agentgate".into(),
             McpServerConfig {
                 r#type: "http".into(),
-                url: format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}"),
+                url: Some(format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}")),
                 headers: Some({
                     let mut headers = HashMap::new();
                     headers.insert("Authorization".into(), format!("Bearer {token}"));
                     headers
                 }),
+                command: None,
+                args: None,
+                env: None,
             },
         );
 
@@ -274,16 +277,18 @@ impl OpenCodeSession {
                 "agentgate_tools".into(),
                 McpServerConfig {
                     r#type: "stdio".into(),
+                    url: None,
                     command: Some("true".into()), // dummy command, config only
                     args: None,
                     env: Some({
                         let mut env = HashMap::new();
                         env.insert(
                             "OPENCODE_CONFIG_CONTENT".into(),
-                            serde_json::to_string(&tool_disable_config)?,
+                            serde_json::to_string(tool_disable_config)?,
                         );
                         env
                     }),
+                    headers: None,
                 },
             );
         Ok(config)
@@ -436,13 +441,50 @@ impl BridgeSession for OpenCodeSession {
         Ok(())
     }
 
-    async fn wait_for_completion(&self) -> Result<()> {
+    async fn wait_for_completion(&self) -> Result<SessionOutput> {
+        // Drain events from the channel to collect output
+        let mut content = String::new();
+        let mut reasoning = None;
+
+        // Take the event receiver
+        let mut rx_guard = self.event_rx.lock().await;
+        if let Some(mut rx) = rx_guard.take() {
+            // Drain all events
+            while let Some(event) = rx.recv().await {
+                // Parse event for content and reasoning
+                if let Some(text) = event.get("text").and_then(|v| v.as_str()) {
+                    content.push_str(text);
+                    content.push('\n');
+                }
+                if let Some(reasoning_text) = event.get("reasoning").and_then(|v| v.as_str()) {
+                    if reasoning.is_none() {
+                        reasoning = Some(String::new());
+                    }
+                    if let Some(r) = &mut reasoning {
+                        r.push_str(reasoning_text);
+                        r.push('\n');
+                    }
+                }
+                // Also check for "content" field (common in some CLI outputs)
+                if let Some(c) = event.get("content").and_then(|v| v.as_str()) {
+                    content.push_str(c);
+                    content.push('\n');
+                }
+            }
+        }
+        drop(rx_guard);
+
+        // Wait for process to exit
         let mut child_guard = self.child.lock().await;
         if let Some(mut child) = child_guard.take() {
             let status = child.wait().await?;
             debug!("OpenCode process exited with status: {}", status);
         }
-        Ok(())
+
+        Ok(SessionOutput {
+            content: content.trim().to_string(),
+            reasoning: reasoning.map(|r| r.trim().to_string()),
+        })
     }
 }
 

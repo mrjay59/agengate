@@ -3,7 +3,7 @@
 use crate::bridge::{BridgeClient, Run, ToolResult, ToolSchema};
 use crate::provider::bridge::{
     BridgeConfig, BridgeProfile, BridgeProviderFactory, BridgeProviderV2, BridgeSession,
-    BridgeToolResult, McpConfig, McpServerConfig, ToolCall,
+    BridgeToolResult, McpConfig, McpServerConfig, ToolCall, SessionOutput,
 };
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -150,7 +150,7 @@ impl ClaudeSession {
         fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
 
         // Build MCP config with tool-disabling config
-        let mcp_config = Self::build_mcp_config(&mcp_token, mcp_port, &session_id, tool_disable_config)?;
+        let mcp_config = Self::build_mcp_config(&mcp_token, mcp_port, &session_id, &tool_disable_config)?;
         let mcp_config_json = serde_json::to_string(&mcp_config)?;
 
         // Prepare command
@@ -249,18 +249,21 @@ impl ClaudeSession {
         Ok(session)
     }
 
-    fn build_mcp_config(token: &str, port: u16, session_id: &str, tool_disable_config: Value) -> Result<McpConfig> {
+    fn build_mcp_config(token: &str, port: u16, session_id: &str, tool_disable_config: &Value) -> Result<McpConfig> {
         let mut mcp_servers = HashMap::new();
         mcp_servers.insert(
             "agentgate".into(),
             McpServerConfig {
                 r#type: "http".into(),
-                url: format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}"),
+                url: Some(format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}")),
                 headers: Some({
                     let mut headers = HashMap::new();
                     headers.insert("Authorization".into(), format!("Bearer {token}"));
                     headers
                 }),
+                command: None,
+                args: None,
+                env: None,
             },
         );
 
@@ -270,16 +273,40 @@ impl ClaudeSession {
             "agentgate_tools".into(),
             McpServerConfig {
                 r#type: "stdio".into(),
+                url: None,
                 command: Some("true".into()),
                 args: None,
                 env: Some({
                     let mut env = HashMap::new();
-                    env.insert("CLAUDE_MCP_CONFIG".into(), serde_json::to_string(&tool_disable_config)?);
+                    env.insert("CLAUDE_MCP_CONFIG".into(), serde_json::to_string(tool_disable_config)?);
                     env
                 }),
+                headers: None,
             },
         );
         Ok(config)
+    }
+
+    /// Build Claude MCP config JSON injected via CLAUDE_MCP_CONFIG.
+    /// Includes the agentgate MCP server bridge and tool-disabling rules (spec §12.4).
+    fn build_claude_mcp_config_json(
+        token: &str,
+        port: u16,
+        session_id: &str,
+        tool_disable_config: &Value,
+    ) -> String {
+        serde_json::json!({
+            "mcpServers": {
+                "agentgate": {
+                    "type": "http",
+                    "url": format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}"),
+                    "headers": { "Authorization": format!("Bearer {token}") }
+                }
+            },
+            "tools": tool_disable_config["tools"],
+            "permissions": tool_disable_config["permission"]
+        })
+        .to_string()
     }
 
     async fn wait_for_mcp_initialize(&self) -> Result<()> {
@@ -394,13 +421,50 @@ impl BridgeSession for ClaudeSession {
         Ok(())
     }
 
-    async fn wait_for_completion(&self) -> Result<()> {
+    async fn wait_for_completion(&self) -> Result<SessionOutput> {
+        // Drain events from the channel to collect output
+        let mut content = String::new();
+        let mut reasoning = None;
+
+        // Take the event receiver
+        let mut rx_guard = self.event_rx.lock().await;
+        if let Some(mut rx) = rx_guard.take() {
+            // Drain all events
+            while let Some(event) = rx.recv().await {
+                // Parse event for content and reasoning
+                if let Some(text) = event.get("text").and_then(|v| v.as_str()) {
+                    content.push_str(text);
+                    content.push('\n');
+                }
+                if let Some(reasoning_text) = event.get("reasoning").and_then(|v| v.as_str()) {
+                    if reasoning.is_none() {
+                        reasoning = Some(String::new());
+                    }
+                    if let Some(r) = &mut reasoning {
+                        r.push_str(reasoning_text);
+                        r.push('\n');
+                    }
+                }
+                // Also check for "content" field
+                if let Some(c) = event.get("content").and_then(|v| v.as_str()) {
+                    content.push_str(c);
+                    content.push('\n');
+                }
+            }
+        }
+        drop(rx_guard);
+
+        // Wait for process to exit
         let mut child_guard = self.child.lock().await;
         if let Some(mut child) = child_guard.take() {
             let status = child.wait().await?;
             debug!("Claude process exited with status: {}", status);
         }
-        Ok(())
+
+        Ok(SessionOutput {
+            content: content.trim().to_string(),
+            reasoning: reasoning.map(|r| r.trim().to_string()),
+        })
     }
 }
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use agentgate::api::api;
 use agentgate::config::load_config;
-use agentgate::provider::CliProviderImpl;
+use agentgate::provider::{CliProviderImpl, BridgeCliProvider};
 use agentgate::service::ServiceRegistry;
 use agentgate::types::{ChatCompletionRequest, ChatMessage, MessageRole};
 use anyhow::Result;
@@ -97,9 +97,18 @@ async fn main() -> Result<()> {
             let bind_addr = format!("{}:{}", host, port);
             let mut registry = ServiceRegistry::new().with_reasoning(config.reasoning.clone());
             for provider_cfg in &config.provider {
-                registry
-                    .register(Box::new(CliProviderImpl::new(provider_cfg.clone())))
-                    .await;
+                // Use BridgeCliProvider for providers that support bridge architecture (spec_tooling.md)
+                let provider: Box<dyn agentgate::provider::CliProvider> = match provider_cfg.id.as_str() {
+                    "opencode" | "gemini" | "claude" => {
+                        if let Some(bp) = BridgeCliProvider::new(provider_cfg.clone()) {
+                            Box::new(bp)
+                        } else {
+                            Box::new(CliProviderImpl::new(provider_cfg.clone()))
+                        }
+                    }
+                    _ => Box::new(CliProviderImpl::new(provider_cfg.clone())),
+                };
+                registry.register(provider).await;
             }
             registry.bridge.start_cleanup_task().await;
             let app = api().with_state(Arc::new(registry));
@@ -152,9 +161,18 @@ async fn main() -> Result<()> {
         Commands::Models { provider } => {
             let mut registry = ServiceRegistry::new().with_reasoning(config.reasoning.clone());
             for provider_cfg in &config.provider {
-                registry
-                    .register(Box::new(CliProviderImpl::new(provider_cfg.clone())))
-                    .await;
+                // Use BridgeCliProvider for providers that support bridge architecture (spec_tooling.md)
+                let provider: Box<dyn agentgate::provider::CliProvider> = match provider_cfg.id.as_str() {
+                    "opencode" | "gemini" | "claude" => {
+                        if let Some(bp) = BridgeCliProvider::new(provider_cfg.clone()) {
+                            Box::new(bp)
+                        } else {
+                            Box::new(CliProviderImpl::new(provider_cfg.clone()))
+                        }
+                    }
+                    _ => Box::new(CliProviderImpl::new(provider_cfg.clone())),
+                };
+                registry.register(provider).await;
             }
             let provider_filter = provider.as_deref();
             let models_response = registry.list_models(provider_filter).await?;
@@ -167,9 +185,18 @@ async fn main() -> Result<()> {
         Commands::Test { model, prompt } => {
             let mut registry = ServiceRegistry::new().with_reasoning(config.reasoning.clone());
             for provider_cfg in &config.provider {
-                registry
-                    .register(Box::new(CliProviderImpl::new(provider_cfg.clone())))
-                    .await;
+                // Use BridgeCliProvider for providers that support bridge architecture (spec_tooling.md)
+                let provider: Box<dyn agentgate::provider::CliProvider> = match provider_cfg.id.as_str() {
+                    "opencode" | "gemini" | "claude" => {
+                        if let Some(bp) = BridgeCliProvider::new(provider_cfg.clone()) {
+                            Box::new(bp)
+                        } else {
+                            Box::new(CliProviderImpl::new(provider_cfg.clone()))
+                        }
+                    }
+                    _ => Box::new(CliProviderImpl::new(provider_cfg.clone())),
+                };
+                registry.register(provider).await;
             }
             let request = ChatCompletionRequest {
                 model: model.clone(),

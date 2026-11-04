@@ -3,7 +3,7 @@
 use crate::bridge::{BridgeClient, Run, ToolResult, ToolSchema};
 use crate::provider::bridge::{
     BridgeConfig, BridgeProfile, BridgeProviderFactory, BridgeProviderV2, BridgeSession,
-    BridgeToolResult, McpConfig, McpServerConfig, ToolCall,
+    BridgeToolResult, McpConfig, McpServerConfig, ToolCall, SessionOutput,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -64,7 +64,7 @@ impl BridgeProviderV2 for OllamaCliBridgeProvider {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 struct OllamaCliSession {
     config: BridgeConfig,
     #[allow(dead_code)]
@@ -146,12 +146,28 @@ impl BridgeSession for OllamaCliSession {
         Ok(())
     }
 
-    async fn wait_for_completion(&self) -> Result<()> {
+    async fn wait_for_completion(&self) -> Result<SessionOutput> {
         let mut process_guard = self.process.lock().await;
+        let mut content = String::new();
+        
         if let Some(mut child) = process_guard.take() {
+            // Capture stdout
+            if let Some(stdout) = child.stdout.take() {
+                use tokio::io::AsyncBufReadExt;
+                let reader = tokio::io::BufReader::new(stdout);
+                let mut lines = reader.lines();
+                while let Some(line) = lines.next_line().await? {
+                    content.push_str(&line);
+                    content.push('\n');
+                }
+            }
             let _ = child.wait().await;
         }
-        Ok(())
+        
+        Ok(SessionOutput {
+            content: content.trim().to_string(),
+            reasoning: None,
+        })
     }
 }
 
