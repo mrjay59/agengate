@@ -10,13 +10,16 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, Mutex, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
+use uuid;
 
 /// OpenCode bridge provider (V2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,9 +50,39 @@ impl OpenCodeBridgeProvider {
                     "patch".into(),
                     "grep".into(),
                     "glob".into(),
+                    "list".into(),
+                    "webfetch".into(),
+                    "todowrite".into(),
+                    "todoread".into(),
+                    "task".into(),
                 ],
             },
         }
+    }
+
+    /// Build tool-disabling config for OpenCode per spec §12.2
+    fn build_tool_disable_config(&self) -> Value {
+        serde_json::json!({
+            "tools": {
+                "bash": false,
+                "edit": false,
+                "write": false,
+                "read": false,
+                "patch": false,
+                "grep": false,
+                "glob": false,
+                "list": false,
+                "webfetch": false,
+                "todowrite": false,
+                "todoread": false,
+                "task": false
+            },
+            "permission": {
+                "edit": "deny",
+                "bash": "deny",
+                "webfetch": "deny"
+            }
+        })
     }
 }
 
@@ -70,7 +103,7 @@ impl BridgeProviderV2 for OpenCodeBridgeProvider {
         config: BridgeConfig,
         client: Arc<BridgeClient>,
     ) -> Result<Box<dyn BridgeSession>> {
-        let session = OpenCodeSession::spawn(config, client, self.profile.clone()).await?;
+        let session = OpenCodeSession::spawn(config, client, self.profile.clone(), self.build_tool_disable_config()).await?;
         Ok(Box::new(session))
     }
 
@@ -95,6 +128,8 @@ struct OpenCodeSession {
     closed: Arc<Mutex<bool>>,
     mcp_token: String,
     mcp_port: u16,
+    /// Empty working directory for this session (spec §11.3)
+    workdir: PathBuf,
 }
 
 impl OpenCodeSession {
@@ -102,21 +137,30 @@ impl OpenCodeSession {
         config: BridgeConfig,
         client: Arc<BridgeClient>,
         profile: BridgeProfile,
+        tool_disable_config: Value,
     ) -> Result<Self> {
         let session_id = uuid::Uuid::new_v4().to_string();
         let mcp_token = uuid::Uuid::new_v4().to_string().replace("-", "");
         let mcp_port = config.port;
 
-        // Build MCP config
-        let mcp_config = Self::build_mcp_config(&mcp_token, mcp_port, &session_id)?;
+        // Create empty working directory per session (spec §11.3)
+        let data_dir = config.data_dir.clone().unwrap_or_else(|| PathBuf::from("/tmp/agentgate"));
+        let workdir = data_dir.join("sessions").join(&session_id).join("work");
+        fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
+
+        // Build MCP config with tool-disabling config
+        let mcp_config = Self::build_mcp_config(&mcp_token, mcp_port, &session_id, tool_disable_config)?;
 
         // Prepare command
         let mut cmd = Command::new(&profile.binary);
         cmd.args(&profile.args);
-        
+
+        // Set working directory to empty session workdir (spec §11.3)
+        cmd.current_dir(&workdir);
+
         // Set environment variables for MCP config
         cmd.env("OPENCODE_CONFIG_CONTENT", serde_json::to_string(&mcp_config)?);
-        
+
         // Add profile env vars
         for (key, value) in &profile.env {
             cmd.env(key, value);
@@ -172,6 +216,7 @@ impl OpenCodeSession {
             closed: Arc::new(Mutex::new(false)),
             mcp_token,
             mcp_port,
+            workdir,
         };
 
         // Wait for MCP initialization
@@ -180,7 +225,7 @@ impl OpenCodeSession {
         Ok(session)
     }
 
-    fn build_mcp_config(token: &str, port: u16, session_id: &str) -> Result<McpConfig> {
+    fn build_mcp_config(token: &str, port: u16, session_id: &str, tool_disable_config: Value) -> Result<McpConfig> {
         let mut mcp_servers = HashMap::new();
         mcp_servers.insert(
             "agentgate".into(),
@@ -194,7 +239,23 @@ impl OpenCodeSession {
                 }),
             },
         );
-        Ok(McpConfig { mcp_servers })
+
+        // Merge tool-disabling config into MCP config per spec §12.2
+        let mut config = McpConfig { mcp_servers };
+        config.mcp_servers.insert(
+            "agentgate_tools".into(),
+            McpServerConfig {
+                r#type: "stdio".into(),
+                command: Some("true".into()), // dummy command, config only
+                args: None,
+                env: Some({
+                    let mut env = HashMap::new();
+                    env.insert("OPENCODE_CONFIG_CONTENT".into(), serde_json::to_string(&tool_disable_config)?);
+                    env
+                }),
+            },
+        );
+        Ok(config)
     }
 
     async fn wait_for_mcp_initialize(&self) -> Result<()> {
@@ -282,6 +343,9 @@ impl BridgeSession for OpenCodeSession {
             let _ = child.wait().await;
         }
 
+        // Clean up workdir
+        let _ = fs::remove_dir_all(&self.workdir).await;
+
         info!("OpenCode session {} closed", self.session_id);
         Ok(())
     }
@@ -339,7 +403,7 @@ mod tests {
 
     #[test]
     fn mcp_config_serialization() {
-        let config = OpenCodeSession::build_mcp_config("test-token", 8788, "test-session").unwrap();
+        let config = OpenCodeSession::build_mcp_config("test-token", 8788, "test-session", serde_json::json!({})).unwrap();
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("agentgate"));
         assert!(json.contains("test-token"));
