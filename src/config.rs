@@ -17,6 +17,9 @@ pub struct Config {
     pub reasoning: ReasoningConfig,
     #[serde(default)]
     pub provider: Vec<ProviderConfig>,
+    /// `[workspace.<name>]` sections (spec §14).
+    #[serde(default)]
+    pub workspace: std::collections::HashMap<String, WorkspaceConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -28,6 +31,132 @@ pub struct RoutingConfig {
     #[serde(default = "default_workspace")]
     pub default_workspace: String,
 }
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct WorkspaceConfig {
+    /// Only used in passthrough mode (spec §14).
+    #[serde(default = "default_dot")]
+    pub path: String,
+    #[serde(default = "default_workspace_permission_mode")]
+    pub permission_mode: String,
+}
+
+fn default_dot() -> String { ".".to_string() }
+fn default_workspace_permission_mode() -> String { "read-only".to_string() }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatchConfig {
+    /// Window to wait for parallel tool calls before issuing a batch.
+    #[serde(default = "default_150")]
+    pub window_ms: u64,
+    /// Maximum tool calls per batch.
+    #[serde(default = "default_16")]
+    pub max_calls: usize,
+}
+
+impl Default for BatchConfig {
+    fn default() -> Self {
+        Self { window_ms: default_150(), max_calls: default_16() }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResumeConfig {
+    /// On unknown tool_call_id, replay with a fresh bridge session.
+    #[serde(default = "default_true")]
+    pub replay: bool,
+    /// Wait for missing batch results (ms). 0 = don't wait.
+    #[serde(default)]
+    pub partial_grace_ms: u64,
+    /// Allow replaying the same request idempotently after a broken response.
+    #[serde(default)]
+    pub allow_retry: bool,
+}
+
+impl Default for ResumeConfig {
+    fn default() -> Self {
+        Self { replay: true, partial_grace_ms: 0, allow_retry: false }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LimitsConfig {
+    /// Maximum client tools per request.
+    #[serde(default = "default_128")]
+    pub max_tools: usize,
+    /// Maximum serialized bytes per tool schema.
+    #[serde(default = "default_65536")]
+    pub max_schema_bytes: usize,
+    /// Maximum bytes for a tool result.
+    #[serde(default = "default_262144")]
+    pub max_result_bytes: usize,
+    /// Maximum prompt characters.
+    #[serde(default = "default_400000")]
+    pub max_prompt_chars: usize,
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            max_tools: default_128(),
+            max_schema_bytes: default_65536(),
+            max_result_bytes: default_262144(),
+            max_prompt_chars: default_400000(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuardConfig {
+    /// Kill the run when a non-bridge tool is observed.
+    #[serde(default = "default_true")]
+    pub enforce: bool,
+    /// Run the isolation preflight probe before admitting a bridge provider.
+    #[serde(default = "default_true")]
+    pub preflight_probe: bool,
+}
+
+impl Default for GuardConfig {
+    fn default() -> Self {
+        Self { enforce: true, preflight_probe: true }
+    }
+}
+
+impl Config {
+    /// Apply environment overrides (highest priority after CLI flags).
+    /// Supported: AGENTGATE_BRIDGE_PORT, AGENTGATE_BRIDGE_CALL_TTL_SECS,
+    /// AGENTGATE_BRIDGE_PARK_TTL_SECS, AGENTGATE_BRIDGE_MAX_PARKED_RUNS.
+    pub fn apply_env_overrides(mut self) -> Self {
+        if let Ok(v) = std::env::var("AGENTGATE_BRIDGE_PORT") {
+            if let Ok(p) = v.parse::<u16>() {
+                self.bridge.port = p;
+            }
+        }
+        if let Ok(v) = std::env::var("AGENTGATE_BRIDGE_CALL_TTL_SECS") {
+            if let Ok(p) = v.parse() {
+                self.bridge.call_ttl_secs = p;
+            }
+        }
+        if let Ok(v) = std::env::var("AGENTGATE_BRIDGE_PARK_TTL_SECS") {
+            if let Ok(p) = v.parse() {
+                self.bridge.park_ttl_secs = p;
+            }
+        }
+        if let Ok(v) = std::env::var("AGENTGATE_BRIDGE_MAX_PARKED_RUNS") {
+            if let Ok(p) = v.parse() {
+                self.bridge.max_parked_runs = p;
+            }
+        }
+        self
+    }
+}
+
+fn default_150() -> u64 { 150 }
+fn default_16() -> usize { 16 }
+fn default_128() -> usize { 128 }
+fn default_65536() -> usize { 65536 }
+fn default_262144() -> usize { 262144 }
+fn default_400000() -> usize { 400_000 }
 
 impl Default for RoutingConfig {
     fn default() -> Self {
@@ -65,6 +194,18 @@ pub struct BridgeConfig {
     pub parked_holds_permit: bool,
     #[serde(default = "default_server_name")]
     pub server_name: String,
+    /// `[bridge.batch]` (spec §14).
+    #[serde(default)]
+    pub batch: BatchConfig,
+    /// `[bridge.resume]` (spec §14).
+    #[serde(default)]
+    pub resume: ResumeConfig,
+    /// `[bridge.limits]` (spec §14).
+    #[serde(default)]
+    pub limits: LimitsConfig,
+    /// `[bridge.guard]` (spec §14).
+    #[serde(default)]
+    pub guard: GuardConfig,
 }
 
 impl Default for BridgeConfig {
@@ -81,6 +222,10 @@ impl Default for BridgeConfig {
             max_steps: default_64(),
             parked_holds_permit: default_true(),
             server_name: default_server_name(),
+            batch: BatchConfig::default(),
+            resume: ResumeConfig::default(),
+            limits: LimitsConfig::default(),
+            guard: GuardConfig::default(),
         }
     }
 }
@@ -258,6 +403,13 @@ pub struct ProviderConfig {
     /// Ollama mode: "native" | "cli"
     #[serde(default)]
     pub ollama_mode: Option<String>,
+    /// Ollama keep-alive duration for CLI mode (e.g. "10m").
+    #[serde(default)]
+    pub keep_alive: Option<String>,
+    /// When true, expose tools to a CLI/model that lacks native tool calling by
+    /// prompting for JSON tool calls and parsing them from the output.
+    #[serde(default)]
+    pub prompt_tools_fallback: bool,
 }
 
 fn default_host() -> String {
@@ -293,6 +445,7 @@ impl Default for Config {
             bridge: BridgeConfig::default(),
             reasoning: ReasoningConfig::default(),
             provider: Vec::new(),
+            workspace: std::collections::HashMap::new(),
         }
     }
 }
@@ -347,6 +500,47 @@ cors = false
 workdir = "."
 max_concurrency_per_provider = 2
 model_cache_ttl_secs = 300
+
+[routing]
+no_tools_policy = "chat_only"
+on_client_tools = "bridge"
+default_workspace = "default"
+
+[bridge]
+enabled = true
+host = "127.0.0.1"
+port = 0
+park_ttl_secs = 600
+call_ttl_secs = 600
+max_parked_runs = 8
+max_runs_per_key = 4
+max_run_lifetime_secs = 3600
+max_steps = 64
+parked_holds_permit = true
+server_name = "agentgate"
+
+[bridge.batch]
+window_ms = 150
+max_calls = 16
+
+[bridge.resume]
+replay = true
+partial_grace_ms = 0
+allow_retry = false
+
+[bridge.limits]
+max_tools = 128
+max_schema_bytes = 65536
+max_result_bytes = 262144
+max_prompt_chars = 400000
+
+[bridge.guard]
+enforce = true
+preflight_probe = true
+
+[workspace.default]
+path = "."
+permission_mode = "read-only"
 
 # Provider configurations
 # [[provider]]

@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+use tracing::info;
 
 /// Preflight probe result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +80,7 @@ pub fn determine_tool_mode(
                 ClientToolsPolicy::Bridge => ToolMode::Bridge,
                 ClientToolsPolicy::Passthrough => ToolMode::Passthrough,
                 ClientToolsPolicy::Ignore => ToolMode::Bridge, // Ignore client, use agentgate
+                ClientToolsPolicy::Reject => ToolMode::Reject, // Fail-closed: reject client tools
             }
         }
         RequestClass::HasAgentTools => ToolMode::Bridge,
@@ -132,6 +134,7 @@ pub fn classify(
         if !ids.is_empty() && ids.iter().all(|id| known_ids.contains(id)) {
             return Classified::Resume { call_ids: ids };
         }
+        info!(event = "run.replay", message_count = request.messages.len());
         return Classified::Replay { history: request.messages.clone() };
     }
     if let Some(tools) = &request.tools {
@@ -243,7 +246,7 @@ impl RunRegistry {
         };
 
         match response {
-            ProviderResponse::Success { content: text, reasoning } => {
+            ProviderResponse::Success { content: text, reasoning, tool_calls: _, session_id: _ } => {
                 let msg = Message {
                     role: MessageRole::Assistant,
                     content: Some(text),
@@ -454,7 +457,11 @@ impl RequestBatcher {
 
     pub fn take_batch(&mut self) -> Vec<BatchedRequest> {
         let batch_size = self.max_batch_size.min(self.pending.len());
-        self.pending.drain(..batch_size).collect()
+        let batch = self.pending.drain(..batch_size).collect::<Vec<_>>();
+        if !batch.is_empty() {
+            info!(event = "batch.issued", batch_size = %batch.len());
+        }
+        batch
     }
 
     pub fn is_empty(&self) -> bool {

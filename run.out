@@ -1,0 +1,17 @@
+[2m2026-11-05T01:27:06.579756Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Registering provider: opencode
+[2m2026-11-05T01:27:06.637614Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Provider opencode is available
+[2m2026-11-05T01:27:06.660143Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Registering provider: gemini
+[2m2026-11-05T01:27:06.677812Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Provider gemini is available
+[2m2026-11-05T01:27:06.697593Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Registering provider: ollama
+[2m2026-11-05T01:27:06.712576Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Provider ollama is available
+[2m2026-11-05T01:27:06.738340Z[0m [32m INFO[0m [2magentgate[0m[2m:[0m Starting server on 0.0.0.0:8787
+[2m2026-11-05T01:27:10.316050Z[0m [32m INFO[0m [2magentgate::api[0m[2m:[0m Request received: model=opencode/beam-free, stream=Some(false), messages=1
+[2m2026-11-05T01:27:10.349281Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m ChatCompletion START: model='opencode/beam-free', provider_opt=None, messages=1
+[2m2026-11-05T01:27:10.622787Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Classified request: NewChatOnly
+[2m2026-11-05T01:28:56.829849Z[0m [32m INFO[0m [2magentgate::api[0m[2m:[0m Request received: model=opencode/beam-free, stream=Some(false), messages=2
+[2m2026-11-05T01:28:56.840648Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m ChatCompletion START: model='opencode/beam-free', provider_opt=None, messages=2
+[2m2026-11-05T01:28:57.090295Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Classified request: NewChatOnly
+[2m2026-11-05T01:31:04.412196Z[0m [32m INFO[0m [2magentgate::api[0m[2m:[0m Request received: model=opencode/beam-free, stream=Some(true), messages=27
+[2m2026-11-05T01:31:04.421318Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m stream_run_events START: provider='opencode', model='opencode/beam-free'
+[2m2026-11-05T01:31:08.465541Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m CLI finished: provider=opencode, status=exit code: 0, stderr_bytes=0
+[2m2026-11-05T01:31:08.466590Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m provider stream DONE: model='opencode/beam-free'

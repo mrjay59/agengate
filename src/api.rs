@@ -29,6 +29,7 @@ pub fn api() -> Router<Arc<ServiceRegistry>> {
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/health", get(health_check))
+        .route("/_metrics", get(metrics_endpoint))
         .route("/_bridge/mcp/:session_id", post(bridge_mcp).delete(bridge_mcp_delete))
         .route("/_bridge/resolve/:call_id", post(bridge_resolve))
         .route("/admin/provider", post(add_provider))
@@ -36,6 +37,14 @@ pub fn api() -> Router<Arc<ServiceRegistry>> {
         .route("/admin/proxy", post(proxy))
         .route("/admin/skill", post(add_skill))
         .route("/admin/mcp", post(add_mcp))
+}
+
+async fn metrics_endpoint() -> Response {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        crate::metrics::METRICS.render_prometheus(),
+    )
+        .into_response()
 }
 
 async fn root_info(State(registry): State<Arc<ServiceRegistry>>) -> Json<serde_json::Value> {
@@ -182,12 +191,44 @@ async fn chat_completions(
     let (reasoning_cfg, format, _source) = resolve_reasoning(&registry, &headers, &request);
     let is_stream = request.stream.unwrap_or(false);
 
+    // Observability (spec §15): run id, mode, counters, headers.
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let is_native = !registry.ollama_cli_mode
+        && (provider_id == "ollama" || request.model.starts_with("ollama/"));
+    let known_ids: std::collections::HashSet<String> = registry
+        .run_registry
+        .get_known_tool_call_ids()
+        .await;
+    let classified = crate::run::classify(&request, &[], is_native, &known_ids);
+    let mode = match &classified {
+        crate::run::Classified::Native => "native",
+        crate::run::Classified::Resume { .. } => "resume",
+        crate::run::Classified::Replay { .. } => "replay",
+        crate::run::Classified::NewBridge { .. } => "bridge",
+        crate::run::Classified::NewChatOnly => "chat_only",
+    };
+    crate::metrics::METRICS.mark_run_started();
+    info!(
+        event = "run.start",
+        run_id = %run_id,
+        provider = %provider_id,
+        model = %request.model,
+        mode = %mode,
+        tools = request.tools.as_ref().map(|t| t.len()).unwrap_or(0)
+    );
+    let mut run_id_for_stream = Some(run_id.clone());
+    let resume_mode = match mode {
+        "resume" | "replay" => Some(mode),
+        _ => None,
+    };
+
     if is_stream {
         let (tx, rx) = mpsc::channel::<Result<axum::response::sse::Event, axum::Error>>(128);
         let ctx = ChunkContext::new(&request.model);
         let registry_clone = registry.clone();
         let activity_via_reasoning = reasoning_cfg.activity_via_reasoning;
         let response_cfg = reasoning_cfg.clone();
+        let stream_run_id = run_id_for_stream.take().unwrap_or_default();
 
         tokio::spawn(async move {
             let mut pipeline = ReasoningPipeline::new(&reasoning_cfg);
@@ -219,14 +260,25 @@ async fn chat_completions(
             let mut events = registry_clone
                 .stream_run_events(&provider_id, request)
                 .await;
+            let ttft_start = Instant::now();
+            let mut ttft_recorded = false;
             let mut ticker = tokio::time::interval(Duration::from_millis(250));
             let mut last_heartbeat = Instant::now();
+            let mut tool_calls_finished = false;
 
             loop {
                 tokio::select! {
                     event = events.recv() => {
                         match event {
                             Some(event) => {
+                                if !ttft_recorded {
+                                    crate::metrics::METRICS
+                                        .observe_ttft(ttft_start.elapsed().as_millis() as u64);
+                                    ttft_recorded = true;
+                                }
+                                if matches!(event, RunEvent::ToolCalls { .. }) {
+                                    tool_calls_finished = true;
+                                }
                                 for processed in pipeline.process(event) {
                                     for coalesced in coalescer.add_event(processed) {
                                         emit_event(&tx, &ctx, &mut writer, coalesced, activity_via_reasoning).await;
@@ -266,10 +318,14 @@ async fn chat_completions(
                 let _ = send_sse(&tx, &ctx.chunk(delta, None)).await;
             }
 
-            let _ = send_sse(&tx, &ctx.chunk(serde_json::json!({}), Some("stop"))).await;
+            if !tool_calls_finished {
+                let _ = send_sse(&tx, &ctx.chunk(serde_json::json!({}), Some("stop"))).await;
+            }
             let _ = tx
                 .send(Ok(axum::response::sse::Event::default().data("[DONE]")))
                 .await;
+            crate::metrics::METRICS.mark_run_ended();
+            info!(event = "run.end", run_id = %stream_run_id, tool_calls = tool_calls_finished);
         });
 
         let stream = ReceiverStream::new(rx);
@@ -282,13 +338,48 @@ async fn chat_completions(
             axum::http::header::HeaderName::from_static("x-accel-buffering"),
             HeaderValue::from_static("no"),
         );
+        res.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("x-agentgate-run"),
+            HeaderValue::from_str(&run_id).unwrap_or_else(|_| HeaderValue::from_static("unknown")),
+        );
+        res.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("x-agentgate-mode"),
+            HeaderValue::from_static(mode),
+        );
         add_reasoning_headers(&mut res, format, &response_cfg, "block");
 
         Ok(res)
     } else {
-        let response = registry.chat_completion(request).await?;
+        let response = match registry.chat_completion(request).await {
+            Ok(resp) => {
+                if let Some(mode_label) = resume_mode {
+                    crate::metrics::METRICS.record_resume(if mode_label == "replay" {
+                        "replay"
+                    } else {
+                        "ok"
+                    });
+                }
+                resp
+            }
+            Err(e) => {
+                if resume_mode.is_some() && e.code() == "tool_already_resolved" {
+                    crate::metrics::METRICS.record_resume("conflict");
+                }
+                crate::metrics::METRICS.mark_run_ended();
+                return Err(e);
+            }
+        };
         let value = apply_non_stream_format(response, format, &reasoning_cfg);
+        crate::metrics::METRICS.mark_run_ended();
         let mut res = Json(value).into_response();
+        res.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("x-agentgate-run"),
+            HeaderValue::from_str(&run_id).unwrap_or_else(|_| HeaderValue::from_static("unknown")),
+        );
+        res.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("x-agentgate-mode"),
+            HeaderValue::from_static(mode),
+        );
         add_reasoning_headers(&mut res, format, &reasoning_cfg, "final");
         Ok(res)
     }
@@ -594,14 +685,35 @@ async fn bridge_mcp(
             serde_json::json!({ "tools": tools })
         }
         "tools/call" => {
-            let _name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
             let _args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+            // Fail-closed (spec §13.1): tool harus ada di whitelist session ini.
+            // Bila tidak -> 503 `tool_isolation_unavailable` (tidak pernah hold/execute).
+            if !session.tools.iter().any(|t| t.name == name) {
+                info!(event = "guard.violation", session = %session.session_id, observed_tool = %name);
+                crate::metrics::METRICS.record_guard_violation();
+                return (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "error": {
+                            "message": format!("tool_isolation_unavailable: {}", name),
+                            "type": "invalid_request_error",
+                            "code": "tool_isolation_unavailable",
+                        }
+                    })),
+                ).into_response();
+            }
             let mcp_id = id.as_ref().map(|v| v.to_string()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            match registry.bridge.hold_tool_call(mcp_id.clone(), registry.bridge_config.call_ttl_secs).await {
-                Ok(res) => serde_json::json!({
-                    "content": [{ "type": "text", "text": res.content.to_string() }],
-                    "isError": res.is_error
-                }),
+            info!(event = "bridge.call_held", mcp_req_id = %mcp_id, session = %session.session_id, tool = %name);
+            let hold_start = Instant::now();
+            match registry.bridge.hold_tool_call(mcp_id.clone(), session.session_id.clone(), registry.bridge_config.call_ttl_secs).await {
+                Ok(res) => {
+                    crate::metrics::METRICS.observe_tool_wait(hold_start.elapsed().as_millis() as u64);
+                    serde_json::json!({
+                        "content": [{ "type": "text", "text": res.content.to_string() }],
+                        "isError": res.is_error
+                    })
+                }
                 Err(e) => serde_json::json!({
                     "content": [{ "type": "text", "text": e.to_string() }],
                     "isError": true
@@ -623,16 +735,49 @@ async fn bridge_mcp_delete(
     State(registry): State<Arc<ServiceRegistry>>,
     Path(session_id): Path<String>,
 ) -> axum::http::StatusCode {
-    // idempotent session teardown
-    let _ = registry.bridge.get_session(&session_id).await;
+    // Idempotent teardown: drop the session and wake any held tools/call.
+    registry.bridge.remove_session(&session_id).await;
     axum::http::StatusCode::OK
 }
 
 async fn bridge_resolve(
     State(registry): State<Arc<ServiceRegistry>>,
     Path(call_id): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
-) -> Json<serde_json::Value> {
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+
+    // Same browser-origin hardening as the MCP endpoint.
+    if headers.get("origin").is_some() {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"origin not allowed"}))).into_response();
+    }
+
+    // A held call is bound to the session that issued it; only that session's
+    // bearer token may resolve it.
+    let session = match registry.bridge.pending_session_id(&call_id).await {
+        Some(session_id) => registry.bridge.get_session(&session_id).await,
+        None => None,
+    };
+    let session = match session {
+        Some(session) => session,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "resolved": false,
+                "error": { "code": "tool_already_resolved" }
+            }))).into_response()
+        }
+    };
+
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if !crate::bridge::BridgeServer::validate_token(&session, token) {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"invalid token"}))).into_response();
+    }
+
     let content = body.get("content").cloned().unwrap_or(serde_json::json!({}));
     let is_error = body.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
     let res = crate::bridge::ToolResult {
@@ -643,7 +788,10 @@ async fn bridge_resolve(
     };
     let ok = registry.bridge.resolve_tool_call(&call_id, res).await;
     if !ok {
-        return Json(serde_json::json!({ "resolved": false, "error": { "code": "tool_already_resolved" } }));
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "resolved": false,
+            "error": { "code": "tool_already_resolved" }
+        }))).into_response();
     }
-    Json(serde_json::json!({ "resolved": ok }))
+    Json(serde_json::json!({ "resolved": ok })).into_response()
 }

@@ -4,10 +4,12 @@ use crate::reasoning::{FinishReason, ReasoningKind, RunEvent};
 use crate::types::ChatCompletionRequest;
 use anyhow::Context;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::process::Command;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command as TokioCommand;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 use uuid;
 
 /// Determine if a provider is native (model-api) rather than cli-agent
@@ -20,6 +22,8 @@ pub enum ProviderResponse {
     Success {
         content: String,
         reasoning: Option<String>,
+        tool_calls: Option<Vec<crate::types::ToolCall>>,
+        session_id: Option<String>,
     },
     Error(String),
 }
@@ -33,6 +37,10 @@ pub trait CliProvider: Send + Sync {
     fn set_available(&mut self, available: bool);
     async fn check_available(&self) -> bool;
     fn scan_models(&self) -> Result<Vec<String>, anyhow::Error>;
+    /// Whether this provider runs through the MCP bridge adapter.
+    fn is_bridge(&self) -> bool {
+        false
+    }
     async fn send_chat_completion(
         &self,
         model: &str,
@@ -52,7 +60,7 @@ pub trait CliProvider: Send + Sync {
         tx: mpsc::Sender<RunEvent>,
     ) -> Result<(), anyhow::Error> {
         match self.send_chat_completion(model, request).await? {
-            ProviderResponse::Success { content, reasoning } => {
+            ProviderResponse::Success { content, reasoning, tool_calls, session_id: _ } => {
                 if let Some(reasoning) = reasoning.filter(|r| !r.trim().is_empty()) {
                     if tx
                         .send(RunEvent::ReasoningStart {
@@ -86,6 +94,11 @@ pub trait CliProvider: Send + Sync {
                     && tx.send(RunEvent::Text { text: content }).await.is_err()
                 {
                     return Ok(());
+                }
+                if let Some(calls) = tool_calls.filter(|v| !v.is_empty()) {
+                    if tx.send(RunEvent::ToolCalls { calls }).await.is_err() {
+                        return Ok(());
+                    }
                 }
                 let _ = tx
                     .send(RunEvent::Done {
@@ -238,7 +251,7 @@ impl CliProvider for CliProviderImpl {
             return Ok(ProviderResponse::Error(stderr.trim().to_string()));
         }
         let (content, reasoning) = parse_cli_output(cleaned.trim());
-        Ok(ProviderResponse::Success { content, reasoning })
+        Ok(ProviderResponse::Success { content, reasoning, tool_calls: None, session_id: None })
     }
 
     /// RS0: read CLI stdout incrementally and forward events immediately.
@@ -538,6 +551,25 @@ impl CliProviderImpl {
             cmd.current_dir(dir);
         }
 
+        // Disable OpenCode built-in tools so nothing executes on server B.
+        if self.id == "opencode" {
+            let disable = serde_json::json!({
+                "tools": {
+                    "bash": false, "edit": false, "write": false, "read": false,
+                    "patch": false, "grep": false, "glob": false, "list": false,
+                    "webfetch": false, "todowrite": false, "todoread": false, "task": false
+                },
+                "permission": {
+                    "externalDirectory": "deny",
+                    "network": "deny",
+                    "edit": "deny",
+                    "bash": "deny",
+                    "webfetch": "deny"
+                }
+            });
+            cmd.env("OPENCODE_CONFIG_CONTENT", disable.to_string());
+        }
+
         cmd.args(&cmd_args)
             .stdin(if use_stdin {
                 std::process::Stdio::piped()
@@ -690,9 +722,95 @@ pub fn strip_ansi_codes(text: &str) -> String {
 pub mod ollama_native;
 pub mod bridge;
 
-use crate::provider::bridge::{BridgeProviderV2, BridgeConfig, BridgeSession, create_bridge_factory_v2, SessionOutput};
+use crate::provider::bridge::{BridgeConfig, create_bridge_factory_v2};
 use crate::bridge::BridgeClient;
-use std::sync::Arc;
+
+/// Maximum time to wait for a CLI turn before killing the bridge session.
+pub fn bridge_turn_timeout() -> std::time::Duration {
+    let secs = std::env::var("AGENTGATE_BRIDGE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600u64);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Render an OpenAI conversation into a single prompt for CLI agents.
+///
+/// Unlike a naive `content.join("\n")`, this keeps system instructions,
+/// assistant tool calls, and `role:"tool"` results so a resumed/replayed run
+/// can continue correctly (spec §7.5, §11.2).
+pub fn render_conversation(messages: &[crate::types::ChatMessage]) -> String {
+    use crate::types::MessageRole;
+
+    let mut out = String::new();
+    for msg in messages {
+        match msg.role {
+            MessageRole::System => {
+                if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
+                    out.push_str("[system]\n");
+                    out.push_str(content.trim());
+                    out.push_str("\n\n");
+                }
+            }
+            MessageRole::User => {
+                if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
+                    out.push_str("[user]\n");
+                    out.push_str(content.trim());
+                    out.push_str("\n\n");
+                }
+            }
+            MessageRole::Assistant => {
+                if let Some(calls) = msg.tool_calls.as_ref().filter(|c| !c.is_empty()) {
+                    for call in calls {
+                        out.push_str(&format!(
+                            "[assistant tool_call id={} name={}]\n{}\n\n",
+                            call.id, call.function.name, call.function.arguments
+                        ));
+                    }
+                }
+                if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
+                    out.push_str("[assistant]\n");
+                    out.push_str(content.trim());
+                    out.push_str("\n\n");
+                }
+            }
+            MessageRole::Tool => {
+                let id = msg.tool_call_id.as_deref().unwrap_or("");
+                let name = msg.name.as_deref().unwrap_or("");
+                let content = msg.content.as_deref().unwrap_or("");
+                out.push_str(&format!(
+                    "[tool result id={} name={}]\n{}\n\n",
+                    id,
+                    name,
+                    content.trim()
+                ));
+            }
+        }
+    }
+    out.trim_end().to_string()
+}
+
+/// Prompt instructions for CLIs/models without native tool calling
+/// (`prompt_tools_fallback = true`, spec_ollama-cli.md).
+fn tool_prompt_instructions(tools: &[crate::types::ToolDefinition]) -> String {
+    let mut out = String::from("\n\n[available tools]\n");
+    for tool in tools {
+        out.push_str(&format!(
+            "- {}: {}\n  parameters: {}\n",
+            tool.function.name,
+            tool.function.description.clone().unwrap_or_default(),
+            tool.function
+                .parameters
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({"type": "object"}))
+        ));
+    }
+    out.push_str(
+        "\nIf you need to call a tool, reply ONLY with a JSON object like:\n\
+         {\"tool_calls\":[{\"name\":\"tool_name\",\"arguments\":{...}}]}\n",
+    );
+    out
+}
 
 /// A CLI provider that uses the bridge architecture (MCP bridge to Device A).
 /// Used for OpenCode, Gemini, and Claude CLI agents per spec_tooling.md.
@@ -702,10 +820,27 @@ pub struct BridgeCliProvider {
     pub models: Vec<String>,
     pub is_available: bool,
     factory: Box<dyn crate::provider::bridge::BridgeProviderFactory + Send + Sync>,
+    /// Bridge server used to register MCP sessions for each run (spec §9.2).
+    bridge: Option<Arc<crate::bridge::BridgeServer>>,
+    keep_alive: Option<String>,
+    prompt_tools_fallback: bool,
+    /// Cache of persistent sessions (keyed by session_id) for keep_alive mode.
+    /// When keep_alive is enabled, sessions are stored here instead of being closed.
+    /// Using Arc to allow cloning and sharing sessions across requests.
+    persistent_sessions: Arc<RwLock<HashMap<String, Arc<dyn crate::provider::bridge::BridgeSession>>>>,
 }
 
 impl BridgeCliProvider {
     pub fn new(config: crate::config::ProviderConfig) -> Option<Self> {
+        Self::with_bridge(config, None)
+    }
+
+    /// Create a bridge provider bound to the shared `BridgeServer` so each run
+    /// registers its MCP session (id + token) before spawning the CLI.
+    pub fn with_bridge(
+        config: crate::config::ProviderConfig,
+        bridge: Option<Arc<crate::bridge::BridgeServer>>,
+    ) -> Option<Self> {
         // Determine which bridge factory to use based on provider ID
         let factory = create_bridge_factory_v2(&config.id)?;
 
@@ -715,14 +850,123 @@ impl BridgeCliProvider {
             models: config.models.clone(),
             is_available: false,
             factory,
+            bridge,
+            keep_alive: config.keep_alive.clone(),
+            prompt_tools_fallback: config.prompt_tools_fallback,
+            persistent_sessions: Arc::new(RwLock::new(HashMap::new())),
         })
     }
+
+    /// Register an MCP session for the given tools. Returns `None` when no
+    /// bridge server is attached (e.g. unit tests / standalone usage).
+    pub async fn register_session(
+        &self,
+        tools: Vec<crate::bridge::ToolSchema>,
+    ) -> Option<(String, String)> {
+        match &self.bridge {
+            Some(bridge) => {
+                let n_tools = tools.len();
+                let (id, token) = bridge.create_session(tools, None).await;
+                tracing::info!(event = "bridge.tools_list", session = %id, n_tools = n_tools, provider = %self.id);
+                Some((id, token))
+            }
+            None => None,
+        }
+    }
+
+    /// Check if keep_alive (persistent session) is enabled for this provider.
+    pub fn is_keep_alive(&self) -> bool {
+        matches!(self.keep_alive.as_deref(), Some("true"))
+    }
+
+    /// Build the MCP tool schemas for this request.
+    /// Applies OpenAI-safe name aliasing, `$ref` inlining, and schema
+    /// normalization (spec §8) before the schemas are handed to the bridge.
+    pub fn tool_schemas_from_request(
+        &self,
+        request: &crate::types::ChatCompletionRequest,
+    ) -> Vec<crate::bridge::ToolSchema> {
+        use crate::openai::tools::{
+            inline_refs, normalize_schema, openai_name_alias, SchemaProfile,
+        };
+
+        let profile = match self.id.as_str() {
+            "gemini" => SchemaProfile::StrictGemini,
+            _ => SchemaProfile::OpenAI,
+        };
+
+        request
+            .tools
+            .as_ref()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .enumerate()
+                    .map(|(index, t)| {
+                        let name = openai_name_alias(&t.function.name, index);
+                        let description = t.function.description.clone().unwrap_or_default();
+                        let parameters = t
+                            .function
+                            .parameters
+                            .clone()
+                            .map(inline_refs)
+                            .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
+                        let schema = crate::bridge::ToolSchema {
+                            name,
+                            description,
+                            parameters,
+                            provider: self.id.clone(),
+                            workspace: "default".to_string(),
+                        };
+                        normalize_schema(&schema, profile)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    async fn release_session(&self, session_id: &Option<String>) {
+        if let (Some(bridge), Some(id)) = (&self.bridge, session_id) {
+            bridge.remove_session(id).await;
+        }
+    }
+}
+
+/// Select the CLI provider implementation for a configured provider.
+/// Bridge-capable agents (`opencode`, `gemini`, `claude`) use the MCP bridge
+/// adapter unless `bridge = false` is set in config (spec §6.2, §12).
+pub fn build_cli_provider(
+    config: &crate::config::ProviderConfig,
+    bridge: Option<Arc<crate::bridge::BridgeServer>>,
+) -> Box<dyn CliProvider + Send + Sync> {
+    // Ollama uses HTTP native by default; only `ollama_mode = "cli"` opts into
+    // the bridge adapter (spec_ollama-cli.md).
+    let wants_bridge = if config.id == "ollama" {
+        config.ollama_mode.as_deref() == Some("cli")
+    } else {
+        config.bridge
+    };
+
+    if wants_bridge {
+        let mut cfg = config.clone();
+        if cfg.id == "ollama" && cfg.bin.is_none() {
+            cfg.bin = Some("ollama".to_string());
+        }
+        if let Some(bp) = BridgeCliProvider::with_bridge(cfg, bridge) {
+            return Box::new(bp);
+        }
+    }
+    Box::new(CliProviderImpl::new(config.clone()))
 }
 
 #[async_trait]
 impl CliProvider for BridgeCliProvider {
     fn id(&self) -> String {
         self.id.clone()
+    }
+
+    fn is_bridge(&self) -> bool {
+        true
     }
 
     fn bin(&self) -> Option<String> {
@@ -784,51 +1028,146 @@ impl CliProvider for BridgeCliProvider {
         request: crate::types::ChatCompletionRequest,
     ) -> Result<ProviderResponse, anyhow::Error> {
         use uuid::Uuid;
+        // Ollama models may arrive as "ollama/<model>".
+        let model = model.strip_prefix("ollama/").unwrap_or(model);
 
-        // Create bridge config
-        let session_id = Uuid::new_v4().to_string();
-        let data_dir = std::path::PathBuf::from("/tmp/agentgate");
-        let workdir = data_dir.join("sessions").join(&session_id).join("work");
-        tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
-
-        let bridge_config = BridgeConfig {
-            host: "127.0.0.1".to_string(),
-            port: 8786, // AgentGate bridge port
-            model: model.to_string(),
-            profile_name: self.factory.default_profile().name.clone(),
-            data_dir: Some(data_dir.clone()),
+        // Extract or generate session_id from request
+        let session_id = request.session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+        
+        // Check if we have a persistent session for this session_id
+        let keep_alive = self.keep_alive.is_some();
+        let existing_session = if keep_alive {
+            let sessions = self.persistent_sessions.read().await;
+            sessions.get(&session_id).map(|s| s.clone())
+        } else {
+            None
         };
 
-        // Create bridge provider from factory
-        let provider = self.factory.create(bridge_config.clone()).await?;
+        let (session, should_store, mcp_session_id): (
+            Arc<dyn crate::provider::bridge::BridgeSession>,
+            bool,
+            Option<String>,
+        ) = if let Some(existing) = existing_session {
+            // Reuse existing persistent session
+            tracing::info!(target: "bridge.cli", session_id = %session_id, "Reusing persistent session");
+            (existing, false, None)
+        } else {
+            // Register the MCP session before spawning so /_bridge/mcp/{id} is known
+            // to the bridge server (spec §9.2).
+            let tool_schemas = self.tool_schemas_from_request(&request);
+            let (mcp_session_id, session_token) = match self.register_session(tool_schemas).await {
+                Some((id, token)) => (Some(id), Some(token)),
+                None => (None, None),
+            };
+            let local_session_id = mcp_session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+            let data_dir = std::path::PathBuf::from("/tmp/agentgate");
+            let workdir = data_dir.join("sessions").join(&local_session_id).join("work");
+            tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
 
-        // Create bridge client
-        let client = Arc::new(BridgeClient {
-            host: "127.0.0.1".to_string(),
-            port: 8786,
-        });
+            let bridge_port: u16 = std::env::var("AGENTGATE_BRIDGE_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8786);
 
-        // Start bridge session (spawns CLI with MCP config)
-        let session = provider.start_bridge(bridge_config, client).await?;
+            let bridge_config = BridgeConfig {
+                host: "127.0.0.1".to_string(),
+                port: bridge_port,
+                model: model.to_string(),
+                profile_name: self.factory.default_profile().name.clone(),
+                data_dir: Some(data_dir.clone()),
+                session_id: mcp_session_id.clone(),
+                session_token,
+                keep_alive: self.keep_alive.clone(),
+                prompt_tools_fallback: self.prompt_tools_fallback,
+            };
 
-        // Send user message to CLI
-        let user_message = request
-            .messages
-            .iter()
-            .filter_map(|msg| msg.content.clone())
-            .collect::<Vec<String>>()
-            .join("\n");
+            tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider");
+            // Create bridge provider from factory
+            let provider = self.factory.create(bridge_config.clone()).await?;
+
+            // Create bridge client
+            let client = Arc::new(BridgeClient {
+                host: "127.0.0.1".to_string(),
+                port: bridge_port,
+            });
+
+            // Start bridge session (spawns CLI with MCP config)
+            let session = provider.start_bridge(bridge_config, client).await?;
+
+            // Convert Box to Arc for persistent session storage
+            let session = Arc::from(session);
+
+            (session, keep_alive, mcp_session_id)
+        };
+
+        // Send the structured conversation to the CLI so system instructions,
+        // assistant tool calls, and tool results survive (spec §11.2).
+        let mut user_message = render_conversation(&request.messages);
+        if self.prompt_tools_fallback {
+            if let Some(tools) = request.tools.as_deref().filter(|t| !t.is_empty()) {
+                user_message.push_str(&tool_prompt_instructions(tools));
+            }
+        }
+
+        // Preflight isolation check before admitting a tool-capable turn
+        // (spec §13.2, fail-closed): refuse the turn when built-in tool
+        // isolation could not be verified instead of running unverified tools.
+        let isolation_ok = session.preflight_isolation_check().await?;
+        if !isolation_ok {
+            if !keep_alive {
+                let _ = session.close().await;
+            }
+            if let Some(ref mcp_id) = mcp_session_id {
+                self.release_session(&Some(mcp_id.clone())).await;
+            }
+            return Err(anyhow::anyhow!("tool_isolation_unavailable: isolation preflight failed"));
+        }
 
         if !user_message.trim().is_empty() {
             session.send_user_message(&user_message).await?;
         }
 
         // Wait for completion (handles tool calls via bridge)
-        let output = session.wait_for_completion().await?;
+        let output = match tokio::time::timeout(bridge_turn_timeout(), session.wait_for_completion()).await {
+            Ok(result) => result?,
+            Err(_) => {
+                if !keep_alive {
+                    let _ = session.close().await;
+                }
+                if let Some(ref mcp_id) = mcp_session_id {
+                    self.release_session(&Some(mcp_id.clone())).await;
+                }
+                return Err(anyhow::anyhow!("provider_error: bridge turn timed out"));
+            }
+        };
 
+        if keep_alive {
+            // Store the session for reuse, don't close it
+            if should_store {
+                let mut sessions = self.persistent_sessions.write().await;
+                sessions.insert(session_id.clone(), session.clone());
+            }
+            // Don't release MCP session for persistent sessions
+        } else {
+            // Close session and release MCP session for non-persistent mode
+            let _ = session.close().await;
+            if let Some(ref mcp_id) = mcp_session_id {
+                self.release_session(&Some(mcp_id.clone())).await;
+            }
+        }
+
+        let mut tool_calls = output.tool_calls;
+        if let Some(calls) = tool_calls.as_mut() {
+            crate::openai::tools::unalias_tool_calls(
+                calls,
+                request.tools.as_deref().unwrap_or(&[]),
+            );
+        }
         Ok(ProviderResponse::Success {
             content: output.content,
             reasoning: output.reasoning,
+            tool_calls,
+            session_id: Some(session_id),
         })
     }
 
@@ -839,47 +1178,133 @@ impl CliProvider for BridgeCliProvider {
         tx: tokio::sync::mpsc::Sender<crate::reasoning::RunEvent>,
     ) -> Result<(), anyhow::Error> {
         use uuid::Uuid;
+        // Ollama models may arrive as "ollama/<model>".
+        let model = model.strip_prefix("ollama/").unwrap_or(model);
 
-        // Create bridge config
-        let session_id = Uuid::new_v4().to_string();
-        let data_dir = std::path::PathBuf::from("/tmp/agentgate");
-        let workdir = data_dir.join("sessions").join(&session_id).join("work");
-        tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
-
-        let bridge_config = BridgeConfig {
-            host: "127.0.0.1".to_string(),
-            port: 8786,
-            model: model.to_string(),
-            profile_name: self.factory.default_profile().name.clone(),
-            data_dir: Some(data_dir.clone()),
+        // Extract or generate session_id from request
+        let session_id = request.session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+        
+        // Check if we have a persistent session for this session_id
+        let keep_alive = self.keep_alive.is_some();
+        let existing_session = if keep_alive {
+            let sessions = self.persistent_sessions.read().await;
+            sessions.get(&session_id).map(|s| s.clone())
+        } else {
+            None
         };
 
-        // Create bridge provider from factory
-        let provider = self.factory.create(bridge_config.clone()).await?;
+        let (session, should_store, mcp_session_id): (
+            Arc<dyn crate::provider::bridge::BridgeSession>,
+            bool,
+            Option<String>,
+        ) = if let Some(existing) = existing_session {
+            // Reuse existing persistent session
+            tracing::info!(target: "bridge.cli", session_id = %session_id, "Reusing persistent session (stream)");
+            (existing, false, None)
+        } else {
+            // Register the MCP session before spawning so /_bridge/mcp/{id} is known
+            // to the bridge server (spec §9.2).
+            let tool_schemas = self.tool_schemas_from_request(&request);
+            let (mcp_session_id, session_token) = match self.register_session(tool_schemas).await {
+                Some((id, token)) => (Some(id), Some(token)),
+                None => (None, None),
+            };
+            let local_session_id = mcp_session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+            let data_dir = std::path::PathBuf::from("/tmp/agentgate");
+            let workdir = data_dir.join("sessions").join(&local_session_id).join("work");
+            tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
 
-        // Create bridge client
-        let client = Arc::new(BridgeClient {
-            host: "127.0.0.1".to_string(),
-            port: 8786,
-        });
+            let bridge_port: u16 = std::env::var("AGENTGATE_BRIDGE_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8786);
 
-        // Start bridge session
-        let session = provider.start_bridge(bridge_config, client).await?;
+            let bridge_config = BridgeConfig {
+                host: "127.0.0.1".to_string(),
+                port: bridge_port,
+                model: model.to_string(),
+                profile_name: self.factory.default_profile().name.clone(),
+                data_dir: Some(data_dir.clone()),
+                session_id: mcp_session_id.clone(),
+                session_token,
+                keep_alive: self.keep_alive.clone(),
+                prompt_tools_fallback: self.prompt_tools_fallback,
+            };
 
-        // Send user message
-        let user_message = request
-            .messages
-            .iter()
-            .filter_map(|msg| msg.content.clone())
-            .collect::<Vec<String>>()
-            .join("\n");
+            tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider (stream)");
+            // Create bridge provider from factory
+            let provider = self.factory.create(bridge_config.clone()).await?;
+
+            // Create bridge client
+            let client = Arc::new(BridgeClient {
+                host: "127.0.0.1".to_string(),
+                port: bridge_port,
+            });
+
+            // Start bridge session
+            let session = provider.start_bridge(bridge_config, client).await?;
+
+            // Convert Box to Arc for persistent session storage
+            let session = Arc::from(session);
+
+            (session, keep_alive, mcp_session_id)
+        };
+
+        // Send the structured conversation to the CLI so system instructions,
+        // assistant tool calls, and tool results survive (spec §11.2).
+        let mut user_message = render_conversation(&request.messages);
+        if self.prompt_tools_fallback {
+            if let Some(tools) = request.tools.as_deref().filter(|t| !t.is_empty()) {
+                user_message.push_str(&tool_prompt_instructions(tools));
+            }
+        }
+
+        // Preflight isolation check before admitting a tool-capable turn
+        // (spec §13.2, fail-closed): refuse the turn when built-in tool
+        // isolation could not be verified instead of running unverified tools.
+        let isolation_ok = session.preflight_isolation_check().await?;
+        if !isolation_ok {
+            if !keep_alive {
+                let _ = session.close().await;
+            }
+            if let Some(ref mcp_id) = mcp_session_id {
+                self.release_session(&Some(mcp_id.clone())).await;
+            }
+            return Err(anyhow::anyhow!("tool_isolation_unavailable: isolation preflight failed"));
+        }
 
         if !user_message.trim().is_empty() {
             session.send_user_message(&user_message).await?;
         }
 
         // Wait for completion and stream events
-        let output = session.wait_for_completion().await?;
+        let output = match tokio::time::timeout(bridge_turn_timeout(), session.wait_for_completion()).await {
+            Ok(result) => result?,
+            Err(_) => {
+                if !keep_alive {
+                    let _ = session.close().await;
+                }
+                if let Some(ref mcp_id) = mcp_session_id {
+                    self.release_session(&Some(mcp_id.clone())).await;
+                }
+                return Err(anyhow::anyhow!("provider_error: bridge turn timed out"));
+            }
+        };
+
+        if keep_alive {
+            // Store the session for reuse, don't close it
+            if should_store {
+                let mut sessions = self.persistent_sessions.write().await;
+                sessions.insert(session_id.clone(), session.clone());
+            }
+            // Don't release MCP session for persistent sessions
+        } else {
+            // Close session and release MCP session for non-persistent mode
+            let _ = session.close().await;
+            if let Some(ref mcp_id) = mcp_session_id {
+                self.release_session(&Some(mcp_id.clone())).await;
+            }
+        }
 
         // Stream the result as events
         if let Some(reasoning) = output.reasoning.filter(|r| !r.trim().is_empty()) {
@@ -889,6 +1314,13 @@ impl CliProvider for BridgeCliProvider {
         }
         if !output.content.is_empty() {
             if tx.send(crate::reasoning::RunEvent::Text { text: output.content }).await.is_err() { return Ok(()); }
+        }
+        if let Some(mut calls) = output.tool_calls.filter(|v| !v.is_empty()) {
+            crate::openai::tools::unalias_tool_calls(
+                &mut calls,
+                request.tools.as_deref().unwrap_or(&[]),
+            );
+            if tx.send(crate::reasoning::RunEvent::ToolCalls { calls }).await.is_err() { return Ok(()); }
         }
         let _ = tx.send(crate::reasoning::RunEvent::Done { reason: crate::reasoning::FinishReason::Stop }).await;
 

@@ -11,6 +11,7 @@ pub mod run;
 pub mod service;
 pub mod types;
 pub mod cli;
+pub mod metrics;
 
 pub type Result<T> = anyhow::Result<T>;
 

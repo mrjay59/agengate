@@ -23,6 +23,8 @@ impl CliProvider for DummyProvider {
         Ok(agentgate::provider::ProviderResponse::Success {
             content: "answer".to_string(),
             reasoning: Some("thinking about it".to_string()),
+            tool_calls: None,
+            session_id: None,
         })
     }
 }

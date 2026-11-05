@@ -5,9 +5,89 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, RwLock, oneshot};
+use tokio::sync::{Mutex, RwLock, oneshot, mpsc};
 use tokio::time::interval;
 use tracing::{debug, info};
+
+/// RequestBatcher for window-based batching (spec §10.3).
+/// Collects requests and batches them based on window_ms and max_calls.
+pub struct RequestBatcher {
+    sender: mpsc::Sender<BatchedRequest>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl RequestBatcher {
+    /// Create a new RequestBatcher with the given window and max calls.
+    /// The handler will be called with a batch of requests.
+    pub fn new<F, Fut>(
+        window_ms: u64,
+        max_calls: usize,
+        mut handler: F,
+    ) -> Self
+    where
+        F: FnMut(Vec<BatchedRequest>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+    {
+        let (tx, mut rx) = mpsc::channel(100);
+        let handle = tokio::spawn(async move {
+            let mut batch = Vec::new();
+            let mut timer = interval(Duration::from_millis(window_ms));
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
+                tokio::select! {
+                    Some(request) = rx.recv() => {
+                        batch.push(request);
+                        if batch.len() >= max_calls {
+                            let to_send = std::mem::take(&mut batch);
+                            if let Err(e) = handler(to_send).await {
+                                tracing::error!("RequestBatcher handler error: {}", e);
+                            }
+                        }
+                    }
+                    _ = timer.tick() => {
+                        if !batch.is_empty() {
+                            let to_send = std::mem::take(&mut batch);
+                            if let Err(e) = handler(to_send).await {
+                                tracing::error!("RequestBatcher handler error: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        Self { sender: tx, handle }
+    }
+
+    /// Submit a request to the batcher.
+    pub async fn submit(&self, request: BatchedRequest) -> Result<()> {
+        self.sender.send(request).await?;
+        Ok(())
+    }
+
+    /// Shutdown the batcher.
+    pub async fn shutdown(self) -> Result<()> {
+        drop(self.sender);
+        self.handle.await?;
+        Ok(())
+    }
+}
+
+/// A request that can be batched.
+#[derive(Debug, Clone)]
+pub enum BatchedRequest {
+    UserMessage { session_id: String, text: String },
+    ToolResult { session_id: String, result: BridgeToolResult },
+}
+
+/// Result of a tool call from the CLI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeToolResult {
+    pub tool_call_id: String,
+    pub result: String,
+    pub is_error: bool,
+}
 
 /// Bridge client for handling tool calls from CLI agents
 #[derive(Debug, Clone)]
@@ -49,9 +129,15 @@ pub struct BridgeServer {
     tool_schemas: Arc<RwLock<HashMap<String, ToolSchema>>>,
     parked_runs: Arc<Mutex<HashMap<String, Run>>>,
     sessions: Arc<RwLock<HashMap<String, BridgeSession>>>,
-    pending_calls: Arc<Mutex<HashMap<String, oneshot::Sender<ToolResult>>>>,
+    pending_calls: Arc<Mutex<HashMap<String, PendingCall>>>,
     #[allow(dead_code)]
     cleanup_interval: Duration,
+}
+
+/// A held `tools/call` bound to the session that issued it.
+struct PendingCall {
+    session_id: String,
+    tx: oneshot::Sender<ToolResult>,
 }
 
 impl BridgeServer {
@@ -85,6 +171,17 @@ impl BridgeServer {
         self.sessions.read().await.get(session_id).cloned()
     }
 
+    /// Remove a session and any pending tool calls bound to it.
+    pub async fn remove_session(&self, session_id: &str) -> bool {
+        let removed = self.sessions.write().await.remove(session_id).is_some();
+        // Dropping the senders wakes any held `tools/call` with "channel closed".
+        self.pending_calls
+            .lock()
+            .await
+            .retain(|_, pending| pending.session_id != session_id);
+        removed
+    }
+
     pub fn validate_token(session: &BridgeSession, token: &str) -> bool {
         // constant-time compare
         if session.token.len() != token.len() {
@@ -97,9 +194,12 @@ impl BridgeServer {
         diff == 0
     }
 
-    pub async fn hold_tool_call(&self, mcp_id: String, timeout_secs: u64) -> Result<ToolResult> {
+    pub async fn hold_tool_call(&self, mcp_id: String, session_id: String, timeout_secs: u64) -> Result<ToolResult> {
         let (tx, rx) = oneshot::channel();
-        self.pending_calls.lock().await.insert(mcp_id.clone(), tx);
+        self.pending_calls.lock().await.insert(
+            mcp_id.clone(),
+            PendingCall { session_id, tx },
+        );
         
         info!(event = "bridge.tool_call.hold", mcp_id = %mcp_id, timeout = timeout_secs);
         
@@ -120,9 +220,18 @@ impl BridgeServer {
         }
     }
 
+    /// Session that owns a held `tools/call`, if still pending.
+    pub async fn pending_session_id(&self, mcp_id: &str) -> Option<String> {
+        self.pending_calls
+            .lock()
+            .await
+            .get(mcp_id)
+            .map(|p| p.session_id.clone())
+    }
+
     pub async fn resolve_tool_call(&self, mcp_id: &str, result: ToolResult) -> bool {
-        if let Some(tx) = self.pending_calls.lock().await.remove(mcp_id) {
-            let _ = tx.send(result);
+        if let Some(pending) = self.pending_calls.lock().await.remove(mcp_id) {
+            let _ = pending.tx.send(result);
             true
         } else {
             false
@@ -142,14 +251,17 @@ impl BridgeServer {
     /// Get available tool schemas for a workspace
     pub async fn get_tool_schemas(&self, workspace: &str) -> Vec<ToolSchema> {
         let schemas = self.tool_schemas.read().await;
-        schemas
+        let result: Vec<ToolSchema> = schemas
             .values()
             .filter(|s| s.workspace == workspace || s.workspace == "*")
             .cloned()
-            .collect()
+            .collect();
+        info!(event = "bridge.tools_list", workspace = %workspace, count = %result.len());
+        result
     }
 
-    /// Start a new run
+    /// Start a new run with max_runs_per_key enforcement (spec §10.3).
+    /// The key is workspace + model to limit concurrent runs for the same session context.
     pub async fn start_run(
         &self,
         run_id: String,
@@ -159,6 +271,25 @@ impl BridgeServer {
         tools: Vec<ToolSchema>,
         max_steps: usize,
     ) -> Result<Run> {
+        // Enforce max_runs_per_key - limit concurrent runs for the same workspace+model key
+        let key = format!("{}:{}", workspace, model);
+        let current_runs = {
+            let runs = self.runs.read().await;
+            runs.values()
+                .filter(|r| {
+                    let r_key = format!("{}:{}", r.workspace, r.model);
+                    r_key == key
+                })
+                .count()
+        };
+        
+        if current_runs >= self.config.max_runs_per_key {
+            return Err(anyhow::anyhow!(
+                "max_runs_per_key ({}) exceeded for key '{}' (spec §10.3)",
+                self.config.max_runs_per_key, key
+            ));
+        }
+
         let run = Run::new(
             run_id.clone(),
             workspace,
@@ -192,14 +323,22 @@ impl BridgeServer {
             return Err(anyhow!("Max parked runs reached"));
         }
 
-        parked.insert(run.id.clone(), run);
+        let run_id = run.id.clone();
+        parked.insert(run_id.clone(), run);
+        crate::metrics::METRICS.mark_run_parked();
+        info!(event = "run.parked", run_id = %run_id);
         Ok(())
     }
 
     /// Resume a parked run with tool result
     pub async fn resume_run(&self, run_id: &str, _tool_result: ToolResult) -> Option<Run> {
         let mut parked = self.parked_runs.lock().await;
-        parked.remove(run_id)
+        let removed = parked.remove(run_id);
+        if removed.is_some() {
+            crate::metrics::METRICS.mark_run_unparked();
+            info!(event = "run.resumed", run_id = %run_id);
+        }
+        removed
     }
 
     /// Execute a tool call - parks run, forwards to client, waits for result
@@ -213,6 +352,8 @@ impl BridgeServer {
         // Guard: Check if tool is bridge tool
         if !self.is_bridge_tool(tool_name) {
             tracing::error!("Guard violation: non-bridge tool {} called in run {}", tool_name, run_id);
+            info!(event = "guard.violation", run_id = %run_id, observed_tool = %tool_name);
+            crate::metrics::METRICS.record_guard_violation();
             return Err(anyhow!("tool_isolation_violation: {} is not a bridge tool", tool_name));
         }
 
@@ -228,9 +369,13 @@ impl BridgeServer {
         let mcp_id = tool_call_id.clone();
         run.park(tool_call_id.clone(), tool_name.to_string());
 
-        // Store the tool call for later resolution
+        // Store the tool call for later resolution (legacy run-based path; no
+        // MCP session binding, so the authenticated HTTP resolver won't match).
         let (tx, rx) = oneshot::channel();
-        self.pending_calls.lock().await.insert(mcp_id.clone(), tx);
+        self.pending_calls
+            .lock()
+            .await
+            .insert(mcp_id.clone(), PendingCall { session_id: String::new(), tx });
 
         // Re-insert the parked run
         self.park_run(run.clone()).await?;
@@ -298,8 +443,10 @@ impl BridgeServer {
     pub async fn start_cleanup_task(&self) {
         let runs = self.runs.clone();
         let parked_runs = self.parked_runs.clone();
+        let sessions = self.sessions.clone();
         let park_ttl = Duration::from_secs(self.config.park_ttl_secs);
         let call_ttl = Duration::from_secs(self.config.call_ttl_secs);
+        let session_ttl = Duration::from_secs(600);
 
         tokio::spawn(async move {
             let mut interval = interval(park_ttl);
@@ -321,8 +468,12 @@ impl BridgeServer {
                     }
                 });
 
-                if !parked.is_empty() || !runs_guard.is_empty() {
-                    debug!("Cleanup: {} parked, {} active runs", parked.len(), runs_guard.len());
+                // Clean expired bridge sessions
+                let mut sessions_guard = sessions.write().await;
+                sessions_guard.retain(|_, s| now.duration_since(s.created_at) < session_ttl);
+
+                if !parked.is_empty() || !runs_guard.is_empty() || !sessions_guard.is_empty() {
+                    debug!("Cleanup: {} parked, {} active runs, {} sessions", parked.len(), runs_guard.len(), sessions_guard.len());
                 }
             }
         });
@@ -428,6 +579,10 @@ pub fn merge_tool_schemas(
         }
         crate::permission::ClientToolsPolicy::Ignore => {
             // Use agentgate schemas, ignore client
+            agentgate_schemas.into_iter().map(|s| s.to_openai_function()).collect()
+        }
+        crate::permission::ClientToolsPolicy::Reject => {
+            // Fail-closed: client tool escalation is not allowed; use agentgate schemas.
             agentgate_schemas.into_iter().map(|s| s.to_openai_function()).collect()
         }
     }

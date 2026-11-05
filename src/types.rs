@@ -95,6 +95,8 @@ pub struct ChatCompletionRequest {
     pub top_p: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<serde_json::Value>,
     /// `reasoning_effort: "low" | "medium" | "high"` (OpenAI style).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
@@ -107,6 +109,16 @@ pub struct ChatCompletionRequest {
     /// `think: true | false | "low" | "medium" | "high"` (Ollama style).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub think: Option<serde_json::Value>,
+    /// `parallel_tool_calls: true | false` (OpenAI style). When `false`, the
+    /// bridge only issues one tool call per batch (spec §10.3 serial mode).
+    /// `None` = default (true).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+    /// Optional session ID for persistent CLI sessions (keep_alive mode).
+    /// When provided with a provider that has keep_alive enabled, the same CLI process
+    /// is reused across requests with the same session_id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +143,10 @@ pub struct ChatCompletionResponse {
     pub choices: Vec<Choice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// Session ID for persistent CLI sessions (keep_alive mode).
+    /// Returned when a new session is created or when reusing an existing session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

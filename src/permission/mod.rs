@@ -6,10 +6,13 @@ use serde::{Deserialize, Serialize};
 pub enum NoToolsPolicy {
     /// Lewati tool-calling, jawab chat biasa (default)
     #[default]
+    #[serde(alias = "chat_only")]
     ChatOnly,
     /// Paksa attach tool schema dari config/workspace (bridge/native)
+    #[serde(alias = "bridge")]
     Bridge,
     /// Tolak request dengan 400
+    #[serde(alias = "reject")]
     Reject,
 }
 
@@ -46,6 +49,9 @@ pub enum ClientToolsPolicy {
     Passthrough,
     /// Abaikan tools client, gunakan config agentgate
     Ignore,
+    /// Tolak request yang membawa `tools[]` (fail-closed, HTTP 501
+    /// `tool_bridge_unsupported` — spec §7.6, §13.1, spec_tooling.md §56).
+    Reject,
 }
 
 /// Kebijakan aktivitas tool-calling selama run.

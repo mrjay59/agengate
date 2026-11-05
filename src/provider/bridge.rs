@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::process::Child;
-use tokio::sync::Mutex;
+use tracing::{info, warn};
 
 /// MCP server configuration for bridge connection
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +45,19 @@ pub struct BridgeConfig {
     /// Base directory for session workdirs (default: /tmp/agentgate)
     #[serde(default = "default_data_dir")]
     pub data_dir: Option<PathBuf>,
+    /// Session id registered in `BridgeServer` (spec §9.2). When present, the
+    /// adapter must reuse it instead of generating its own id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Bearer token registered in `BridgeServer` for this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_token: Option<String>,
+    /// Ollama CLI keep-alive (spec_ollama-cli.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_alive: Option<String>,
+    /// Enable prompt-based tool calling for CLIs without native tool support.
+    #[serde(default)]
+    pub prompt_tools_fallback: bool,
 }
 
 fn default_data_dir() -> Option<PathBuf> {
@@ -60,6 +72,10 @@ impl Default for BridgeConfig {
             model: "default".to_string(),
             profile_name: "opencode".to_string(),
             data_dir: default_data_dir(),
+            session_id: None,
+            session_token: None,
+            keep_alive: None,
+            prompt_tools_fallback: false,
         }
     }
 }
@@ -116,6 +132,40 @@ pub struct BridgeToolResult {
 pub struct SessionOutput {
     pub content: String,
     pub reasoning: Option<String>,
+    pub tool_calls: Option<Vec<crate::types::ToolCall>>,
+}
+
+/// Shared preflight isolation check (spec §13.2).
+///
+/// Verifies, before a tool-capable bridge turn is admitted, that the CLI
+/// adapter has guard/isolation configuration in place. Fails closed (`Ok(false)`)
+/// when no guard patterns are configured, i.e. when built-in tool isolation
+/// could not be verified for the session.
+pub async fn preflight_isolation_check(
+    profile: &BridgeProfile,
+    session_id: &str,
+    source: &str,
+) -> Result<bool> {
+    let guard_patterns = &profile.guard_patterns;
+    if guard_patterns.is_empty() {
+        warn!(target: "bridge.preflight", session_id, "No guard patterns configured");
+        return Ok(false);
+    }
+
+    info!(
+        target: "bridge.preflight",
+        session_id,
+        source,
+        "Preflight isolation check completed - CLI should have built-in tools disabled via config injection"
+    );
+    info!(
+        target: "bridge.preflight",
+        session_id,
+        source,
+        isolation_status = "config_injected",
+        note = "Built-in tools should be disabled via CLI config injection"
+    );
+    Ok(true)
 }
 
 /// Bridge session trait for managing CLI bridge processes
@@ -127,6 +177,12 @@ pub trait BridgeSession: Send + Sync {
     async fn send_tool_result(&self, result: BridgeToolResult) -> Result<()>;
     async fn close(&self) -> Result<()>;
     async fn wait_for_completion(&self) -> Result<SessionOutput>;
+    /// Preflight isolation check before a tool-capable turn is admitted
+    /// (spec §13.2). Adapters override with CLI-specific verification; the
+    /// default accepts (caller is expected to gate on tools separately).
+    async fn preflight_isolation_check(&self) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 /// Bridge provider factory trait
@@ -169,7 +225,7 @@ pub fn create_bridge_factory_v2(provider_type: &str) -> Option<Box<dyn BridgePro
         "opencode" => Some(Box::new(OpenCodeBridgeFactory)),
         "gemini" => Some(Box::new(GeminiBridgeFactory)),
         "claude" => Some(Box::new(ClaudeBridgeFactory)),
-        "ollama-cli" => Some(Box::new(OllamaCliBridgeFactory)),
+        "ollama" | "ollama-cli" => Some(Box::new(OllamaCliBridgeFactory)),
         _ => None,
     }
 }

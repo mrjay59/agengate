@@ -8,11 +8,52 @@ use crate::reasoning::RunEvent;
 use crate::run::classify;
 use std::collections::HashSet;
 use crate::run::RunRegistry;
-use crate::types::{AddProviderRequest, ChatCompletionRequest, ChatCompletionResponse, Model, ModelsResponse};
+use crate::types::{AddProviderRequest, ChatCompletionRequest, ChatCompletionResponse, Model, ModelsResponse, ToolCall};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, mpsc, Semaphore};
 use tracing::info;
+
+/// Serial-mode gate (spec §10.3, `parallel_tool_calls: false`): keep at most
+/// one tool call per assistant turn. The client then executes them one at a
+/// time; the model re-issues the rest on subsequent turns with history
+/// intact.
+///
+/// Applies to any tool-call list (bridge `ProviderResponse::Success.tool_calls`
+/// and native responses alike). In serial mode a batch of N calls is truncated
+/// to the first call so the run only ever parks one open tool call at a time.
+pub fn truncate_tool_calls(calls: &mut Option<Vec<ToolCall>>, parallel_tool_calls: Option<bool>) {
+    if parallel_tool_calls != Some(false) {
+        return;
+    }
+    if let Some(calls) = calls.as_mut() {
+        if calls.len() > 1 {
+            calls.truncate(1);
+        }
+    }
+}
+
+/// Serial-mode gate on a full native response (spec §10.3).
+pub fn truncate_parallel_tool_calls(
+    resp: &mut crate::types::ChatCompletionResponse,
+    parallel_tool_calls: Option<bool>,
+) {
+    for choice in resp.choices.iter_mut() {
+        truncate_tool_calls(&mut choice.message.tool_calls, parallel_tool_calls);
+    }
+}
+
+/// Map a provider error to the API error envelope, keeping the spec §7.6
+/// error semantics (e.g. bridge isolation failures surface as 503
+/// `tool_isolation_unavailable`).
+fn provider_error_to_app_error(e: anyhow::Error) -> AppError {
+    let msg = e.to_string();
+    if msg.contains("tool_isolation_unavailable") {
+        AppError::ToolIsolationUnavailable
+    } else {
+        AppError::Internal(msg)
+    }
+}
 
 pub struct ServiceRegistry {
     providers: RwLock<HashMap<String, Arc<dyn CliProvider + Send + Sync>>>,
@@ -23,6 +64,13 @@ pub struct ServiceRegistry {
     pub bridge_config: BridgeConfig,
     /// Global reasoning configuration (`[reasoning]` in agentgate.toml).
     pub reasoning: ReasoningConfig,
+    /// When true, Ollama requests are served by the CLI bridge instead of the
+    /// HTTP native proxy (`ollama_mode = "cli"`).
+    pub ollama_cli_mode: bool,
+    /// Semaphore to limit concurrent runs per provider (spec §10.3).
+    pub provider_semaphores: RwLock<HashMap<String, Arc<Semaphore>>>,
+    /// Default max concurrency per provider from config.
+    pub max_concurrency_per_provider: usize,
 }
 
 impl Default for ServiceRegistry {
@@ -30,6 +78,7 @@ impl Default for ServiceRegistry {
         let bridge_config = BridgeConfig::default();
         let bridge = Arc::new(BridgeServer::new(bridge_config.clone()));
         let run_registry = RunRegistry::new(bridge.clone(), bridge_config.clone(), crate::permission::ToolActivityPolicy::default());
+        let defaults = crate::config::DefaultsConfig::default();
         Self {
             providers: RwLock::new(HashMap::new()),
             add_providers: RwLock::new(Vec::new()),
@@ -38,6 +87,9 @@ impl Default for ServiceRegistry {
             routing: RoutingConfig::default(),
             bridge_config,
             reasoning: ReasoningConfig::default(),
+            ollama_cli_mode: false,
+            provider_semaphores: RwLock::new(HashMap::new()),
+            max_concurrency_per_provider: defaults.max_concurrency_per_provider,
         }
     }
 }
@@ -55,6 +107,12 @@ impl ServiceRegistry {
 
     pub fn reasoning_config(&self) -> &ReasoningConfig {
         &self.reasoning
+    }
+
+    /// Select CLI bridge for Ollama instead of the HTTP native proxy.
+    pub fn with_ollama_cli_mode(mut self, enabled: bool) -> Self {
+        self.ollama_cli_mode = enabled;
+        self
     }
 
     /// Resolve the provider for a model without spawning model-discovery commands.
@@ -178,6 +236,37 @@ impl ServiceRegistry {
         &self,
         mut request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, AppError> {
+        if request.n.unwrap_or(1) > 1 {
+            return Err(AppError::ToolError("n>1 is not supported".to_string()));
+        }
+        if let Some(tools) = &request.tools {
+            // Fail-closed limits (spec §14, [bridge.limits]).
+            let limits = &self.bridge_config.limits;
+            if tools.len() > limits.max_tools {
+                return Err(AppError::ToolError(format!(
+                    "too_many_tools ({} > {})",
+                    tools.len(),
+                    limits.max_tools
+                )));
+            }
+            for t in tools {
+                let schema_bytes = t.function
+                    .parameters
+                    .as_ref()
+                    .and_then(|p| serde_json::to_vec(p).ok())
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                if schema_bytes > limits.max_schema_bytes {
+                    return Err(AppError::ToolError(format!(
+                        "tool schema too large ({} > {} bytes)",
+                        schema_bytes, limits.max_schema_bytes
+                    )));
+                }
+                if t.r#type != "function" {
+                    return Err(AppError::ToolError("unsupported tool type".to_string()));
+                }
+            }
+        }
         info!("ChatCompletion START: model='{}', provider_opt={:?}, messages={}", request.model, request.provider, request.messages.len());
         
         // Keep tool role as-is for OpenAI tool-calling compatibility (spec_tooling §7.1)
@@ -186,6 +275,9 @@ impl ServiceRegistry {
         let provider_id = if let Some(id) = request.provider.as_ref() {
             info!("Using explicit provider: {}", id);
             id.clone()
+        } else if let Some(id) = self.provider_for_model(&request.model).await {
+            info!("Resolved provider via provider_for_model: {}", id);
+            id
         } else {
             let models = self.list_models(None).await?;
             models.data
@@ -198,7 +290,8 @@ impl ServiceRegistry {
                 })?
         };
 
-        let is_native = provider_id == "ollama" || request.model.starts_with("ollama/");
+        let is_native = !self.ollama_cli_mode
+            && (provider_id == "ollama" || request.model.starts_with("ollama/"));
         let known_ids: HashSet<String> = self.run_registry.get_known_tool_call_ids().await;
         let classified = classify(&request, &[], is_native, &known_ids);
         info!("Classified request: {:?}", classified);
@@ -217,8 +310,28 @@ impl ServiceRegistry {
             };
             let ollama = OllamaNativeProvider::new(cfg);
             let model = request.model.strip_prefix("ollama/").unwrap_or(&request.model).to_string();
-            let resp = ollama.forward_chat(&model, &request).await.map_err(|e| AppError::Internal(e.to_string()))?;
+            let mut resp = ollama.forward_chat(&model, &request).await.map_err(|e| AppError::Internal(e.to_string()))?;
+            truncate_parallel_tool_calls(&mut resp, request.parallel_tool_calls);
             return Ok(resp);
+        }
+
+        // Fail-closed (spec §7.6 error table + spec §13.1): during the bridge
+        // flow, client-sent `tools[]` are only honoured when the policy allows
+        // and the resolved provider is bridge-capable.
+        //   - `on_client_tools = "reject"` -> HTTP 501 `tool_bridge_unsupported`
+        //   - provider tidak bridge-capable     -> HTTP 501 `tool_bridge_unsupported`
+        // Native (ollama) path already returned above; here we are in bridge mode.
+        if request.tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false) && !is_native {
+            let provider_bridge_ok = self
+                .providers
+                .read()
+                .await
+                .get(&provider_id)
+                .map(|p| p.is_bridge())
+                .unwrap_or(false);
+            if self.routing.on_client_tools == crate::permission::ClientToolsPolicy::Reject || !provider_bridge_ok {
+                return Err(AppError::ToolBridgeUnsupported);
+            }
         }
 
         // Apply routing policy
@@ -244,9 +357,11 @@ impl ServiceRegistry {
                 self.call_provider_native(&provider_id, request).await
             }
             crate::run::Classified::Resume { call_ids } => {
+                info!(event = "run.resumed", provider = %provider_id);
                 self.resume_run(&provider_id, call_ids, request).await
             }
             crate::run::Classified::Replay { history } => {
+                info!(event = "run.replay", provider = %provider_id, reason = "unknown_tool_call_id");
                 self.replay_run(&provider_id, history, request).await
             }
             crate::run::Classified::NewBridge { tools } => {
@@ -262,9 +377,12 @@ impl ServiceRegistry {
         let model = request.model.clone();
         let providers = self.providers.read().await;
         let provider = providers.get(provider_id).ok_or(AppError::ProviderNotFound(provider_id.to_string()))?;
-        let response = provider.send_chat_completion(&model, request).await.map_err(|e| AppError::Internal(e.to_string()))?;
+        let response = provider.send_chat_completion(&model, request).await.map_err(provider_error_to_app_error)?;
         match response {
-            crate::provider::ProviderResponse::Success { content: text, reasoning } => {
+            crate::provider::ProviderResponse::Success { content: text, reasoning, tool_calls, session_id } => {
+                crate::metrics::METRICS.record_cli_exit(true);
+                let has_tool_calls = tool_calls.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+                let finish_reason = if has_tool_calls { "tool_calls" } else { "stop" };
                 Ok(ChatCompletionResponse {
                     id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
                     object: "chat.completion".to_string(),
@@ -274,26 +392,36 @@ impl ServiceRegistry {
                         index: 0,
                         message: crate::types::ChatMessage {
                             role: crate::types::MessageRole::Assistant,
-                            content: Some(text),
+                            content: if text.is_empty() { None } else { Some(text) },
                             reasoning_content: reasoning,
-                            tool_calls: None,
+                            tool_calls: tool_calls,
                             tool_call_id: None,
                             name: None,
                         },
-                        finish_reason: Some("stop".to_string()),
+                        finish_reason: Some(finish_reason.to_string()),
                     }],
                     usage: Some(crate::types::Usage {
                         prompt_tokens: 0,
                         completion_tokens: 0,
                         total_tokens: 0,
                     }),
+                    session_id,
                 })
             }
-            crate::provider::ProviderResponse::Error(e) => Err(AppError::Internal(e)),
+            crate::provider::ProviderResponse::Error(e) => {
+                crate::metrics::METRICS.record_cli_exit(false);
+                Err(AppError::Internal(e))
+            }
         }
     }
 
     async fn resume_run(&self, provider_id: &str, call_ids: Vec<String>, mut request: ChatCompletionRequest) -> Result<ChatCompletionResponse, AppError> {
+        // Extract tool results from trailing tool messages of the request
+        let trailing = crate::run::trailing_tool_messages(&request.messages);
+        let tool_results: Vec<(String, String)> = trailing.iter()
+            .filter_map(|m| m.tool_call_id.clone().map(|id| (id, m.content.clone().unwrap_or_default())))
+            .collect();
+
         // Find parked run for any call_ids
         let run_id = {
             let parked_runs = self.bridge.parked_runs().lock().await;
@@ -303,17 +431,24 @@ impl ServiceRegistry {
         };
 
         if let Some(run_id) = run_id {
-            // Resume parked run
-            let tool_result = crate::bridge::ToolResult {
-                tool_call_id: call_ids[0].clone(),
-                name: "resumed_tool".to_string(),
-                content: serde_json::json!({"status": "resumed"}),
-                is_error: false,
-            };
-            self.run_registry.resume_run(&run_id, tool_result).await.map_err(|e| AppError::Internal(e.to_string()))?;
+            // Resolve each tool result into the parked run
+            for (id, content) in &tool_results {
+                let res = crate::bridge::ToolResult {
+                    tool_call_id: id.clone(),
+                    name: "resumed_tool".to_string(),
+                    content: serde_json::json!(content),
+                    is_error: false,
+                };
+                let _ = self.run_registry.resume_run(&run_id, res).await;
+            }
+            // Re-run provider with current request (carries full history)
+            let tools = request.tools.take().unwrap_or_default();
+            if tools.is_empty() && request.tools.is_none() {
+                // keep tools from original? try extract from run not available; fall through native
+            }
             self.call_provider_native(provider_id, request).await
         } else {
-            // No parked run found; create new run
+            // No parked run found; replay as new bridge run with full history
             let tools = request.tools.take().unwrap_or_default();
             self.new_bridge_run(provider_id, tools, request).await
         }
@@ -328,30 +463,119 @@ impl ServiceRegistry {
     }
 
     async fn new_bridge_run(&self, provider_id: &str, tools: Vec<crate::types::ToolDefinition>, request: ChatCompletionRequest) -> Result<ChatCompletionResponse, AppError> {
-        // Create new run with bridge
+        // Acquire provider semaphore to limit concurrent runs per provider (spec §10.3)
+        let _permit = self.acquire_provider_permit(provider_id).await?;
+
+        // Create new run with bridge (best-effort; do not block on failure)
+        let tool_schemas: Vec<crate::bridge::ToolSchema> = tools.iter().map(|t| crate::bridge::ToolSchema {
+            name: t.function.name.clone(),
+            description: t.function.description.clone().unwrap_or_default(),
+            parameters: t.function.parameters.clone().unwrap_or_default(),
+            provider: provider_id.to_string(),
+            workspace: "default".to_string(),
+        }).collect();
         let run = self.run_registry.create_run(
             "default".to_string(),
             request.model.clone(),
             request.messages.clone(),
-            tools.iter().map(|t| crate::bridge::ToolSchema {
-                name: t.function.name.clone(),
-                description: t.function.description.clone().unwrap_or_default(),
-                parameters: t.function.parameters.clone().unwrap_or_default(),
-                provider: provider_id.to_string(),
-                workspace: "default".to_string(),
-            }).collect(),
-            crate::openai::ToolChoice::from_value(request.tool_choice.clone()).map_err(|e| AppError::Internal(e.to_string()))?,
-        ).await.map_err(|e| AppError::Internal(e.to_string()))?;
+            tool_schemas,
+            crate::openai::ToolChoice::from_value(request.tool_choice.clone()).unwrap_or_default(),
+        ).await.ok();
 
-        // Spawn bridge process
+        // Spawn bridge process and get the single response (carries tool_calls)
         let providers = self.providers.read().await;
         let provider = providers.get(provider_id).ok_or(AppError::ProviderNotFound(provider_id.to_string()))?;
         let model = request.model.clone();
-        provider.send_chat_completion(&model, request.clone()).await.map_err(|e| AppError::Internal(e.to_string()))?;
+        let response = provider.send_chat_completion(&model, request.clone()).await.map_err(provider_error_to_app_error)?;
+        drop(providers);
 
-        // Wait for response
-        self.run_registry.step_run(&run.id, provider.as_ref()).await.map_err(|e| AppError::Internal(e.to_string()))?;
-        self.call_provider_native(provider_id, request).await
+        match response {
+            crate::provider::ProviderResponse::Success { content: text, reasoning, mut tool_calls, session_id } => {
+                crate::metrics::METRICS.record_cli_exit(true);
+                let has_tool_calls = tool_calls.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+                let finish_reason = if has_tool_calls { "tool_calls" } else { "stop" };
+
+                // Serial-mode gate (spec §10.3, `parallel_tool_calls: false`):
+                // keep at most one tool call per assistant turn, enforced on the
+                // CLI-bridge path as well (truncate before parking so only one
+                // tool call stays open per assistant turn).
+                truncate_tool_calls(&mut tool_calls, request.parallel_tool_calls);
+
+                let has_tool_calls = tool_calls.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+
+                // Persist the assistant turn (including tool_calls) so a follow-up
+                // request carrying role:"tool" can be classified as Resume.
+                if let Some(mut run) = run {
+                    let assistant_msg = crate::types::ChatMessage {
+                        role: crate::types::MessageRole::Assistant,
+                        content: if text.is_empty() { None } else { Some(text.clone()) },
+                        reasoning_content: reasoning.clone(),
+                        tool_calls: tool_calls.clone(),
+                        tool_call_id: None,
+                        name: None,
+                    };
+                    run.messages.push(assistant_msg);
+                    if has_tool_calls {
+                        if let Some(calls) = tool_calls.as_ref() {
+                            if calls.len() > 1 {
+                                // Parallel batch issued in a single assistant turn
+                                // (spec §10.3) — structured event with batch size.
+                                info!(event = "batch.issued", batch_size = calls.len());
+                            }
+                        }
+                        if let Some(first) = tool_calls.as_ref().and_then(|v| v.first()) {
+                            run.park(first.id.clone(), first.function.name.clone());
+                            let _ = self.bridge.park_run(run.clone()).await;
+                        }
+                    } else {
+                        run.complete(Vec::new());
+                    }
+                    self.run_registry.runs().write().await.insert(run.id.clone(), run);
+                }
+
+                Ok(ChatCompletionResponse {
+                    id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                    object: "chat.completion".to_string(),
+                    created: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                    model,
+                    choices: vec![crate::types::Choice {
+                        index: 0,
+                        message: crate::types::ChatMessage {
+                            role: crate::types::MessageRole::Assistant,
+                            content: if text.is_empty() { None } else { Some(text) },
+                            reasoning_content: reasoning,
+                            tool_calls: tool_calls,
+                            tool_call_id: None,
+                            name: None,
+                        },
+                        finish_reason: Some(finish_reason.to_string()),
+                    }],
+                    usage: Some(crate::types::Usage {
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        total_tokens: 0,
+                    }),
+                    session_id,
+                })
+            }
+            crate::provider::ProviderResponse::Error(e) => {
+                crate::metrics::METRICS.record_cli_exit(false);
+                Err(AppError::Internal(e))
+            }
+        }
+    }
+
+    /// Acquire a permit from the provider semaphore to limit concurrent runs (spec §10.3).
+    /// Returns an owned permit that can be held for the duration of the provider turn.
+    async fn acquire_provider_permit(&self, provider_id: &str) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+        let semaphore = {
+            let mut semaphores = self.provider_semaphores.write().await;
+            semaphores
+                .entry(provider_id.to_string())
+                .or_insert_with(|| Arc::new(Semaphore::new(self.max_concurrency_per_provider)))
+                .clone()
+        };
+        semaphore.acquire_owned().await.map_err(|_| AppError::Internal("Provider semaphore closed".to_string()))
     }
 
     async fn chat_only_run(&self, provider_id: &str, request: ChatCompletionRequest) -> Result<ChatCompletionResponse, AppError> {

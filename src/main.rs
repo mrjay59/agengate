@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use agentgate::api::api;
 use agentgate::config::load_config;
-use agentgate::provider::{CliProviderImpl, BridgeCliProvider};
+use agentgate::provider::CliProviderImpl;
 use agentgate::service::ServiceRegistry;
 use agentgate::types::{ChatCompletionRequest, ChatMessage, MessageRole};
 use anyhow::Result;
@@ -70,6 +70,14 @@ enum Commands {
     },
 }
 
+/// Whether the config opts Ollama into CLI bridge mode.
+fn ollama_cli_enabled(config: &agentgate::config::Config) -> bool {
+    config
+        .provider
+        .iter()
+        .any(|p| p.id == "ollama" && p.ollama_mode.as_deref() == Some("cli"))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
@@ -87,7 +95,7 @@ async fn main() -> Result<()> {
             toml::from_str::<agentgate::config::Config>(&content)?
         }
         None => load_config().await?,
-    };
+    }.apply_env_overrides();
 
     match &args.command {
         Commands::Serve { host, port } => {
@@ -95,19 +103,17 @@ async fn main() -> Result<()> {
             let host = host.as_deref().unwrap_or(&config.server.host);
             let port = port.unwrap_or(config.server.port);
             let bind_addr = format!("{}:{}", host, port);
-            let mut registry = ServiceRegistry::new().with_reasoning(config.reasoning.clone());
+            std::env::set_var("AGENTGATE_BRIDGE_PORT", port.to_string());
+            let mut registry = ServiceRegistry::new()
+                .with_reasoning(config.reasoning.clone())
+                .with_ollama_cli_mode(ollama_cli_enabled(&config));
             for provider_cfg in &config.provider {
-                // Use BridgeCliProvider for providers that support bridge architecture (spec_tooling.md)
-                let provider: Box<dyn agentgate::provider::CliProvider> = match provider_cfg.id.as_str() {
-                    "opencode" | "gemini" | "claude" => {
-                        if let Some(bp) = BridgeCliProvider::new(provider_cfg.clone()) {
-                            Box::new(bp)
-                        } else {
-                            Box::new(CliProviderImpl::new(provider_cfg.clone()))
-                        }
-                    }
-                    _ => Box::new(CliProviderImpl::new(provider_cfg.clone())),
-                };
+                // Bridge-capable agents use the MCP bridge adapter (spec_tooling.md §12);
+                // set `bridge = false` on the provider to opt out.
+                let provider = agentgate::provider::build_cli_provider(
+                    provider_cfg,
+                    Some(registry.bridge.clone()),
+                );
                 registry.register(provider).await;
             }
             registry.bridge.start_cleanup_task().await;
@@ -159,19 +165,16 @@ async fn main() -> Result<()> {
             axum::serve(listener, app).await?;
         }
         Commands::Models { provider } => {
-            let mut registry = ServiceRegistry::new().with_reasoning(config.reasoning.clone());
+            let mut registry = ServiceRegistry::new()
+                .with_reasoning(config.reasoning.clone())
+                .with_ollama_cli_mode(ollama_cli_enabled(&config));
             for provider_cfg in &config.provider {
-                // Use BridgeCliProvider for providers that support bridge architecture (spec_tooling.md)
-                let provider: Box<dyn agentgate::provider::CliProvider> = match provider_cfg.id.as_str() {
-                    "opencode" | "gemini" | "claude" => {
-                        if let Some(bp) = BridgeCliProvider::new(provider_cfg.clone()) {
-                            Box::new(bp)
-                        } else {
-                            Box::new(CliProviderImpl::new(provider_cfg.clone()))
-                        }
-                    }
-                    _ => Box::new(CliProviderImpl::new(provider_cfg.clone())),
-                };
+                // Bridge-capable agents use the MCP bridge adapter (spec_tooling.md §12);
+                // set `bridge = false` on the provider to opt out.
+                let provider = agentgate::provider::build_cli_provider(
+                    provider_cfg,
+                    Some(registry.bridge.clone()),
+                );
                 registry.register(provider).await;
             }
             let provider_filter = provider.as_deref();
@@ -183,19 +186,16 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Test { model, prompt } => {
-            let mut registry = ServiceRegistry::new().with_reasoning(config.reasoning.clone());
+            let mut registry = ServiceRegistry::new()
+                .with_reasoning(config.reasoning.clone())
+                .with_ollama_cli_mode(ollama_cli_enabled(&config));
             for provider_cfg in &config.provider {
-                // Use BridgeCliProvider for providers that support bridge architecture (spec_tooling.md)
-                let provider: Box<dyn agentgate::provider::CliProvider> = match provider_cfg.id.as_str() {
-                    "opencode" | "gemini" | "claude" => {
-                        if let Some(bp) = BridgeCliProvider::new(provider_cfg.clone()) {
-                            Box::new(bp)
-                        } else {
-                            Box::new(CliProviderImpl::new(provider_cfg.clone()))
-                        }
-                    }
-                    _ => Box::new(CliProviderImpl::new(provider_cfg.clone())),
-                };
+                // Bridge-capable agents use the MCP bridge adapter (spec_tooling.md §12);
+                // set `bridge = false` on the provider to opt out.
+                let provider = agentgate::provider::build_cli_provider(
+                    provider_cfg,
+                    Some(registry.bridge.clone()),
+                );
                 registry.register(provider).await;
             }
             let request = ChatCompletionRequest {

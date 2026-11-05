@@ -143,6 +143,10 @@ pub fn process_request_tools(
             // Always use agentgate tools
             request.tools = Some(tool_schemas_to_tool_definitions(&agentgate_tools));
         }
+        ClientToolsPolicy::Reject => {
+            // Fail-closed: client tool escalation is not allowed; use agentgate tools.
+            request.tools = Some(tool_schemas_to_tool_definitions(&agentgate_tools));
+        }
     }
 
     // Validate tool_choice if tools are present
@@ -454,4 +458,133 @@ pub fn normalize_schema(schema: &ToolSchema, profile: SchemaProfile) -> ToolSche
     }
 
     normalized
+}
+// ===========================================================================
+// OpenAI-safe tool name aliasing (spec §8)
+// ===========================================================================
+
+/// Whether `name` matches the OpenAI tool function name constraints
+/// (^[A-Za-z0-9_-]{1,64}$).
+pub fn is_openai_tool_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Deterministic alias for a tool name. Valid OpenAI names pass through
+/// unchanged; invalid ones become `t{index:02}_<sanitized>` (<= 64 chars).
+/// The same input sequence always produces the same mapping, so the alias can
+/// be recomputed on both sides (bridge registration and response emission).
+pub fn openai_name_alias(name: &str, index: usize) -> String {
+    if is_openai_tool_name(name) {
+        return name.to_string();
+    }
+    let sanitized = crate::bridge::sanitize_tool_name(name);
+    let prefix = format!("t{:02}_", index);
+    let budget = 64usize.saturating_sub(prefix.len());
+    let trimmed: String = sanitized.chars().take(budget).collect();
+    format!("{}{}", prefix, trimmed)
+}
+
+/// Map of `original name -> alias` for the tools that need one.
+/// Deterministic given the same `tools` slice.
+pub fn openai_name_aliases(
+    tools: &[crate::types::ToolDefinition],
+) -> HashMap<String, String> {
+    tools
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| {
+            let alias = openai_name_alias(&t.function.name, i);
+            if alias != t.function.name {
+                Some((t.function.name.clone(), alias))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Rewrite tool calls to use the original (client-registered) names.
+/// Call this when emitting tool calls back to the client (spec §8 alias round trip).
+pub fn unalias_tool_calls(
+    calls: &mut [crate::reasoning::event::ToolCall],
+    tools: &[crate::types::ToolDefinition],
+) {
+    let reverse: HashMap<String, String> = openai_name_aliases(tools)
+        .into_iter()
+        .map(|(orig, alias)| (alias, orig))
+        .collect();
+    if reverse.is_empty() {
+        return;
+    }
+    for call in calls.iter_mut() {
+        if let Some(orig) = reverse.get(&call.function.name) {
+            call.function.name = orig.clone();
+        }
+    }
+}
+
+// ===========================================================================
+// $ref inlining (spec §8)
+// ===========================================================================
+
+/// Resolve local JSON-Schema references (`#/$defs/<name>` and
+/// `#/definitions/<name>`) inline. Non-local refs are left untouched.
+/// `$defs`/`definitions` are removed from the root when fully inlined.
+pub fn inline_refs(schema: serde_json::Value) -> serde_json::Value {
+    let mut root = schema;
+    let defs = root.get("$defs").and_then(|v| v.as_object().cloned()).unwrap_or_default();
+    let definitions = root
+        .get("definitions")
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+
+    resolve_refs(&mut root, &defs, &definitions, 0);
+
+    if let Some(obj) = root.as_object_mut() {
+        obj.remove("$defs");
+        obj.remove("definitions");
+    }
+    root
+}
+
+fn resolve_refs(
+    node: &mut serde_json::Value,
+    defs: &serde_json::Map<String, serde_json::Value>,
+    definitions: &serde_json::Map<String, serde_json::Value>,
+    depth: usize,
+) {
+    if depth > 16 {
+        return;
+    }
+    match node {
+        serde_json::Value::Object(obj) => {
+            if let Some(serde_json::Value::String(reference)) = obj.get("$ref").cloned() {
+                let target = reference
+                    .strip_prefix("#/$defs/")
+                    .and_then(|name| defs.get(name))
+                    .or_else(|| {
+                        reference
+                            .strip_prefix("#/definitions/")
+                            .and_then(|name| definitions.get(name))
+                    });
+                if let Some(target) = target {
+                    let mut target = target.clone();
+                    resolve_refs(&mut target, defs, definitions, depth + 1);
+                    *node = target;
+                    return;
+                }
+            }
+            for value in obj.values_mut() {
+                resolve_refs(value, defs, definitions, depth + 1);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                resolve_refs(item, defs, definitions, depth + 1);
+            }
+        }
+        _ => {}
+    }
 }

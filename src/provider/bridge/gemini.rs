@@ -1,9 +1,9 @@
 //! Gemini CLI bridge provider — V2 adapter implementing spec_tooling.md.
 
-use crate::bridge::{BridgeClient, Run, ToolResult, ToolSchema};
+use crate::bridge::BridgeClient;
 use crate::provider::bridge::{
     BridgeConfig, BridgeProfile, BridgeProviderFactory, BridgeProviderV2, BridgeSession,
-    BridgeToolResult, McpConfig, McpServerConfig, ToolCall, SessionOutput,
+    BridgeToolResult, McpConfig, McpServerConfig, SessionOutput,
 };
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -15,10 +15,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{mpsc, Mutex, oneshot};
-use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tokio::process::{Child, ChildStdin, Command};
+use tokio::sync::{mpsc, Mutex};
+use tracing::{debug, info, warn};
 use uuid;
 
 /// Gemini CLI bridge provider (V2)
@@ -140,8 +139,14 @@ impl GeminiSession {
         profile: BridgeProfile,
         tool_disable_config: Value,
     ) -> Result<Self> {
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let mcp_token = uuid::Uuid::new_v4().to_string().replace("-", "");
+        let session_id = config
+            .session_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let mcp_token = config
+            .session_token
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string().replace("-", ""));
         let mcp_port = config.port;
 
         // Create empty working directory per session (spec §11.3)
@@ -151,7 +156,7 @@ impl GeminiSession {
 
         // Build MCP config with tool-disabling config
         let mcp_config = Self::build_mcp_config(&mcp_token, mcp_port, &session_id, &tool_disable_config)?;
-        let mcp_config_json = serde_json::to_string(&mcp_config)?;
+        let _mcp_config_json = serde_json::to_string(&mcp_config)?;
 
         // Prepare command
         let mut cmd = Command::new(&profile.binary);
@@ -199,6 +204,37 @@ impl GeminiSession {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .context("Failed to spawn gemini process")?;
+
+        // Debug: verify actual working directory of spawned process (spec §11.3)
+        if let Some(pid) = child.id() {
+            #[cfg(target_os = "linux")]
+            {
+                if let Ok(cwd) = std::fs::read_link(format!("/proc/{}/cwd", pid)) {
+                    info!(
+                        target: "bridge.gemini.cwd",
+                        session_id = %session_id,
+                        expected = %workdir.display(),
+                        actual = %cwd.display(),
+                        "Verified child process working directory"
+                    );
+                }
+            }
+            #[cfg(target_os = "macos")]
+            {
+                use std::process::Command;
+                if let Ok(output) = Command::new("lsof").args(["-p", &pid.to_string(), "-d", "cwd"]).output() {
+                    if let Ok(stdout) = String::from_utf8(output.stdout) {
+                        info!(
+                            target: "bridge.gemini.cwd",
+                            session_id = %session_id,
+                            expected = %workdir.display(),
+                            lsof_output = %stdout,
+                            "Child process working directory (via lsof)"
+                        );
+                    }
+                }
+            }
+        }
 
         let stdin = child.stdin.take().context("Failed to get stdin")?;
         let stdout = child.stdout.take().context("Failed to get stdout")?;
@@ -372,6 +408,11 @@ impl BridgeSession for GeminiSession {
         &self.profile
     }
 
+    /// Preflight isolation check per spec §13.2 (wired via shared helper).
+    async fn preflight_isolation_check(&self) -> Result<bool> {
+        crate::provider::bridge::preflight_isolation_check(&self.profile, &self.session_id, "gemini").await
+    }
+
     async fn send_user_message(&self, text: &str) -> Result<()> {
         if *self.closed.lock().await {
             return Err(anyhow!("Session is closed"));
@@ -425,6 +466,7 @@ impl BridgeSession for GeminiSession {
         // Drain events from the channel to collect output
         let mut content = String::new();
         let mut reasoning = None;
+        let mut tool_calls: Vec<crate::types::ToolCall> = Vec::new();
 
         // Take the event receiver
         let mut rx_guard = self.event_rx.lock().await;
@@ -450,6 +492,29 @@ impl BridgeSession for GeminiSession {
                     content.push_str(c);
                     content.push('\n');
                 }
+                if let Some(arr) = event.get("tool_calls").and_then(|v| v.as_array()) {
+                    for tc in arr {
+                        if let (Some(id), Some(ty), Some(func)) = (
+                            tc.get("id").and_then(|v| v.as_str()),
+                            tc.get("type").and_then(|v| v.as_str()),
+                            tc.get("function"),
+                        ) {
+                            if let (Some(name), Some(args)) = (
+                                func.get("name").and_then(|v| v.as_str()),
+                                func.get("arguments").and_then(|v| v.as_str()),
+                            ) {
+                                tool_calls.push(crate::types::ToolCall {
+                                    id: id.to_string(),
+                                    r#type: ty.to_string(),
+                                    function: crate::reasoning::event::FunctionCall {
+                                        name: name.to_string(),
+                                        arguments: args.to_string(),
+                                    },
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
         drop(rx_guard);
@@ -464,6 +529,7 @@ impl BridgeSession for GeminiSession {
         Ok(SessionOutput {
             content: content.trim().to_string(),
             reasoning: reasoning.map(|r| r.trim().to_string()),
+            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
         })
     }
 }
@@ -511,7 +577,8 @@ mod tests {
 
     #[test]
     fn mcp_config_serialization() {
-        let config = GeminiSession::build_mcp_config("test-token", 8788, "test-session", serde_json::json!({})).unwrap();
+        let tool_disable = serde_json::json!({});
+        let config = GeminiSession::build_mcp_config("test-token", 8788, "test-session", &tool_disable).unwrap();
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("agentgate"));
         assert!(json.contains("test-token"));

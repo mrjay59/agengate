@@ -278,6 +278,7 @@ impl OllamaNativeProvider {
                 completion_tokens: resp.eval_count.unwrap_or(0) as u32,
                 total_tokens: (resp.prompt_eval_count.unwrap_or(0) + resp.eval_count.unwrap_or(0)) as u32,
             }),
+            session_id: None,
         })
     }
 
