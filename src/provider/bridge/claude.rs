@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,28 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info, warn};
 use uuid;
+
+/// P1-AUDIT seq3: Resolve binary path with .cmd/PATHEXT handling on Windows.
+/// Falls back through PATHEXT extensions (.cmd, .bat, .ps1) when the bare
+/// binary name fails to resolve.
+fn resolve_binary_path(binary: &str) -> Result<PathBuf> {
+    if Path::new(binary).exists() || binary.contains('.') {
+        return Ok(PathBuf::from(binary));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        for ext in pathext.split(';') {
+            let candidate = format!("{}{}", binary, ext);
+            if std::process::Command::new(&candidate).arg("--version").output().is_ok() {
+                return Ok(PathBuf::from(candidate));
+            }
+        }
+    }
+
+    Ok(PathBuf::from(binary))
+}
 
 /// Claude Code bridge provider (V2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,7 +59,7 @@ impl ClaudeBridgeProvider {
                 args: vec!["--output-format".into(), "stream-json".into()],
                 env: HashMap::new(),
                 mcp_config_template: Some(
-                    r#"{"mcpServers":{"agentgate":{"type":"http","url":"http://127.0.0.1:{port}/_bridge/mcp/{session}","headers":{"Authorization":"Bearer {token}"}}}}"#
+                    r#"{"mcpServers":{"agentgate":{"type":"{transport}","url":"{transport_url}","headers":{"Authorization":"Bearer {token}"}}}}"#
                         .into(),
                 ),
                 tool_schema_format: "anthropic".into(),
@@ -55,6 +78,8 @@ impl ClaudeBridgeProvider {
                     "todoread".into(),
                     "task".into(),
                     "web_search".into(),
+                    "agentgate_*".into(),
+                    "mcp__agentgate__".into(),
                 ],
             },
         }
@@ -109,7 +134,9 @@ impl BridgeProviderV2 for ClaudeBridgeProvider {
     }
 
     async fn health_check(&self) -> Result<bool> {
-        match Command::new(&self.profile.binary).arg("--version").output().await {
+        // P1-AUDIT seq3: Resolve binary with .cmd/PATHEXT handling on Windows.
+        let resolved_binary = resolve_binary_path(&self.profile.binary)?;
+        match Command::new(resolved_binary).arg("--version").output().await {
             Ok(output) => Ok(output.status.success()),
             Err(_) => Ok(false),
         }
@@ -180,8 +207,14 @@ impl ClaudeSession {
             .context("Failed to write Claude MCP config file")?;
 
         // Prepare command
-        let mut cmd = Command::new(&profile.binary);
+        // P1-AUDIT seq3: Resolve binary with .cmd/PATHEXT handling on Windows.
+        let resolved_binary = resolve_binary_path(&profile.binary)?;
+        let mut cmd = Command::new(resolved_binary);
         cmd.args(&profile.args);
+
+        // P1-AUDIT seq3: Add --tools "" to disable Claude built-in tools
+        // (fail-closed isolation; only agentgate_*/mcp__agentgate__ tools via MCP)
+        cmd.arg("--tools").arg("");
 
         // Strict MCP config per spec §12.4: only agentgate MCP server, no global config
         cmd.arg("--mcp-config").arg(&mcp_config_file);
@@ -336,12 +369,15 @@ impl ClaudeSession {
             );
             m
         } else {
+            // P1-AUDIT seq3: Use transport variable instead of hardcoded http.
+            // transport can be "http", "sse", "ws", etc. - construct URL accordingly.
+            let transport_url = format!("{}://127.0.0.1:{}/_bridge/mcp/{}", transport, port, session_id);
             let mut m = HashMap::new();
             m.insert(
                 "agentgate".into(),
                 McpServerConfig {
-                    r#type: "http".into(),
-                    url: Some(format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}")),
+                    r#type: transport.into(),
+                    url: Some(transport_url),
                     headers: Some({
                         let mut headers = HashMap::new();
                         headers.insert("Authorization".into(), format!("Bearer {token}"));
@@ -401,10 +437,13 @@ impl ClaudeSession {
                 }
             })
         } else {
+            // P1-AUDIT seq3: Use transport variable instead of hardcoded http.
+            // transport can be "http", "sse", "ws", etc. - construct URL accordingly.
+            let transport_url = format!("{}://127.0.0.1:{}/_bridge/mcp/{}", transport, port, session_id);
             serde_json::json!({
                 "agentgate": {
-                    "type": "http",
-                    "url": format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}"),
+                    "type": transport,
+                    "url": transport_url,
                     "headers": { "Authorization": format!("Bearer {token}") }
                 }
             })
@@ -641,7 +680,7 @@ impl BridgeProviderFactory for ClaudeBridgeFactory {
             args: vec!["--output-format".into(), "stream-json".into()],
             env: HashMap::new(),
             mcp_config_template: Some(
-                r#"{"mcpServers":{"agentgate":{"type":"http","url":"http://127.0.0.1:{port}/_bridge/mcp/{session}","headers":{"Authorization":"Bearer {token}"}}}}"#
+                r#"{"mcpServers":{"agentgate":{"type":"{transport}","url":"{transport_url}","headers":{"Authorization":"Bearer {token}"}}}}"#
                     .into(),
             ),
             tool_schema_format: "anthropic".into(),
@@ -672,3 +711,4 @@ mod tests {
         assert!(json.contains("test-session"));
     }
 }
+

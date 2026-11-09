@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,28 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info, warn};
 use uuid;
+
+/// P1-AUDIT seq3: Resolve binary path with .cmd/PATHEXT handling on Windows.
+/// Falls back through PATHEXT extensions (.cmd, .bat, .ps1) when the bare
+/// binary name fails to resolve.
+fn resolve_binary_path(binary: &str) -> Result<PathBuf> {
+    if Path::new(binary).exists() || binary.contains('.') {
+        return Ok(PathBuf::from(binary));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        for ext in pathext.split(';') {
+            let candidate = format!("{}{}", binary, ext);
+            if std::process::Command::new(&candidate).arg("--version").output().is_ok() {
+                return Ok(PathBuf::from(candidate));
+            }
+        }
+    }
+
+    Ok(PathBuf::from(binary))
+}
 
 /// Gemini CLI bridge provider (V2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,7 +59,7 @@ impl GeminiBridgeProvider {
                 args: vec!["generate".into(), "--model".into(), "{model}".into(), "--prompt-stdin".into()],
                 env: HashMap::new(),
                 mcp_config_template: Some(
-                    r#"{"mcpServers":{"agentgate":{"type":"http","url":"http://127.0.0.1:{port}/_bridge/mcp/{session}","headers":{"Authorization":"Bearer {token}"}}}}"#
+                    r#"{"mcpServers":{"agentgate":{"type":"{transport}","url":"{transport_url}","headers":{"Authorization":"Bearer {token}"}}}}"#
                         .into(),
                 ),
                 tool_schema_format: "openai".into(),
@@ -55,6 +78,8 @@ impl GeminiBridgeProvider {
                     "todoread".into(),
                     "task".into(),
                     "web_search".into(),
+                    "agentgate_*".into(),
+                    "mcp__agentgate__".into(),
                 ],
             },
         }
@@ -109,7 +134,9 @@ impl BridgeProviderV2 for GeminiBridgeProvider {
     }
 
     async fn health_check(&self) -> Result<bool> {
-        match Command::new(&self.profile.binary).arg("--version").output().await {
+        // P1-AUDIT seq3: Resolve binary with .cmd/PATHEXT handling on Windows.
+        let resolved_binary = resolve_binary_path(&self.profile.binary)?;
+        match Command::new(resolved_binary).arg("--version").output().await {
             Ok(output) => Ok(output.status.success()),
             Err(_) => Ok(false),
         }
@@ -178,7 +205,9 @@ impl GeminiSession {
             .context("Failed to write Gemini settings file")?;
 
         // Prepare command
-        let mut cmd = Command::new(&profile.binary);
+        // P1-AUDIT seq3: Resolve binary with .cmd/PATHEXT handling on Windows.
+        let resolved_binary = resolve_binary_path(&profile.binary)?;
+        let mut cmd = Command::new(resolved_binary);
         cmd.args(&profile.args);
 
         // Set working directory to empty session workdir (spec §11.3)
@@ -338,12 +367,15 @@ impl GeminiSession {
             );
             m
         } else {
+            // P1-AUDIT seq3: Use transport variable instead of hardcoded http.
+            // transport can be "http", "sse", "ws", etc. - construct URL accordingly.
+            let transport_url = format!("{}://127.0.0.1:{}/_bridge/mcp/{}", transport, port, session_id);
             let mut m = HashMap::new();
             m.insert(
                 "agentgate".into(),
                 McpServerConfig {
-                    r#type: "http".into(),
-                    url: Some(format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}")),
+                    r#type: transport.into(),
+                    url: Some(transport_url),
                     headers: Some({
                         let mut headers = HashMap::new();
                         headers.insert("Authorization".into(), format!("Bearer {token}"));
@@ -403,10 +435,12 @@ impl GeminiSession {
                 }
             })
         } else {
+            // P1-AUDIT seq3: Use transport variable instead of hardcoded http.
+            let transport_url = format!("{}://127.0.0.1:{}/_bridge/mcp/{}", transport, port, session_id);
             serde_json::json!({
                 "agentgate": {
-                    "type": "http",
-                    "url": format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}"),
+                    "type": transport,
+                    "url": transport_url,
                     "headers": { "Authorization": format!("Bearer {token}") }
                 }
             })
@@ -643,12 +677,25 @@ impl BridgeProviderFactory for GeminiBridgeFactory {
             args: vec!["generate".into(), "--model".into(), "{model}".into(), "--prompt-stdin".into()],
             env: HashMap::new(),
             mcp_config_template: Some(
-                r#"{"mcpServers":{"agentgate":{"type":"http","url":"http://127.0.0.1:{port}/_bridge/mcp/{session}","headers":{"Authorization":"Bearer {token}"}}}}"#
+                r#"{"mcpServers":{"agentgate":{"type":"{transport}","url":"{transport_url}","headers":{"Authorization":"Bearer {token}"}}}}"#
                     .into(),
             ),
             tool_schema_format: "openai".into(),
             supports_streaming: true,
-            guard_patterns: vec!["bash".into(), "edit".into(), "write".into()],
+            guard_patterns: vec![
+                    "bash".into(),
+                    "edit".into(),
+                    "write".into(),
+                    "read".into(),
+                    "patch".into(),
+                    "grep".into(),
+                    "glob".into(),
+                    "list".into(),
+                    "webfetch".into(),
+                    "todowrite".into(),
+                    "agentgate_*".into(),
+                    "mcp__agentgate__".into(),
+                ],
         }
     }
 }
@@ -674,3 +721,5 @@ mod tests {
         assert!(json.contains("test-session"));
     }
 }
+
+

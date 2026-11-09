@@ -33,7 +33,7 @@ async fn resolve_tool_result_by_id_finds_associated_tool_call() {
     // Hold an MCP call keyed by mcp_id="mcp-1", then associate OpenAI tool_call_id and resolve by it.
     let b = bridge.clone();
     let hold = tokio::spawn(async move {
-        b.hold_tool_call("mcp-1".to_string(), "sess".to_string(), "demo".to_string(), 5).await
+        b.hold_tool_call("mcp-1".to_string(), "sess".to_string(), None, None, "demo".to_string(), 5).await
     });
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     // S4: resolve with real result by associated/openai id lookup path

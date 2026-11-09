@@ -52,7 +52,7 @@ async fn resolve_requires_the_owning_session_token() {
     let owner = session_id.clone();
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-                let res = bridge.hold_tool_call("call_auth".to_string(), owner, "demo".to_string(), 5).await;
+                let res = bridge.hold_tool_call("call_auth".to_string(), owner, None, None, "demo".to_string(), 5).await;
                 let _ = done_tx.send(res.map(|r| r.content.to_string()).ok());
     });
     tokio::task::yield_now().await;
@@ -105,7 +105,7 @@ async fn delete_session_wakes_held_calls() {
     let owner = session_id.clone();
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let res = bridge.hold_tool_call("call_del".to_string(), owner, "demo".to_string(), 5).await;
+        let res = bridge.hold_tool_call("call_del".to_string(), owner, None, None, "demo".to_string(), 5).await;
         let _ = done_tx.send(res.is_err());
     });
     tokio::task::yield_now().await;
