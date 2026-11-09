@@ -25,6 +25,9 @@ jobs:
       - name: cargo test --lib
         run: cargo test --lib
 
+      - name: cargo test --tests (E2E)
+        run: cargo test --tests
+
   build-windows-x86_64:
     runs-on: windows-latest
     steps:
