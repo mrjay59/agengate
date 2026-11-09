@@ -345,7 +345,7 @@ impl BridgeServer {
     }
 
     pub async fn hold_tool_call(&self, mcp_id: String, session_id: String, tool_name: String, timeout_secs: u64) -> Result<ToolResult> {
-        let (tx, rx) = oneshot::channel();
+        let (mut tx, mut rx) = oneshot::channel();
         self.pending_calls.lock().await.insert(
             mcp_id.clone(),
             PendingCall { session_id, run_id: None, tool_name, tool_call_id: None, tx },
@@ -353,33 +353,39 @@ impl BridgeServer {
         
         info!(event = "bridge.tool_call.hold", mcp_id = %mcp_id, timeout = timeout_secs);
         
-        let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
 
-        let result = tokio::time::timeout(timeout_duration, async {
-            loop {
-                tokio::select! {
-                    result = rx => return result,
-                    _ = ticker.tick() => {
-                        info!(event = "bridge.tool_call.hold_keepalive", mcp_id = %mcp_id);
-                    }
-                }
-            }
-        }).await;
-
-        match result {
-            Ok(Ok(res)) => {
-                info!(event = "bridge.tool_call.resolved", mcp_id = %mcp_id);
-                Ok(res)
-            }
-            Ok(Err(_)) => {
-                self.pending_calls.lock().await.remove(&mcp_id);
-                Err(anyhow::anyhow!("channel closed"))
-            }
-            Err(_) => {
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
                 self.pending_calls.lock().await.remove(&mcp_id);
                 info!(event = "bridge.tool_call.timeout", mcp_id = %mcp_id);
-                Err(anyhow::anyhow!("timeout menunggu hasil dari client"))
+                return Err(anyhow::anyhow!("timeout menunggu hasil dari client"));
+            }
+
+            tokio::select! {
+                biased;
+                result = &mut rx => {
+                    match result {
+                        Ok(res) => {
+                            info!(event = "bridge.tool_call.resolved", mcp_id = %mcp_id);
+                            return Ok(res);
+                        }
+                        Err(_) => {
+                            self.pending_calls.lock().await.remove(&mcp_id);
+                            return Err(anyhow::anyhow!("channel closed"));
+                        }
+                    }
+                }
+                _ = ticker.tick() => {
+                    info!(event = "bridge.tool_call.hold_keepalive", mcp_id = %mcp_id);
+                }
+                _ = tokio::time::sleep(remaining) => {
+                    self.pending_calls.lock().await.remove(&mcp_id);
+                    info!(event = "bridge.tool_call.timeout", mcp_id = %mcp_id);
+                    return Err(anyhow::anyhow!("timeout menunggu hasil dari client"));
+                }
             }
         }
     }

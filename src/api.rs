@@ -571,7 +571,7 @@ async fn emit_event(
                     }]
                 })).await;
                 // Chunk 2+: 512-byte argument slices
-                let args = call.function.arguments.as_str().unwrap_or("");
+                let args = call.function.arguments.as_str();
                 let args_bytes = args.as_bytes();
                 for chunk in args_bytes.chunks(512) {
                     send_delta(tx, ctx, serde_json::json!({
