@@ -554,22 +554,39 @@ async fn emit_event(
             for delta in writer.close_think() {
                 send_delta(tx, ctx, delta).await;
             }
-            let tool_calls: Vec<serde_json::Value> = calls
-                .iter()
-                .enumerate()
-                .map(|(index, call)| {
-                    serde_json::json!({
+            // SSE §7.4: emit per-tool-call chunks — Chunk 1 with empty arguments,
+            // then Chunk 2+ with 512-byte argument slices, final finish_reason="tool_calls".
+            for (index, call) in calls.iter().enumerate() {
+                let name = call.function.name.clone();
+                // Chunk 1: empty arguments
+                send_delta(tx, ctx, serde_json::json!({
+                    "tool_calls": [{
                         "index": index,
                         "id": call.id,
                         "type": call.r#type,
                         "function": {
-                            "name": call.function.name.clone(),
-                            "arguments": call.function.arguments
+                            "name": name,
+                            "arguments": ""
                         }
-                    })
-                })
-                .collect();
-            send_delta(tx, ctx, serde_json::json!({ "tool_calls": tool_calls })).await;
+                    }]
+                })).await;
+                // Chunk 2+: 512-byte argument slices
+                let args = call.function.arguments.as_str().unwrap_or("");
+                let args_bytes = args.as_bytes();
+                for chunk in args_bytes.chunks(512) {
+                    send_delta(tx, ctx, serde_json::json!({
+                        "tool_calls": [{
+                            "index": index,
+                            "id": call.id,
+                            "type": call.r#type,
+                            "function": {
+                                "name": name,
+                                "arguments": std::str::from_utf8(chunk).unwrap_or("")
+                            }
+                        }]
+                    })).await;
+                }
+            }
             let _ = send_sse(tx, &ctx.chunk(serde_json::json!({}), Some("tool_calls"))).await;
         }
         RunEvent::Usage {

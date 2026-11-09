@@ -353,15 +353,29 @@ impl BridgeServer {
         
         info!(event = "bridge.tool_call.hold", mcp_id = %mcp_id, timeout = timeout_secs);
         
-        match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
+        let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
+
+        let result = tokio::time::timeout(timeout_duration, async {
+            loop {
+                tokio::select! {
+                    result = rx => return result,
+                    _ = ticker.tick() => {
+                        info!(event = "bridge.tool_call.hold_keepalive", mcp_id = %mcp_id);
+                    }
+                }
+            }
+        }).await;
+
+        match result {
             Ok(Ok(res)) => {
                 info!(event = "bridge.tool_call.resolved", mcp_id = %mcp_id);
                 Ok(res)
-            },
+            }
             Ok(Err(_)) => {
                 self.pending_calls.lock().await.remove(&mcp_id);
                 Err(anyhow::anyhow!("channel closed"))
-            },
+            }
             Err(_) => {
                 self.pending_calls.lock().await.remove(&mcp_id);
                 info!(event = "bridge.tool_call.timeout", mcp_id = %mcp_id);

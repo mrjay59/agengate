@@ -15,9 +15,13 @@ pub async fn execute_providers(config: &Config) -> Result<()> {
         false, // ollama_cli_mode - not used for providers command
     );
     for provider_cfg in &config.provider {
-        let provider = CliProviderImpl::new(provider_cfg.clone());
+        // Bridge-capable agents use the MCP bridge adapter (spec_tooling.md §12).
+        let provider = crate::provider::build_cli_provider(
+            provider_cfg,
+            Some(registry.bridge.clone()),
+        );
         let available = provider.check_available().await;
-        registry.register(Box::new(provider)).await;
+        registry.register(provider).await;
         if available {
             tracing::info!("Provider {} is available", provider_cfg.id);
         } else {
@@ -43,7 +47,10 @@ pub async fn execute_models(config: &Config, provider_filter: Option<&str>) -> R
         false,
     );
     for provider_cfg in &config.provider {
-        registry.register(Box::new(CliProviderImpl::new(provider_cfg.clone()))).await;
+        registry.register(crate::provider::build_cli_provider(
+            provider_cfg,
+            Some(registry.bridge.clone()),
+        )).await;
     }
 
     let models = registry
@@ -70,7 +77,10 @@ pub async fn execute_test(config: &Config, model: &str, prompt: &str) -> Result<
         false,
     );
     for provider_cfg in &config.provider {
-        registry.register(Box::new(CliProviderImpl::new(provider_cfg.clone()))).await;
+        registry.register(crate::provider::build_cli_provider(
+            provider_cfg,
+            Some(registry.bridge.clone()),
+        )).await;
     }
 
     let request = ChatCompletionRequest {
