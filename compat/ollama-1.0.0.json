@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "updated": "2026-11-09",
+  "client": "ollama",
+  "binary": "ollama",
+  "transport": "native_http",
+  "endpoint": "http://localhost:11434/api/chat",
+  "mcp_config_method": "none",
+  "strict_mcp_config": false,
+  "disable_builtins": "N/A (no MCP bridge)",
+  "reasoning_effort": {
+    "mapping": {
+      "low": { "reasoning_effort": "low" },
+      "medium": { "reasoning_effort": "medium" },
+      "high": { "reasoning_effort": "high" }
+    },
+    "passthrough": true,
+    "notes": "Ollama native API accepts reasoning_effort param directly"
+  },
+  "tool_calls": {
+    "sse_format": "2-chunk (§7.4)",
+    "supports_parallel": true,
+    "via_bridge": false
+  },
+  "streaming_reasoning": {
+    "supported": true,
+    "format": "native_reasoning_stream",
+    "notes": "Native /api/chat stream with reasoning field"
+  },
+  "session_persistence": {
+    "supported": false,
+    "notes": "Stateless native API; no process parking"
+  },
+  "windows": {
+    "cmd_wrapper": "N/A",
+    "process_tree_kill": "N/A",
+    "path_ext": false
+  },
+  "temp_dir": "N/A",
+  "verification_status": "Native proxy — E2E 9router/AionUI pending"
+}

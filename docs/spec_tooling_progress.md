@@ -78,6 +78,7 @@ Exit: cargo build & cargo test hijau ✅ (13 tests passed)
 - 2026-11-05: P0-2 SELESAI — provider::build_cli_provider() memilih bridge adapter untuk opencode/gemini/claude; flag bridge=false dihormati. Test di bridge_session_registration_test.rs.
 - 2026-11-05: P0-3 SELESAI SEBAGIAN — render_conversation (system/tool_calls/tool result), session.close(), release MCP session, timeout AGENTGATE_BRIDGE_TIMEOUT_SECS. Sisa: resume persisten lintas request.
 - 2026-11-05: P0-4 SELESAI — resolve terikat session + Bearer token + Origin reject; DELETE menghapus session & membangunkan held call. Test: tests/bridge_resolve_auth_test.rs.
+- 2026-11-09 (S4-S6 prep, lead+BD, verified lokal): PR-S1–S3 done/reconciled; **PR-S4 code-wired** (opencode first, capability-gated, replay fallback wajib): continuation registry, opencode park-early+`wait_for_continuation`, `CliProviderImpl` keep MCP/provider session alive on `tool_calls`+capable, `service::resume_run` resolve real MCP holds → await continuation (timeout) → response or `replay_fallback{continuation_*}`; `ProviderResponse.mcp_session_id`, `ChatCompletionRequest.agentgate_run_id`. **PR-S5 reported complete by BD** (sweeps/rotation/TTL/cleanup paths; claim 137 tests); lead verified `cargo check` + core suites (lib 55, bridge_session_registration 8, spec_scenarios 8, sse 6, fail_closed 5, bridge_mcp_hold 1, bridge_resolve_auth 2). **S6 pending:** E2E target env (MCP-hold→CLI lanjut, Linux/9router/AionUI/VSC Copilot, hold>45s/cancel/batch, live resume vs replay), CI all-platform artifacts/checksums, audit §11 closure. **Gaps:** streaming continuation partial, multi-step continuation re-park/state, RequestBatcher wiring/alias/ID/TTL end-to-end, uncommitted working tree.
 - 2026-11-05: cargo build & cargo test hijau setelah P0-1..P0-4.
 - 2026-11-05: Ollama CLI mode SELESAI (spec_ollama-cli.md):
   - `ProviderConfig` + `BridgeConfig`: `ollama_mode`, `keep_alive`, `prompt_tools_fallback`.
@@ -149,3 +150,31 @@ Exit: cargo build & cargo test hijau ✅ (13 tests passed)
   - Bridge (`new_bridge_run`): emit event `batch.issued` (batch_size) saat response mengandung >1 tool_calls dalam satu batch.
   - Test: T20 (`tests/spec_scenarios_test.rs`) — serial memotong list ke 1; non-serial tidak memotong.
   - Full `cargo build` & `cargo test` hijau.
+
+- 2026-11-06: P3 Config wiring SELESAI — Wire `[routing]`/`[bridge]` file config ke `ServiceRegistry` runtime (task 01a1aad6-3863-7132-ae8a-63903f3e6889):
+  - `ServiceRegistry::with_config(routing, bridge_config, reasoning, defaults, ollama_cli_mode)` constructor baru.
+  - `main.rs` (Serve, Models, Doctor, Test commands) dan `cli.rs` (providers, models, test commands) sekarang menggunakan `with_config` dengan `config.routing`, `config.bridge`, `config.reasoning`, `config.defaults`.
+  - `ServiceRegistry::new()` tetap tersedia untuk backward compat (tests).
+  - `ServiceRegistry::with_routing` dan `with_bridge_config` dipertahankan untuk override manual.
+  - Semua lib tests (47/47) dan integration tests (fail_closed, config_bridge, schema_normalization, observability, persistent_resume, bridge_resolve_auth, bridge_mcp_hold, api_integration) PASS.
+  - Audit `docs/audit_spec_tooling.md` diperbarui: gap `[routing]`/`[bridge]` dihapus dari sisa gap utama.
+
+- 2026-11-09: P0-2 SELESAI — SSE tool_calls emit 2-chunk format per spec §7.4 (id/name chunk1, arguments fragments ≤512B chunk2+, finish_reason=tool_calls). File: `src/api.rs`. `cargo check` + `cargo test --lib` lulus.
+
+- 2026-11-09: P0-3 SELESAI — `notifications/cancelled` handler: cancel pending call + cancel run + close provider session (kill CLI child + process tree via `taskkill /F /T /PID` on Windows, cleanup `temp_dir()/agentgate/sessions/{id}/work`). Files: `src/api.rs`, `src/bridge.rs`, `src/provider.rs`. Idempotent, `cargo check` lulus.
+
+- 2026-11-09: P0-4 SELESAI — Keepalive during held MCP tools/call (periodic `: keepalive` every 15s while respecting call_ttl). File: `src/api.rs`, `src/bridge.rs` (by Backend Developer).
+
+- 2026-11-09: P1a SELESAI — Adapter strict MCP/config isolation:
+  - Claude: `--mcp-config <temp file> --strict-mcp-config` per session (no ~/.claude.json pollution). File: `src/provider/bridge/claude.rs`.
+  - Gemini: settings file per run via `GEMINI_CLI_SYSTEM_SETTINGS_PATH` file path. File: `src/provider/bridge/gemini.rs`.
+  - OpenCode: unchanged (`OPENCODE_CONFIG_CONTENT` env var). File: `src/provider/bridge/opencode.rs`.
+  - No api.rs/bridge.rs edits (P0-1b safe). `cargo check` lulus.
+
+- 2026-11-09: UX Grouping SELESAI — Reasoning/tool view steps grouped (fix fragmented "thought/view steps 1" per tool):
+  - `src/reasoning/parser.rs`: tool_calls emit view steps via `ensure_reasoning_start` + `ReasoningDelta` (format_tool_view_step) to SAME reasoning block, NO `end_reasoning()` per batch.
+  - `src/reasoning/coalesce.rs`: `ToolCalls` handler no longer flushes/ends reasoning block — persists until Done/Error/text delta boundary.
+  - Result: single reasoning block with grouped view steps, preserved `tool_calls` emission (P0-2), RS0 ordering intact.
+  - `cargo check` lulus, `cargo test --lib reasoning` 32 passed. E2E 9router/AionUI validation pending.
+
+- 2026-11-09: Verification/docs (lead+BD2, parsial/koreksi): `cargo check` OK; test lokal utama hijau (`--lib` 55, `spec_scenarios` 8, `fail_closed` 5, `sse_tool_calls_contract` 6, `bridge_mcp_hold` 1, `bridge_resolve_auth` 2, reasoning 34). Windows release (rebuilt): `target/release/agentgate.exe` (11,992,576 bytes, 2026-11-09 13:02:46, SHA256 `234BA39C1A2D5A4957F84E62EDFC22B949A22ED1DE88FC51F83079E6A72004B4`). CI scaffold `.github/workflows/build.yml` + `docs/BUILD_AND_RELEASE.md`; **artifact all-platform butuh CI/cross-toolchain**. **Koreksi status:** HEAD `227d772` klaim P0/P1/P2 complete, namun **P2 `01a1bde2-e9cd` in progress** (RequestBatcher wiring, enforcement `max_result_bytes`/`max_prompt_chars` di render, alias/ID/TTL polish) dan **P0-1b Stage 2 open**. E2E 9router/AionUI/Linux/VSC Copilot masih diperlukan (`audit.md` §11).

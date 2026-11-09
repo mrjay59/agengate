@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "updated": "2026-11-09",
+  "client": "gemini",
+  "binary": "gemini",
+  "transport": "stdio_shim",
+  "mcp_config_method": "file",
+  "settings_env_var": "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+  "strict_mcp_config": true,
+  "disable_builtins": "excludeTools: [\"*\"] in settings file",
+  "reasoning_effort": {
+    "mapping": {
+      "low": { "thinking": { "type": "enabled", "budget_tokens": 1024 } },
+      "medium": { "thinking": { "type": "enabled", "budget_tokens": 4096 } },
+      "high": { "thinking": { "type": "enabled", "budget_tokens": 16384 } }
+    },
+    "passthrough": false,
+    "notes": "Gemini uses 'thinking' budget tokens; no native reasoning_effort param"
+  },
+  "tool_calls": {
+    "sse_format": "2-chunk (§7.4)",
+    "supports_parallel": true,
+    "via_bridge": true
+  },
+  "streaming_reasoning": {
+    "supported": false,
+    "notes": "Via MCP bridge only"
+  },
+  "session_persistence": {
+    "supported": true,
+    "method": "parked_process_resume",
+    "notes": "Replay fallback if parked process lost (§10.6)"
+  },
+  "windows": {
+    "cmd_wrapper": "gemini.cmd",
+    "process_tree_kill": "taskkill /F /T /PID",
+    "path_ext": true
+  },
+  "temp_dir": "temp_dir()/agentgate/sessions/{id}/",
+  "verification_status": "P1a complete — E2E 9router/AionUI pending"
+}

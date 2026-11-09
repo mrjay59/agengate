@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "updated": "2026-11-09",
+  "client": "claude",
+  "binary": "claude",
+  "transport": "stdio_shim",
+  "mcp_config_method": "file",
+  "strict_mcp_config": true,
+  "disable_builtins": "--strict-mcp-config + MCP server excludeTools",
+  "reasoning_effort": {
+    "mapping": {
+      "low": { "thinking": { "type": "enabled", "budget_tokens": 1024 } },
+      "medium": { "thinking": { "type": "enabled", "budget_tokens": 4096 } },
+      "high": { "thinking": { "type": "enabled", "budget_tokens": 16384 } }
+    },
+    "passthrough": false,
+    "notes": "Claude uses 'thinking' budget tokens; no native reasoning_effort param"
+  },
+  "tool_calls": {
+    "sse_format": "2-chunk (§7.4)",
+    "supports_parallel": true,
+    "via_bridge": true
+  },
+  "streaming_reasoning": {
+    "supported": false,
+    "notes": "Via MCP bridge only"
+  },
+  "session_persistence": {
+    "supported": true,
+    "method": "parked_process_resume",
+    "notes": "Replay fallback if parked process lost (§10.6)"
+  },
+  "windows": {
+    "cmd_wrapper": "claude.cmd",
+    "process_tree_kill": "taskkill /F /T /PID",
+    "path_ext": true
+  },
+  "temp_dir": "temp_dir()/agentgate/sessions/{id}/",
+  "verification_status": "P1a complete — E2E 9router/AionUI pending"
+}

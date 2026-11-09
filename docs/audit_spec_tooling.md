@@ -14,10 +14,11 @@
 Sejak audit 2026-11-03, seluruh P0 (4 blocker), P1 (fail-closed, schema normalization, config lengkap, persistent resume, batching/serial enforcement), dan P2 (observabilitas, suite test T1–T23) sudah ditangani. `cargo build` dan `cargo test` hijau (lib 47 tests + semua integration tests pass).
 
 Sisa gap utama:
-- **[routing]**/**[bridge]** file config masih diabaikan runtime (pakai default `ServiceRegistry`)
 - `spike-bridge` command (§17) butuh binary CLI asli
 - `doctor --probe-chain` (§16/§17) belum ada
 - Window-based batching (`RequestBatcher`) & semaphore `max_concurrency_per_provider` belum ditegakkan (serial gate sudah)
+- Error type differentiation (`server_error`/`provider_error` vs `invalid_request_error`)
+- Stdio shim transport (`transport = "stdio_shim"`)
 
 Legenda: ✅ sesuai · ⚠️ sebagian/parsial · ❌ belum ada
 
@@ -284,10 +285,39 @@ Jalur HTTP native tetap jadi default. Sivai task P1 berikutnya:
 `docs/spec_tooling.md` **IMPLEMENTASI UTAMA SELESAI** (≈ 85–90% dari spec). Kerangka besar sudah ada dan berkualitas (modul, state machine, endpoint MCP, adapter provider, kontrak API dasar). Semua blocker P0 sudah ditangani (session MCP terdaftar, opencode ter-wire, resolve terautentikasi, riwayat terstruktur + cleanup + timeout). Seluruh P1 (fail-closed 501/503, normalisasi skema + alias + $ref inline, config §14 lengkap + env overrides + limits, persistent resume CLI process keep-alive, batching & serial enforcement + semaphores + `max_runs_per_key` + `RequestBatcher` window-based) dan P2 (observabilitas: `/_metrics` Prometheus, `X-Agentgate-*` headers, event log NDJSON, TTFT; suite test T1–T23 implemented 10 PASS + 12 skipped with reasons; Ollama CLI mode lengkap) sudah selesai. `cargo build` dan `cargo test` hijau.
 
 Sisa gap utama (P3):
-- `[routing]`/`[bridge]` file config masih diabaikan runtime (pakai default `ServiceRegistry`)
 - `spike-bridge` command (§17) butuh binary CLI asli
-- `doctor --probe-chain` (§16/§17) belum ada
+- `doctor --probe-chain` (§16/§17) belum ada (stub di tempat)
 - Error type `server_error`/`provider_error` vs `invalid_request_error` belum dibedakan
 - Stdio shim transport (`transport = "stdio_shim"`) belum ada
 
 Perkiraan effort untuk mencapai kepatuhan penuh (P3 items): **≈ 2–3 hari** (asumsi 1 engineer familiar dengan codebase).
+
+---
+
+## 8. Update 2026-11-09 (Verification + Windows release build + CI)
+
+**Verification (local, Windows host, lead):** `cargo check` OK; `cargo test --lib` 55 passed; `spec_scenarios_test` 8; `fail_closed_test` 5; `sse_tool_calls_contract_test` 6; `bridge_mcp_hold_test` 1; `bridge_resolve_auth_test` 2; `reasoning` lib 34 (BD2). Windows release artifact (rebuilt): `target/release/agentgate.exe` (11,992,576 bytes, 2026-11-09 13:02:46, SHA256 `234BA39C1A2D5A4957F84E62EDFC22B949A22ED1DE88FC51F83079E6A72004B4`). CI scaffold: `.github/workflows/build.yml` (Windows/Linux x86_64+aarch64 matrix intent per `docs/BUILD_AND_RELEASE.md`); cross-linker config `.cargo/config.toml` (jika ada). **All-platform artifacts + checksums:** butuh CI/cross-toolchain (belum lengkap di sesi ini).
+
+**Status koreksi (2026-11-09, updated):** HEAD `227d772` mengklaim "Complete P0/P1/P2". **P2 ditutup pragmatis** (render/bridge `max_result_bytes` enforcement, batch dedupe/sanitize, regresi NameMap-per-call diperbaiki; gap tersisa: `RequestBatcher` belum ter-wire ke flow nyata + "queue remaining vs truncate", reverse alias-collision mapping, verifikasi ID format/resumability/TTL end-to-end, E2E paralel 2 tool calls). **P0-1b Stage 2 / PR-S4 code-wired** (opencode first, capability-gated, replay fallback wajib): continuation registry + opencode park-early/`wait_for_continuation` + `CliProviderImpl` keep session alive on `tool_calls`+capable + `service::resume_run` resolve real MCP holds → await continuation (timeout) → response/replay fallback; linkage populated. **S5 partial** (BD melapor complete, 137 tests diklaim; lead verifikasi core suites + increments: continuation sweep, replay session rotation/clear, cleanup continuation/provider terminal paths, `cancel_run`/evicted-key cleanup, orphan session *dir* sweep startup; tersisa PID/process orphan sweep, jaminan `cli_gen++`/fresh session per adapter penuh, TTL/process-tree end-to-end termasuk multi-step continuation re-park/state, targeted leak tests). **E2E pending** (MCP-hold→CLI lanjut, Linux/9router/AionUI/VSC Copilot, hold>45s/cancel/batch) — lihat `audit.md` §11 dan `docs/stage2_parked_cli_design.md`. Tests hijau (check, lib 55, bridge_mcp_hold/fail_closed/bridge_resolve/sse/spec_scenarios).
+
+---
+
+## 7. Update 2026-11-09 (P1b — docs+tests)
+
+**P0-2 SELESAI:** SSE tool_calls 2-chunk format per spec §7.4 (id/name chunk1, arguments fragments ≤512B chunk2+, finish_reason=tool_calls). File: `src/api.rs`. `cargo check` + `cargo test --lib` lulus.
+
+**P0-3 SELESAI:** `notifications/cancelled` handler: cancel pending call + cancel run + close provider session (kill CLI child + process tree via `taskkill /F /T /PID` on Windows, cleanup `temp_dir()/agentgate/sessions/{id}/work`). Files: `src/api.rs`, `src/bridge.rs`, `src/provider.rs`. Idempotent, `cargo check` lulus.
+
+**P0-4 SELESAI:** Keepalive during held MCP tools/call (periodic `: keepalive` every 15s while respecting call_ttl). File: `src/api.rs`, `src/bridge.rs`.
+
+**P1a SELESAI:** Adapter strict MCP/config isolation:
+- Claude: `--mcp-config <temp file> --strict-mcp-config` per session (no ~/.claude.json pollution). File: `src/provider/bridge/claude.rs`.
+- Gemini: settings file per run via `GEMINI_CLI_SYSTEM_SETTINGS_PATH` file path. File: `src/provider/bridge/gemini.rs`.
+- OpenCode: unchanged (`OPENCODE_CONFIG_CONTENT` env var). File: `src/provider/bridge/opencode.rs`.
+- No api.rs/bridge.rs edits (P0-1b safe). `cargo check` lulus.
+
+**UX Grouping SELESAI:** Reasoning/tool view steps grouped (fix fragmented "thought/view steps 1" per tool):
+- `src/reasoning/parser.rs`: tool_calls emit view steps via `ensure_reasoning_start` + `ReasoningDelta` (format_tool_view_step) to SAME reasoning block, NO `end_reasoning()` per batch.
+- `src/reasoning/coalesce.rs`: `ToolCalls` handler no longer flushes/ends reasoning block — persists until Done/Error/text delta boundary.
+- Result: single reasoning block with grouped view steps, preserved `tool_calls` emission (P0-2), RS0 ordering intact.
+- `cargo check` lulus, `cargo test --lib reasoning` 32 passed. E2E 9router/AionUI validation pending.

@@ -1,0 +1,142 @@
+name: Build & Test All Platforms
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo check (all targets)
+        run: cargo check --all-targets
+
+      - name: cargo test --lib
+        run: cargo test --lib
+
+  build-windows-x86_64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo build --release (Windows x86_64)
+        run: cargo build --release
+
+      - name: Capture artifact path/size/hash
+        run: |
+          $artifact = Get-ChildItem "target/release/agentgate.exe"
+          Write-Host "Path: $($artifact.FullName)"
+          Write-Host "Size: $($artifact.Length) bytes"
+          Write-Host "SHA256: $(Get-FileHash $artifact.FullName -Algorithm SHA256).Hash"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentgate-windows-x86_64
+          path: target/release/agentgate.exe
+          retention-days: 30
+
+  build-windows-aarch64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add aarch64 Windows target
+        run: rustup target add aarch64-pc-windows-msvc
+
+      - name: cargo build --release (Windows aarch64)
+        run: cargo build --release --target aarch64-pc-windows-msvc
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentgate-windows-aarch64
+          path: target/aarch64-pc-windows-msvc/release/agentgate.exe
+          retention-days: 30
+
+  build-linux-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Linux x86_64 target
+        run: rustup target add x86_64-unknown-linux-gnu
+
+      - name: cargo build --release (Linux x86_64)
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentgate-linux-x86_64
+          path: target/x86_64-unknown-linux-gnu/release/agentgate
+          retention-days: 30
+
+  build-linux-aarch64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install aarch64 cross-linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Add Linux aarch64 target
+        run: rustup target add aarch64-unknown-linux-gnu
+
+      - name: Configure cross-linker
+        run: |
+          mkdir -p .cargo
+          echo '[target.aarch64-unknown-linux-gnu]' >> .cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
+
+      - name: cargo build --release (Linux aarch64)
+        run: cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentgate-linux-aarch64
+          path: target/aarch64-unknown-linux-gnu/release/agentgate
+          retention-days: 30
+
+  verify-all-artifacts:
+    needs: [build-windows-x86_64, build-windows-aarch64, build-linux-x86_64, build-linux-aarch64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: List artifacts
+        run: |
+          find artifacts/ -type f -exec ls -lh {} \;
+          echo "---"
+          find artifacts/ -type f -exec sha256sum {} \;
