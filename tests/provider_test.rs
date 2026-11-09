@@ -50,7 +50,7 @@ async fn test_provider_scan_models() {
         ..Default::default()
     };
     let provider = CliProviderImpl::new(config);
-    let models = provider.scan_models().unwrap();
+    let models = provider.scan_models().await.unwrap();
     assert_eq!(models.len(), 2);
     assert!(models.contains(&"model-a".to_string()));
     assert!(models.contains(&"model-b".to_string()));

@@ -36,7 +36,7 @@ impl CliProvider for ScriptedToolsProvider {
     fn is_available(&self) -> bool { true }
     fn set_available(&mut self, _available: bool) {}
     async fn check_available(&self) -> bool { true }
-    fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> { Ok(vec!["m1".into()]) }
+    async fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> { Ok(vec!["m1".into()]) }
     fn is_bridge(&self) -> bool { true }
 
     async fn send_chat_completion(&self, _model: &str, req: ChatCompletionRequest) -> Result<ProviderResponse, anyhow::Error> {
@@ -53,6 +53,7 @@ impl CliProvider for ScriptedToolsProvider {
                 reasoning: None,
                 tool_calls: None,
                 session_id: None,
+                mcp_session_id: None,
             });
         }
         let calls: Vec<ToolCall> = (0..self.parallel_calls)
@@ -70,6 +71,7 @@ impl CliProvider for ScriptedToolsProvider {
             reasoning: None,
             tool_calls: Some(calls),
             session_id: None,
+            mcp_session_id: None,
         })
     }
 }

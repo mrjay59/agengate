@@ -79,6 +79,9 @@ impl Message {
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
+    /// Internal: Agentgate run_id for continuation/park correlation (PR-S4). Not part of OpenAI API.
+    #[serde(skip)]
+    pub agentgate_run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

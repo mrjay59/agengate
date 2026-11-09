@@ -107,10 +107,16 @@ impl IntoResponse for AppError {
         };
 
         let code = self.code();
+        // Per spec §7.6: 5xx -> server_error/provider_error, 4xx -> invalid_request_error
+        let error_type = if status.is_server_error() {
+            "provider_error"
+        } else {
+            "invalid_request_error"
+        };
         let body = axum::Json(serde_json::json!({
             "error": {
                 "message": message,
-                "type": "invalid_request_error",
+                "type": error_type,
                 "code": code,
             }
         }));

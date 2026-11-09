@@ -10,6 +10,7 @@ pub struct OllamaNativeProvider {
     config: ProviderConfig,
     client: Client,
     base_url: String,
+    stream_timeout: u64,
 }
 
 impl OllamaNativeProvider {
@@ -22,7 +23,10 @@ impl OllamaNativeProvider {
             .build()
             .expect("Failed to create HTTP client");
 
-        Self { config, client, base_url }
+        // Stream timeout (seconds) from config, default 300s
+        let stream_timeout = config.ollama_stream_timeout.unwrap_or(300);
+
+        Self { config, client, base_url, stream_timeout }
     }
 
     /// Get available models from Ollama
@@ -67,6 +71,8 @@ impl OllamaNativeProvider {
     }
 
     /// Stream a chat completion as [`RunEvent`]s (RS3).
+    /// Bounded by `stream_timeout` (default 300s) to prevent indefinite hang
+    /// when Ollama's HTTP stream stalls between chunks.
     pub async fn stream_events(
         &self,
         model: &str,
@@ -97,65 +103,93 @@ impl OllamaNativeProvider {
         let mut in_reasoning = false;
         let mut block: u32 = 0;
 
-        while let Some(chunk) = stream.next().await {
-            let bytes = chunk?;
-            buffer.push_str(&String::from_utf8_lossy(&bytes));
-            while let Some(idx) = buffer.find('\n') {
-                let line: String = buffer[..idx].to_string();
-                buffer.drain(..=idx);
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let Ok(chunk) = serde_json::from_str::<OllamaChatChunk>(&line) else {
-                    continue;
-                };
-                // Thinking delta.
-                if let Some(thinking) = chunk.message.thinking.as_deref() {
-                    if !thinking.is_empty() {
-                        if !in_reasoning {
-                            in_reasoning = true;
+        // Overall stream timeout (default 300s matching HTTP client timeout)
+        let stream_timeout = self.stream_timeout;
+        let timeout_dur = std::time::Duration::from_secs(stream_timeout);
+
+        let stream_fut = async {
+            while let Some(chunk) = stream.next().await {
+                let bytes = chunk?;
+                buffer.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(idx) = buffer.find('\n') {
+                    let line: String = buffer[..idx].to_string();
+                    buffer.drain(..=idx);
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let Ok(chunk) = serde_json::from_str::<OllamaChatChunk>(&line) else {
+                        continue;
+                    };
+                    // Thinking delta.
+                    if let Some(thinking) = chunk.message.thinking.as_deref() {
+                        if !thinking.is_empty() {
+                            if !in_reasoning {
+                                in_reasoning = true;
+                                let _ = tx
+                                    .send(RunEvent::ReasoningStart {
+                                        block,
+                                        kind: ReasoningKind::Raw,
+                                    })
+                                    .await;
+                            }
                             let _ = tx
-                                .send(RunEvent::ReasoningStart {
+                                .send(RunEvent::ReasoningDelta {
                                     block,
-                                    kind: ReasoningKind::Raw,
+                                    text: thinking.to_string(),
                                 })
                                 .await;
                         }
+                    }
+                    // Content delta ends reasoning.
+                    if !chunk.message.content.is_empty() {
+                        if in_reasoning {
+                            in_reasoning = false;
+                            let _ = tx.send(RunEvent::ReasoningEnd { block }).await;
+                            block = block.wrapping_add(1);
+                        }
                         let _ = tx
-                            .send(RunEvent::ReasoningDelta {
-                                block,
-                                text: thinking.to_string(),
+                            .send(RunEvent::Text {
+                                text: chunk.message.content,
+                            })
+                            .await;
+                    }
+                    if chunk.done {
+                        if in_reasoning {
+                            in_reasoning = false;
+                            let _ = tx.send(RunEvent::ReasoningEnd { block }).await;
+                        }
+                        let _ = tx
+                            .send(RunEvent::Done {
+                                reason: FinishReason::Stop,
                             })
                             .await;
                     }
                 }
-                // Content delta ends reasoning.
-                if !chunk.message.content.is_empty() {
-                    if in_reasoning {
-                        in_reasoning = false;
-                        let _ = tx.send(RunEvent::ReasoningEnd { block }).await;
-                        block = block.wrapping_add(1);
-                    }
-                    let _ = tx
-                        .send(RunEvent::Text {
-                            text: chunk.message.content,
-                        })
-                        .await;
-                }
-                if chunk.done {
-                    if in_reasoning {
-                        in_reasoning = false;
-                        let _ = tx.send(RunEvent::ReasoningEnd { block }).await;
-                    }
-                    let _ = tx
-                        .send(RunEvent::Done {
-                            reason: FinishReason::Stop,
-                        })
-                        .await;
-                }
+            }
+            Ok::<(), anyhow::Error>(())
+        };
+
+        match tokio::time::timeout(timeout_dur, stream_fut).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                // Stream timeout - send error event and return
+                let _ = tx
+                    .send(RunEvent::Error {
+                        message: format!(
+                            "Ollama stream timed out after {}s (model: {})",
+                            stream_timeout, model
+                        ),
+                        code: Some("provider_timeout".to_string()),
+                    })
+                    .await;
+                Err(anyhow!(
+                    "Ollama stream timed out after {}s (model: {})",
+                    stream_timeout,
+                    model
+                ))
             }
         }
-        Ok(())
     }
 
     /// Forward streaming chat completion to Ollama

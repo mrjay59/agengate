@@ -327,6 +327,24 @@ pub fn probe_config_hint(format: ReasoningFormat) -> String {
 #[allow(dead_code)]
 const _KIND_RAW: ReasoningKind = ReasoningKind::Raw;
 
+/// Run the full provider probe chain (D1-D4) per spec §16/§17.
+/// 
+/// D1: CLI direct - spawn CLI with streaming and verify reasoning output
+/// D2: Gateway direct - call agentgate /v1/chat/completions directly
+/// D3: Through 9router - proxy through 9router (if configured)
+/// D4: Through AionUi - manual verification (prints instructions)
+pub async fn run_probe_chain(
+    _registry: &crate::service::ServiceRegistry,
+    _host: &str,
+    _port: u16,
+    _seconds: u64,
+) -> anyhow::Result<()> {
+    eprintln!("⚠️  doctor --probe-chain is not yet implemented (P3 task)");
+    eprintln!("    This will run the full D1-D4 probe chain per spec §16/§17.");
+    eprintln!("    For now, use 'agentgate doctor --probe-reasoning' for synthetic format testing.");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

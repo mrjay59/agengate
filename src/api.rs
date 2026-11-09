@@ -32,11 +32,82 @@ pub fn api() -> Router<Arc<ServiceRegistry>> {
         .route("/_metrics", get(metrics_endpoint))
         .route("/_bridge/mcp/:session_id", post(bridge_mcp).delete(bridge_mcp_delete))
         .route("/_bridge/resolve/:call_id", post(bridge_resolve))
+        .route("/_bridge/preflight/:session_id", get(preflight_isolation_check))
         .route("/admin/provider", post(add_provider))
         .route("/admin/key", post(add_key))
         .route("/admin/proxy", post(proxy))
         .route("/admin/skill", post(add_skill))
         .route("/admin/mcp", post(add_mcp))
+}
+
+/// Preflight isolation check before a tool-capable turn is admitted (spec §13.2).
+/// Verifies that isolation is active and tool is bridge-compatible.
+async fn preflight_isolation_check(
+    State(registry): State<Arc<ServiceRegistry>>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    let session = match registry.bridge.get_session(&session_id).await {
+        Some(s) => s,
+        None => return (axum::http::StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"session not found"}))).into_response(),
+    };
+
+    // Auth
+    let token = headers.get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if !crate::bridge::BridgeServer::validate_token(&session, token) {
+        return (axum::http::StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"invalid token"}))).into_response();
+    }
+
+    // Verify isolation is active for this session
+    if !session.isolation_active {
+        info!(event = "guard.violation", session = %session.session_id, reason = "isolation_not_active");
+        crate::metrics::METRICS.record_guard_violation();
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": {
+                    "message": "tool_isolation_unavailable",
+                    "type": "invalid_request_error",
+                    "code": "tool_isolation_unavailable",
+                }
+            })),
+        ).into_response();
+    }
+
+    // Verify the tool name is bridge-compatible
+    let tool_name = headers.get("x-agentgate-tool-name")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !registry.bridge.is_bridge_tool(tool_name) {
+        info!(event = "guard.violation", session = %session.session_id, observed_tool = %tool_name, reason = "not_bridge_tool");
+        crate::metrics::METRICS.record_guard_violation();
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": {
+                    "message": format!("tool_isolation_unavailable: {}", tool_name),
+                    "type": "invalid_request_error",
+                    "code": "tool_isolation_unavailable",
+                }
+            })),
+        ).into_response();
+    }
+
+    // Normalize tool name for bridge lookup
+    let normalized_name = crate::bridge::BridgeServer::normalize_tool_name(tool_name, &session.tools);
+    if normalized_name != tool_name {
+        info!(event = "tool.normalized", session = %session.session_id, original = %tool_name, normalized = %normalized_name);
+    }
+
+    // All checks passed
+    Json(serde_json::json!({
+        "status": "ok",
+        "isolation_active": true,
+        "tool_name": normalized_name,
+    })).into_response()
 }
 
 async fn metrics_endpoint() -> Response {
@@ -346,6 +417,16 @@ async fn chat_completions(
             axum::http::header::HeaderName::from_static("x-agentgate-mode"),
             HeaderValue::from_static(mode),
         );
+        if mode == "replay" {
+            res.headers_mut().insert(
+                axum::http::header::HeaderName::from_static("x-agentgate-replay"),
+                HeaderValue::from_static("1"),
+            );
+            res.headers_mut().insert(
+                axum::http::header::HeaderName::from_static("x-agentgate-replay-reason"),
+                HeaderValue::from_static("replay_fallback"),
+            );
+        }
         add_reasoning_headers(&mut res, format, &response_cfg, "block");
 
         Ok(res)
@@ -380,6 +461,16 @@ async fn chat_completions(
             axum::http::header::HeaderName::from_static("x-agentgate-mode"),
             HeaderValue::from_static(mode),
         );
+        if mode == "replay" {
+            res.headers_mut().insert(
+                axum::http::header::HeaderName::from_static("x-agentgate-replay"),
+                HeaderValue::from_static("1"),
+            );
+            res.headers_mut().insert(
+                axum::http::header::HeaderName::from_static("x-agentgate-replay-reason"),
+                HeaderValue::from_static("replay_fallback"),
+            );
+        }
         add_reasoning_headers(&mut res, format, &reasoning_cfg, "final");
         Ok(res)
     }
@@ -703,10 +794,30 @@ async fn bridge_mcp(
                     })),
                 ).into_response();
             }
+            // Preflight isolation check (spec §13.2): verify guard is active for this bridge provider.
+            if let Err(e) = registry.bridge.preflight_isolation_check(&name, &session.tools) {
+                info!(event = "guard.violation", session = %session.session_id, observed_tool = %name, reason = %e);
+                crate::metrics::METRICS.record_guard_violation();
+                return (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "error": {
+                            "message": format!("tool_isolation_unavailable: {}", e),
+                            "type": "invalid_request_error",
+                            "code": "tool_isolation_unavailable",
+                        }
+                    })),
+                ).into_response();
+            }
+            // Normalize tool name for bridge lookup (handles Read/read case-insensitivity).
+            let normalized_name = crate::bridge::BridgeServer::normalize_tool_name(&name, &session.tools);
+            if normalized_name != name {
+                info!(event = "tool.normalized", session = %session.session_id, original = %name, normalized = %normalized_name);
+            }
             let mcp_id = id.as_ref().map(|v| v.to_string()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            info!(event = "bridge.call_held", mcp_req_id = %mcp_id, session = %session.session_id, tool = %name);
+            info!(event = "bridge.call_held", mcp_req_id = %mcp_id, session = %session.session_id, tool = %normalized_name);
             let hold_start = Instant::now();
-            match registry.bridge.hold_tool_call(mcp_id.clone(), session.session_id.clone(), registry.bridge_config.call_ttl_secs).await {
+            match registry.bridge.hold_tool_call(mcp_id.clone(), session.session_id.clone(), normalized_name.clone(), registry.bridge_config.call_ttl_secs).await {
                 Ok(res) => {
                     crate::metrics::METRICS.observe_tool_wait(hold_start.elapsed().as_millis() as u64);
                     serde_json::json!({
@@ -714,10 +825,22 @@ async fn bridge_mcp(
                         "isError": res.is_error
                     })
                 }
-                Err(e) => serde_json::json!({
-                    "content": [{ "type": "text", "text": e.to_string() }],
+                Err(e) => {
+                // Handle Windows os error 5 / PermissionDenied with clear JSON instead of raw crash.
+                let e_str = e.to_string();
+                let is_permission_denied = e_str.contains("PermissionDenied")
+                    || e_str.contains("os error 5")
+                    || e_str.contains("access denied");
+                let error_msg = if is_permission_denied {
+                    format!("Read-folder access denied: {}", e_str)
+                } else {
+                    e_str
+                };
+                serde_json::json!({
+                    "content": [{ "type": "text", "text": error_msg }],
                     "isError": true
-                }),
+                })
+            }
             }
         }
         "resources/list" | "prompts/list" => serde_json::json!({ "items": [] }),
@@ -786,12 +909,12 @@ async fn bridge_resolve(
         content,
         is_error,
     };
-    let ok = registry.bridge.resolve_tool_call(&call_id, res).await;
-    if !ok {
+    let run_id_opt = registry.bridge.resolve_tool_call(&call_id, res).await;
+    if run_id_opt.is_none() {
         return (StatusCode::NOT_FOUND, Json(serde_json::json!({
             "resolved": false,
             "error": { "code": "tool_already_resolved" }
         }))).into_response();
     }
-    Json(serde_json::json!({ "resolved": ok })).into_response()
+    Json(serde_json::json!({ "resolved": true, "run_id": run_id_opt.flatten() })).into_response()
 }

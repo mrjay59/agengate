@@ -1,13 +1,15 @@
 //! Provider bridge trait — adapter layer that connects
 //! CLI agents (OpenCode, Gemini, Claude) to AgentGate's MCP bridge server.
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
+
+use crate::bridge::ContinuationOutput;
 
 /// MCP server configuration for bridge connection
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,10 +60,16 @@ pub struct BridgeConfig {
     /// Enable prompt-based tool calling for CLIs without native tool support.
     #[serde(default)]
     pub prompt_tools_fallback: bool,
+    /// Transport type: "http" (default) or "stdio_shim"
+    #[serde(default)]
+    pub transport: Option<String>,
+    /// Tool schemas for this session (used by stdio_shim transport)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<crate::bridge::ToolSchema>,
 }
 
 fn default_data_dir() -> Option<PathBuf> {
-    Some(PathBuf::from("/tmp/agentgate"))
+    Some(std::env::temp_dir().join("agentgate"))
 }
 
 impl Default for BridgeConfig {
@@ -76,6 +84,8 @@ impl Default for BridgeConfig {
             session_token: None,
             keep_alive: None,
             prompt_tools_fallback: false,
+            transport: Some("http".to_string()),
+            tools: Vec::new(),
         }
     }
 }
@@ -168,20 +178,65 @@ pub async fn preflight_isolation_check(
     Ok(true)
 }
 
+/// PR-S3: Continuation capability for Stage 2 live parked-session resume (§10.4).
+/// Default is Unsupported; adapters/flows opt in when they can keep the session
+/// alive across a tool-call boundary and continue without respawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContinuationCapability {
+    Unsupported,
+    /// Session can accept tool results and produce a continued completion (best-effort).
+    ToolResultContinuation,
+}
+
+/// Opaque continuation token/handle metadata (PR-S3 seam). Actual live continuation
+/// wiring is implemented in PR-S4; this type allows capability-gated plumbing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContinuationHandle {
+    pub session_id: SessionId,
+    pub provider: String,
+    pub capability: ContinuationCapability,
+}
+
 /// Bridge session trait for managing CLI bridge processes
 #[async_trait]
-pub trait BridgeSession: Send + Sync {
+pub trait BridgeSession: Send + Sync + std::any::Any {
     fn session_id(&self) -> &SessionId;
     fn provider_profile(&self) -> &BridgeProfile;
     async fn send_user_message(&self, text: &str) -> Result<()>;
     async fn send_tool_result(&self, result: BridgeToolResult) -> Result<()>;
     async fn close(&self) -> Result<()>;
     async fn wait_for_completion(&self) -> Result<SessionOutput>;
+    /// Stream events from the CLI in real-time for true streaming responses.
+    /// Returns a receiver that yields events as they arrive from stdout.
+    async fn take_event_receiver(&self) -> Result<Option<tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>>>;
     /// Preflight isolation check before a tool-capable turn is admitted
     /// (spec §13.2). Adapters override with CLI-specific verification; the
     /// default accepts (caller is expected to gate on tools separately).
     async fn preflight_isolation_check(&self) -> Result<bool> {
         Ok(true)
+    }
+
+    /// Check if the underlying CLI process/session is still alive.
+    /// Used for deterministic replay-on-lost (spec §10.5).
+    async fn check_liveness(&self) -> Result<bool> {
+        Ok(true) // Default: assume alive; adapters can override with process check
+    }
+
+    /// PR-S3: continuation capability probe (default Unsupported).
+    fn continuation_capability(&self) -> ContinuationCapability {
+        ContinuationCapability::Unsupported
+    }
+
+    /// PR-S3: continuation handle for PR-S4 live resume. Returns None when unsupported.
+    fn continuation_handle(&self) -> Option<ContinuationHandle> {
+        None
+    }
+
+    /// PR-S4: wait for continuation output after MCP hold resolution.
+    /// Only implemented by adapters that support live resume (e.g., opencode).
+    async fn wait_for_continuation(&self) -> Result<ContinuationOutput> {
+        Err(anyhow!("continuation not supported"))
     }
 }
 
@@ -209,6 +264,10 @@ pub mod opencode;
 pub mod gemini;
 pub mod claude;
 pub mod ollama_cli;
+
+pub mod spike;
+
+pub mod shim;
 
 // ===========================================================================
 // Factory functions

@@ -1,21 +1,22 @@
 //! Reasoning event pipeline (RS6 + RS8).
 //!
-//! Combines:
-//! * activity fallback + omitted marker (`fallback`),
 //! * best-effort redaction (`redact`),
 //! * hard per-turn limits (`limit`),
 //! * ordering guarantees from spec_reasoning §4.2.
 //!
 //! The pipeline is transport-agnostic and synchronous; the HTTP layer decides
 //! how formatted deltas become SSE chunks.
+//!
+//! **No synthetic reasoning/activity is emitted here.** Reasoning must come only
+//! from the agent CLI (`ReasoningStart`/`ReasoningDelta`/`ReasoningEnd`).
+//! Gateway-side activity labels (e.g. "Menyiapkan agen…") were removed.
 
 use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::config::ReasoningConfig;
 
-use super::event::{RunEvent, ReasoningKind};
-use super::fallback::{ActivityTracker, FallbackSettings};
+use super::event::{ReasoningKind, RunEvent};
 use super::limit::{ReasoningLimiter, TRUNCATION_MARKER_EN, TRUNCATION_MARKER_ID};
 use super::redact::Redactor;
 
@@ -26,7 +27,6 @@ pub struct PipelineSettings {
     pub max_blocks_per_turn: u32,
     pub activity_lang: String,
     pub redact_patterns: Vec<String>,
-    pub fallback: FallbackSettings,
 }
 
 impl Default for PipelineSettings {
@@ -43,7 +43,6 @@ impl PipelineSettings {
             max_blocks_per_turn: cfg.max_blocks_per_turn,
             activity_lang: cfg.activity_lang.clone(),
             redact_patterns: cfg.redact_patterns.clone(),
-            fallback: FallbackSettings::from_config(cfg),
         }
     }
 }
@@ -53,10 +52,10 @@ pub struct ReasoningPipeline {
     settings: PipelineSettings,
     redactor: Redactor,
     limiter: ReasoningLimiter,
-    tracker: ActivityTracker,
     admitted_blocks: HashSet<u32>,
     started: bool,
     finished: bool,
+    saw_reasoning: bool,
 }
 
 impl ReasoningPipeline {
@@ -77,11 +76,11 @@ impl ReasoningPipeline {
                 settings.max_blocks_per_turn,
                 marker,
             ),
-            tracker: ActivityTracker::new(settings.fallback.clone()),
             settings,
             admitted_blocks: HashSet::new(),
             started: false,
             finished: false,
+            saw_reasoning: false,
         }
     }
 
@@ -90,33 +89,30 @@ impl ReasoningPipeline {
     }
 
     pub fn saw_reasoning(&self) -> bool {
-        self.tracker.saw_reasoning()
+        self.saw_reasoning
     }
 
     pub fn is_truncated(&self) -> bool {
         self.limiter.is_truncated()
     }
 
-    /// Emit the run-start activity exactly once.
+    /// Run start hook — no synthetic activity emitted.
     pub fn start(&mut self) -> Vec<RunEvent> {
         if self.started || self.finished {
             return Vec::new();
         }
         self.started = true;
-        self.tracker.on_start().into_iter().collect()
+        Vec::new()
     }
 
-    /// Time-based fallback; call periodically (e.g. every 250 ms).
-    pub fn tick(&mut self, now: Instant) -> Vec<RunEvent> {
-        if self.finished {
-            return Vec::new();
-        }
-        self.tracker.tick(now).into_iter().collect()
+    /// Time-based tick — no synthetic activity emitted.
+    pub fn tick(&mut self, _now: Instant) -> Vec<RunEvent> {
+        Vec::new()
     }
 
-    /// Parked waiting for a client-held tool result.
+    /// Parked waiting for a client-held tool result — no synthetic activity.
     pub fn on_waiting_client(&mut self) -> Vec<RunEvent> {
-        self.tracker.on_waiting_client().into_iter().collect()
+        Vec::new()
     }
 
     /// Process one run event.
@@ -132,28 +128,38 @@ impl ReasoningPipeline {
                 }
                 match kind {
                     ReasoningKind::Omitted => {
+                        // Never fabricate reasoning/markers for omitted blocks.
                         self.admitted_blocks.remove(&block);
-                        self.tracker.on_omitted().into_iter().collect()
+                        Vec::new()
                     }
                     _ => {
                         if !self.limiter.admit_block() {
                             return self.truncation_marker();
                         }
                         self.admitted_blocks.insert(block);
-                        self.tracker.mark_reasoning();
+                        self.saw_reasoning = true;
                         vec![RunEvent::ReasoningStart { block, kind }]
                     }
                 }
             }
             RunEvent::ReasoningDelta { block, text } => {
-                if !self.settings.enabled || !self.admitted_blocks.contains(&block) {
+                if !self.settings.enabled {
                     return Vec::new();
+                }
+                // Auto-admit a block on first delta when no explicit
+                // ReasoningStart arrived (some CLIs stream reasoning without one).
+                if !self.admitted_blocks.contains(&block) {
+                    if !self.limiter.admit_block() {
+                        return self.truncation_marker();
+                    }
+                    self.admitted_blocks.insert(block);
                 }
                 let text = self.redactor.redact(&text);
                 let accepted = self.limiter.admit_delta(&text);
                 if accepted.is_empty() {
                     return self.truncation_marker();
                 }
+                self.saw_reasoning = true;
                 vec![RunEvent::ReasoningDelta {
                     block,
                     text: accepted,
@@ -169,35 +175,14 @@ impl ReasoningPipeline {
                     Vec::new()
                 }
             }
-            RunEvent::Text { text } => {
-                self.tracker.mark_text();
-                vec![RunEvent::Text {
-                    text: self.redactor.redact(&text),
-                }]
+            RunEvent::Text { text } => vec![RunEvent::Text {
+                text: self.redactor.redact(&text),
+            }],
+            RunEvent::Activity { .. } => {
+                // Drop any synthetic/upstream activity; only CLI reasoning flows.
+                Vec::new()
             }
-            RunEvent::Activity { kind, label } => {
-                if !self.settings.enabled && !self.settings.fallback.emits_activity() {
-                    return Vec::new();
-                }
-                vec![RunEvent::Activity {
-                    kind,
-                    label: self.redactor.redact(&label),
-                }]
-            }
-            RunEvent::ToolCalls { calls } => {
-                let mut out = Vec::new();
-                // Activity is a fallback: do not interleave synthetic tool
-                // labels into a stream that already carries real reasoning.
-                if !self.tracker.saw_reasoning() {
-                    if let Some(first) = calls.first() {
-                        if let Some(activity) = self.tracker.on_tool_requested(Some(&first.function.name)) {
-                            out.push(activity);
-                        }
-                    }
-                }
-                out.push(RunEvent::ToolCalls { calls });
-                out
-            }
+            RunEvent::ToolCalls { calls } => vec![RunEvent::ToolCalls { calls }],
             RunEvent::Usage {
                 prompt_tokens,
                 completion_tokens,
@@ -208,7 +193,6 @@ impl ReasoningPipeline {
                 total_tokens,
             }],
             RunEvent::Done { reason } => {
-                self.tracker.mark_text();
                 let mut out = self.truncation_marker();
                 out.extend(self.close_blocks());
                 self.finished = true;
@@ -259,7 +243,6 @@ impl ReasoningPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reasoning::event::ActivityKind;
 
     fn pipeline() -> ReasoningPipeline {
         let mut cfg = ReasoningConfig::default();
@@ -269,14 +252,13 @@ mod tests {
     }
 
     #[test]
-    fn omitted_block_emits_marker_without_delta() {
+    fn omitted_block_emits_nothing_synthetic() {
         let mut p = pipeline();
         let out = p.process(RunEvent::ReasoningStart {
             block: 1,
             kind: ReasoningKind::Omitted,
         });
-        assert_eq!(out.len(), 1);
-        assert!(matches!(out[0], RunEvent::Activity { .. }));
+        assert!(out.is_empty(), "no synthetic marker for omitted blocks");
         let end = p.process(RunEvent::ReasoningEnd { block: 1 });
         assert!(end.is_empty());
     }
@@ -300,24 +282,26 @@ mod tests {
     }
 
     #[test]
-    fn tool_activity_is_fallback_only() {
-        let mut p = pipeline();
-        let calls = vec![crate::reasoning::event::ToolCall {
+    fn tool_calls_pass_through_no_synthetic_activity() {
+        use crate::reasoning::event::{FunctionCall, ToolCall};
+        let calls = vec![ToolCall {
             id: "call_1".into(),
             r#type: "function".into(),
-            function: crate::reasoning::event::FunctionCall {
+            function: FunctionCall {
                 name: "write_file".into(),
                 arguments: "{}".into(),
             },
         }];
-        let out = p.process(RunEvent::ToolCalls { calls: calls.clone() });
-        assert!(matches!(out[0], RunEvent::Activity { kind: ActivityKind::ToolRequested, .. }));
-
         let mut p = pipeline();
-        p.process(RunEvent::ReasoningStart {
-            block: 0,
-            kind: ReasoningKind::Raw,
-        });
+        let out = p.process(RunEvent::ToolCalls { calls: calls.clone() });
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0], RunEvent::ToolCalls { .. }));
+
+        // Even without prior reasoning, never inject synthetic activity.
+        let mut p = pipeline();
+        p.start();
+        let out = p.tick(std::time::Instant::now());
+        assert!(out.is_empty());
         let out = p.process(RunEvent::ToolCalls { calls });
         assert_eq!(out.len(), 1);
         assert!(matches!(out[0], RunEvent::ToolCalls { .. }));

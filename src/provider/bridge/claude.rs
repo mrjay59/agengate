@@ -123,7 +123,6 @@ struct ClaudeSession {
     session_id: String,
     child: Arc<Mutex<Option<Child>>>,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
-    event_tx: mpsc::UnboundedSender<Value>,
     event_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<Value>>>>,
     closed: Arc<Mutex<bool>>,
     mcp_token: String,
@@ -148,48 +147,67 @@ impl ClaudeSession {
             .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string().replace("-", ""));
         let mcp_port = config.port;
+        let transport = config.transport.unwrap_or_else(|| "http".to_string());
+
+        // Debug log transport mode
+        info!(target: "bridge.claude.config", session_id = %session_id, transport = %transport, "Transport mode selected");
 
         // Create empty working directory per session (spec §11.3)
-        let data_dir = config.data_dir.clone().unwrap_or_else(|| PathBuf::from("/tmp/agentgate"));
+        let data_dir = config
+            .data_dir
+            .clone()
+            .unwrap_or_else(|| std::env::temp_dir().join("agentgate"));
         let workdir = data_dir.join("sessions").join(&session_id).join("work");
         fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
 
         // Build MCP config with tool-disabling config
-        let mcp_config = Self::build_mcp_config(&mcp_token, mcp_port, &session_id, &tool_disable_config)?;
+        let mcp_config = Self::build_mcp_config(&mcp_token, mcp_port, &session_id, &tool_disable_config, &transport, &config.tools)?;
         let _mcp_config_json = serde_json::to_string(&mcp_config)?;
 
-        // Prepare command
-        let mut cmd = Command::new(&profile.binary);
-        cmd.args(&profile.args);
-
-        // Set working directory to empty session workdir (spec §11.3)
-        cmd.current_dir(&workdir);
-
-        // Set environment variables for MCP config (spec §12.4)
+        // Write MCP config to a per-session temp file (spec §12.4 — isolated config,
+        // no ~/.claude.json pollution). File lives under session workdir so cleanup
+        // happens automatically when workdir is removed on close().
+        let mcp_config_file = workdir.join("claude-mcp-config.json");
         let claude_mcp_config_json = Self::build_claude_mcp_config_json(
             &mcp_token,
             mcp_port,
             &session_id,
             &tool_disable_config,
+            &transport,
         );
-        cmd.env("CLAUDE_MCP_CONFIG", &claude_mcp_config_json);
+        fs::write(&mcp_config_file, &claude_mcp_config_json)
+            .await
+            .context("Failed to write Claude MCP config file")?;
+
+        // Prepare command
+        let mut cmd = Command::new(&profile.binary);
+        cmd.args(&profile.args);
+
+        // Strict MCP config per spec §12.4: only agentgate MCP server, no global config
+        cmd.arg("--mcp-config").arg(&mcp_config_file);
+        cmd.arg("--strict-mcp-config");
+
+        // Set working directory to empty session workdir (spec §11.3)
+        cmd.current_dir(&workdir);
 
         // Debug logging for config injection verification (§12.5) and cwd (§11.3)
         info!(
             target: "bridge.claude.config",
             session_id = %session_id,
             workdir = %workdir.display(),
+            mcp_config_file = %mcp_config_file.display(),
             binary = %profile.binary,
             args = ?profile.args,
             mcp_port = mcp_port,
             mcp_token_len = mcp_token.len(),
             claude_mcp_config_json_len = claude_mcp_config_json.len(),
-            "Spawning Claude Code CLI with injected MCP config"
+            transport = %transport,
+            "Spawning Claude Code CLI with strict MCP config file"
         );
         debug!(
             target: "bridge.claude.config",
             session_id = %session_id,
-            "CLAUDE_MCP_CONFIG = {}", claude_mcp_config_json
+            "MCP config file content = {}", claude_mcp_config_json
         );
 
         // Add profile env vars
@@ -243,6 +261,8 @@ impl ClaudeSession {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         // Spawn stdout reader task
+        // stdout reader task owns a clone of the sender; when it finishes
+        // (stdout EOF after turn completion) the channel closes.
         let event_tx_stdout = event_tx.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
@@ -272,7 +292,6 @@ impl ClaudeSession {
             session_id,
             child: Arc::new(Mutex::new(Some(child))),
             stdin: Arc::new(Mutex::new(Some(stdin))),
-            event_tx,
             event_rx: Arc::new(Mutex::new(Some(event_rx))),
             closed: Arc::new(Mutex::new(false)),
             mcp_token,
@@ -285,23 +304,56 @@ impl ClaudeSession {
         Ok(session)
     }
 
-    fn build_mcp_config(token: &str, port: u16, session_id: &str, tool_disable_config: &Value) -> Result<McpConfig> {
-        let mut mcp_servers = HashMap::new();
-        mcp_servers.insert(
-            "agentgate".into(),
-            McpServerConfig {
-                r#type: "http".into(),
-                url: Some(format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}")),
-                headers: Some({
-                    let mut headers = HashMap::new();
-                    headers.insert("Authorization".into(), format!("Bearer {token}"));
-                    headers
-                }),
-                command: None,
-                args: None,
-                env: None,
-            },
-        );
+    fn build_mcp_config(token: &str, port: u16, session_id: &str, tool_disable_config: &Value, transport: &str, tools: &[crate::bridge::ToolSchema]) -> Result<McpConfig> {
+        let mcp_servers: HashMap<String, McpServerConfig> = if transport == "stdio_shim" {
+            let tools_json = serde_json::to_string(tools).unwrap_or_default();
+            let agentgate_bin = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "agentgate".to_string());
+            let mut m = HashMap::new();
+            m.insert(
+                "agentgate".into(),
+                McpServerConfig {
+                    r#type: "command".into(),
+                    url: None,
+                    command: Some(agentgate_bin),
+                    args: Some(vec![
+                        "mcp-shim".into(),
+                        "--session".into(),
+                        session_id.into(),
+                        "--token".into(),
+                        token.into(),
+                        "--host".into(),
+                        "127.0.0.1".into(),
+                        "--port".into(),
+                        port.to_string(),
+                    ]),
+                    env: Some({
+                        let mut env = HashMap::new();
+                        env.insert("AGENTGATE_SHIM_TOOLS".into(), tools_json);
+                        env
+                    }),
+                    headers: None,
+                },
+            );
+            m
+        } else {
+            let mut m = HashMap::new();
+            m.insert(
+                "agentgate".into(),
+                McpServerConfig {
+                    r#type: "http".into(),
+                    url: Some(format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}")),
+                    headers: Some({
+                        let mut headers = HashMap::new();
+                        headers.insert("Authorization".into(), format!("Bearer {token}"));
+                        headers
+                    }),
+                    command: None,
+                    args: None,
+                    env: None,
+                },
+            );
+            m
+        };
 
         // Merge tool-disabling config into MCP config per spec §12.4
         let mut config = McpConfig { mcp_servers };
@@ -330,15 +382,36 @@ impl ClaudeSession {
         port: u16,
         session_id: &str,
         tool_disable_config: &Value,
+        transport: &str,
     ) -> String {
-        serde_json::json!({
-            "mcpServers": {
+        let mcp_servers = if transport == "stdio_shim" {
+            let agentgate_bin = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "agentgate".to_string());
+            serde_json::json!({
+                "agentgate": {
+                    "type": "command",
+                    "command": agentgate_bin,
+                    "args": [
+                        "mcp-shim",
+                        "--session", session_id,
+                        "--token", token,
+                        "--host", "127.0.0.1",
+                        "--port", port.to_string()
+                    ],
+                    "env": {}
+                }
+            })
+        } else {
+            serde_json::json!({
                 "agentgate": {
                     "type": "http",
                     "url": format!("http://127.0.0.1:{port}/_bridge/mcp/{session_id}"),
                     "headers": { "Authorization": format!("Bearer {token}") }
                 }
-            },
+            })
+        };
+
+        serde_json::json!({
+            "mcpServers": mcp_servers,
             "tools": tool_disable_config["tools"],
             "permissions": tool_disable_config["permission"]
         })
@@ -452,6 +525,14 @@ impl BridgeSession for ClaudeSession {
 
         let mut child_guard = self.child.lock().await;
         if let Some(mut child) = child_guard.take() {
+            let pid = child.id();
+            #[cfg(windows)]
+            if let Some(pid) = pid {
+                let _ = tokio::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .output()
+                    .await;
+            }
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
@@ -532,6 +613,11 @@ impl BridgeSession for ClaudeSession {
             tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
         })
     }
+
+    async fn take_event_receiver(&self) -> Result<Option<tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>>> {
+        let mut rx_guard = self.event_rx.lock().await;
+        Ok(rx_guard.take())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -578,7 +664,7 @@ mod tests {
     #[test]
     fn mcp_config_serialization() {
         let tool_disable = serde_json::json!({});
-        let config = ClaudeSession::build_mcp_config("test-token", 8788, "test-session", &tool_disable).unwrap();
+        let config = ClaudeSession::build_mcp_config("test-token", 8788, "test-session", &tool_disable, "http", &[]).unwrap();
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("agentgate"));
         assert!(json.contains("test-token"));

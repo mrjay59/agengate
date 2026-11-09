@@ -89,16 +89,18 @@ impl Coalescer {
                 self.flush_reasoning(&mut out);
                 self.current_block = block;
                 self.emit_reasoning_end(&mut out);
+                // Now flush any buffered text that was waiting for reasoning to end
+                self.flush_text(&mut out);
             }
             RunEvent::Text { text } => {
-                // Ordering guarantee: reasoning delta → ReasoningEnd → Text.
-                self.flush_reasoning(&mut out);
-                if self.in_reasoning {
-                    self.emit_reasoning_end(&mut out);
-                }
+                // Buffer text until reasoning ends (ReasoningEnd received).
+                // This ensures ALL reasoning is emitted before ANY text.
                 self.pending_text.push_str(&text);
                 if self.pending_text.len() >= self.settings.flush_bytes {
-                    self.flush_text(&mut out);
+                    // Still respect flush_bytes for very long text, but don't flush reasoning
+                    if !self.in_reasoning {
+                        self.flush_text(&mut out);
+                    }
                 }
             }
             RunEvent::Activity { kind, label } => {
@@ -106,10 +108,10 @@ impl Coalescer {
                 self.pending_activity.push_back((kind, label));
             }
             RunEvent::ToolCalls { calls } => {
-                self.flush_reasoning(&mut out);
-                if self.in_reasoning {
-                    self.emit_reasoning_end(&mut out);
-                }
+                // Do NOT flush/end reasoning here — let the reasoning block (with
+                // accumulated view steps) persist until a proper boundary
+                // (Done/Error/text delta after tools). This groups view steps
+                // into a single block instead of fragmenting per tool_call batch.
                 self.flush_text(&mut out);
                 self.flush_activity(&mut out);
                 self.pending_tool_calls.extend(calls);
@@ -161,7 +163,10 @@ impl Coalescer {
     pub fn flush(&mut self) -> Vec<RunEvent> {
         let mut out = Vec::new();
         self.flush_reasoning(&mut out);
-        self.flush_text(&mut out);
+        // Don't flush text if reasoning is still ongoing (wait for ReasoningEnd)
+        if !self.in_reasoning {
+            self.flush_text(&mut out);
+        }
         self.flush_activity(&mut out);
         self.flush_tools(&mut out);
         self.flush_usage(&mut out);
@@ -174,6 +179,10 @@ impl Coalescer {
         let mut out = self.flush();
         if self.in_reasoning {
             self.emit_reasoning_end(&mut out);
+            // Flush text after reasoning ends
+            self.flush_text(&mut out);
+        } else if !self.pending_text.is_empty() {
+            self.flush_text(&mut out);
         }
         out
     }

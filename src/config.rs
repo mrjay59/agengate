@@ -125,7 +125,8 @@ impl Default for GuardConfig {
 impl Config {
     /// Apply environment overrides (highest priority after CLI flags).
     /// Supported: AGENTGATE_BRIDGE_PORT, AGENTGATE_BRIDGE_CALL_TTL_SECS,
-    /// AGENTGATE_BRIDGE_PARK_TTL_SECS, AGENTGATE_BRIDGE_MAX_PARKED_RUNS.
+    /// AGENTGATE_BRIDGE_PARK_TTL_SECS, AGENTGATE_BRIDGE_MAX_PARKED_RUNS,
+    /// AGENTGATE_BRIDGE_TRANSPORT.
     pub fn apply_env_overrides(mut self) -> Self {
         if let Ok(v) = std::env::var("AGENTGATE_BRIDGE_PORT") {
             if let Ok(p) = v.parse::<u16>() {
@@ -146,6 +147,9 @@ impl Config {
             if let Ok(p) = v.parse() {
                 self.bridge.max_parked_runs = p;
             }
+        }
+        if let Ok(v) = std::env::var("AGENTGATE_BRIDGE_TRANSPORT") {
+            self.bridge.transport = Some(v);
         }
         self
     }
@@ -182,6 +186,8 @@ pub struct BridgeConfig {
     pub park_ttl_secs: u64,
     #[serde(default = "default_600")]
     pub call_ttl_secs: u64,
+    #[serde(default = "default_15")]
+    pub keepalive_interval_secs: u64,
     #[serde(default = "default_8")]
     pub max_parked_runs: usize,
     #[serde(default = "default_4")]
@@ -206,6 +212,11 @@ pub struct BridgeConfig {
     /// `[bridge.guard]` (spec §14).
     #[serde(default)]
     pub guard: GuardConfig,
+    /// MCP transport: `"http"` (loopback MCP over HTTP) or `"stdio_shim"`
+    /// (stdlib MCP shim for CLI agents without native MCP support).
+    /// Spec §9.7 / §12.2.
+    #[serde(default)]
+    pub transport: Option<String>,
 }
 
 impl Default for BridgeConfig {
@@ -216,12 +227,14 @@ impl Default for BridgeConfig {
             port: 0,
             park_ttl_secs: default_600(),
             call_ttl_secs: default_600(),
+              keepalive_interval_secs: default_15(),
             max_parked_runs: default_8(),
             max_runs_per_key: default_4(),
             max_run_lifetime_secs: default_3600(),
             max_steps: default_64(),
             parked_holds_permit: default_true(),
             server_name: default_server_name(),
+            transport: None,
             batch: BatchConfig::default(),
             resume: ResumeConfig::default(),
             limits: LimitsConfig::default(),
@@ -233,6 +246,7 @@ impl Default for BridgeConfig {
 fn default_true() -> bool { true }
 fn default_bridge_host() -> String { "127.0.0.1".to_string() }
 fn default_600() -> u64 { 600 }
+fn default_15() -> u64 { 15 }
 fn default_8() -> usize { 8 }
 fn default_4() -> usize { 4 }
 fn default_3600() -> u64 { 3600 }
@@ -406,6 +420,9 @@ pub struct ProviderConfig {
     /// Ollama keep-alive duration for CLI mode (e.g. "10m").
     #[serde(default)]
     pub keep_alive: Option<String>,
+    /// Ollama stream timeout in seconds.
+    #[serde(default)]
+    pub ollama_stream_timeout: Option<u64>,
     /// When true, expose tools to a CLI/model that lacks native tool calling by
     /// prompting for JSON tool calls and parsing them from the output.
     #[serde(default)]

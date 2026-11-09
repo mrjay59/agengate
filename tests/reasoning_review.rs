@@ -86,16 +86,15 @@ fn sse_writer_think_tags_close_before_text() {
 }
 
 #[test]
-fn pipeline_omitted_emits_activity() {
+fn pipeline_omitted_emits_nothing_synthetic() {
     let mut cfg = ReasoningConfig::default();
-    cfg.activity_min_interval_ms = 0;
     let mut p = ReasoningPipeline::new(&cfg);
     let out = p.process(RunEvent::ReasoningStart {
         block: 1,
         kind: ReasoningKind::Omitted,
     });
-    assert_eq!(out.len(), 1);
-    assert!(matches!(out[0], RunEvent::Activity { .. }));
+    // Gateway must not fabricate reasoning/markers for omitted blocks.
+    assert!(out.is_empty());
 }
 
 #[test]
@@ -109,13 +108,14 @@ fn pipeline_disabled_drops_reasoning() {
 }
 
 #[test]
-fn activity_tracker_on_start_once() {
+fn no_synthetic_activity_emitted() {
+    // Synthetic gateway labels ("Menyiapkan agen", "Model sedang bekerja") removed.
+    assert!(agentgate::reasoning::fallback::activity_label("start", "id").is_none());
+    assert!(agentgate::reasoning::fallback::omitted_label("id").is_none());
     let mut cfg = ReasoningConfig::default();
-    cfg.activity_min_interval_ms = 0;
-    let settings = agentgate::reasoning::fallback::FallbackSettings::from_config(&cfg);
-    let mut t = agentgate::reasoning::fallback::ActivityTracker::new(settings);
-    assert!(t.on_start().is_some());
-    assert!(t.on_start().is_none());
+    let mut p = ReasoningPipeline::new(&cfg);
+    assert!(p.start().is_empty());
+    assert!(p.tick(std::time::Instant::now()).is_empty());
 }
 
 #[test]

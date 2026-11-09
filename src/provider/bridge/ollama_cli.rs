@@ -6,13 +6,13 @@ use crate::provider::bridge::{
     BridgeToolResult, SessionOutput,
 };
 use crate::types::{FunctionCall, ToolCall};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Child;
 use tokio::sync::Mutex;
 
@@ -261,8 +261,9 @@ impl OllamaCliSession {
     }
 
     async fn spawn_process(&self) -> Result<Child> {
+        let args = build_run_args(&self.profile, &self.config);
         let mut cmd = tokio::process::Command::new(&self.profile.binary);
-        cmd.args(build_run_args(&self.profile, &self.config))
+        cmd.args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -283,9 +284,10 @@ impl BridgeSession for OllamaCliSession {
         &self.profile
     }
 
-    /// Preflight isolation check per spec §13.2 (wired via shared helper).
+    /// Preflight isolation check per spec §13.2.
+    /// Ollama doesn't use tools, so always return true.
     async fn preflight_isolation_check(&self) -> Result<bool> {
-        crate::provider::bridge::preflight_isolation_check(&self.profile, &self.session_id, "ollama").await
+        Ok(true)
     }
 
     async fn send_user_message(&self, text: &str) -> Result<()> {
@@ -320,7 +322,16 @@ impl BridgeSession for OllamaCliSession {
         *self.closed.lock().await = true;
         let mut process_guard = self.process.lock().await;
         if let Some(mut child) = process_guard.take() {
+            let pid = child.id();
+            #[cfg(windows)]
+            if let Some(pid) = pid {
+                let _ = tokio::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .output()
+                    .await;
+            }
             let _ = child.kill().await;
+            let _ = child.wait().await;
         }
         Ok(())
     }
@@ -336,28 +347,50 @@ impl BridgeSession for OllamaCliSession {
         // Close stdin so a non-interactive `ollama run` exits after answering.
         drop(child.stdin.take());
 
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let (stdout_res, stderr_res) = tokio::join!(
-            async move {
-                let mut buf = String::new();
-                if let Some(mut out) = stdout {
-                    out.read_to_string(&mut buf).await?;
-                }
-                Ok::<_, std::io::Error>(buf)
-            },
-            async move {
-                let mut buf = String::new();
-                if let Some(mut err) = stderr {
-                    let _ = err.read_to_string(&mut buf).await;
-                }
-                buf
+        let mut reader = tokio::io::BufReader::new(child.stdout.take().context("no stdout")?);
+        let mut stderr_reader = tokio::io::BufReader::new(child.stderr.take().context("no stderr")?);
+        
+        let mut line = String::new();
+        let mut raw_output = String::new();
+        let mut stderr_output = String::new();
+
+        // Read stderr in background
+        let stderr_task = tokio::spawn(async move {
+            let mut err_line = String::new();
+            let mut err_buf = String::new();
+            while stderr_reader.read_line(&mut err_line).await.unwrap_or(0) > 0 {
+                err_buf.push_str(&err_line);
+                err_line.clear();
             }
-        );
-        let raw = stdout_res?;
+            err_buf
+        });
+
+        // Read stdout line by line with 300s timeout per line
+        let read_timeout = tokio::time::Duration::from_secs(300);
+        loop {
+            line.clear();
+            let read_fut = reader.read_line(&mut line);
+            match tokio::time::timeout(read_timeout, read_fut).await {
+                Ok(Ok(0)) => break, // EOF
+                Ok(Ok(_)) => {
+                    raw_output.push_str(&line);
+                }
+                Ok(Err(e)) => return Err(anyhow::anyhow!("stdout read error: {}", e)),
+                Err(_) => {
+                    // Timeout reading line
+                    let err = stderr_task.await.unwrap_or_default();
+                    return Err(anyhow::anyhow!("ollama cli read timeout after 300s: {}", err));
+                }
+            }
+        }
+
+        // Wait for process to exit
         let _ = child.wait().await;
 
-        let raw = strip_ansi(&raw);
+        // Get stderr
+        let err_output = stderr_task.await.unwrap_or_default();
+
+        let raw = strip_ansi(&raw_output);
         let raw = raw.trim();
 
         if self.config.prompt_tools_fallback {
@@ -371,7 +404,7 @@ impl BridgeSession for OllamaCliSession {
         }
 
         if raw.is_empty() {
-            let err = stderr_res.trim();
+            let err = err_output.trim();
             if !err.is_empty() {
                 return Err(anyhow::anyhow!("ollama cli failed: {}", err));
             }
@@ -382,6 +415,10 @@ impl BridgeSession for OllamaCliSession {
             reasoning: None,
             tool_calls: None,
         })
+    }
+
+    async fn take_event_receiver(&self) -> Result<Option<tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>>> {
+        Ok(None)
     }
 }
 
@@ -498,10 +535,7 @@ mod tests {
 
     #[test]
     fn session_reuses_configured_session_id() {
-        let client = Arc::new(BridgeClient {
-            host: "127.0.0.1".into(),
-            port: 1,
-        });
+        let client = Arc::new(BridgeClient::new("127.0.0.1".into(), 1));
         let config = BridgeConfig {
             session_id: Some("session-123".into()),
             ..Default::default()

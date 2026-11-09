@@ -168,7 +168,7 @@ fn render_conversation_keeps_roles_tool_calls_and_results() {
         ),
     ];
 
-    let rendered = agentgate::provider::render_conversation(&messages);
+    let rendered = agentgate::provider::render_conversation(&messages, None, None);
     assert!(rendered.contains("[system]"));
     assert!(rendered.contains("kamu asisten"));
     assert!(rendered.contains("[user]"));

@@ -16,7 +16,7 @@ impl CliProvider for DummyProvider {
     fn is_available(&self) -> bool { true }
     fn set_available(&mut self, _available: bool) {}
     async fn check_available(&self) -> bool { true }
-    fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> {
+    async fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> {
         Ok(vec!["m1".into()])
     }
     async fn send_chat_completion(&self, _model: &str, _request: ChatCompletionRequest) -> Result<agentgate::provider::ProviderResponse, anyhow::Error> {
@@ -25,6 +25,7 @@ impl CliProvider for DummyProvider {
             reasoning: Some("thinking about it".to_string()),
             tool_calls: None,
             session_id: None,
+            mcp_session_id: None,
         })
     }
 }

@@ -1,1 +1,33 @@
-{"model":"opencode-go/beam-free","messages":[{"role":"user","content":"Halo, siapa kamu?"}]}
+{
+  "model": "opencode/anthropic/claude-sonnet-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "buat file hello.txt isi: halo"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Tulis file di workstation pengguna",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    }
+  ]
+}

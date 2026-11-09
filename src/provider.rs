@@ -1,4 +1,5 @@
 use crate::config::ProviderConfig;
+use crate::provider::bridge::BridgeSession as ProviderBridgeSession;
 use crate::reasoning::parser::ReasoningParser;
 use crate::reasoning::{FinishReason, ReasoningKind, RunEvent};
 use crate::types::ChatCompletionRequest;
@@ -24,6 +25,8 @@ pub enum ProviderResponse {
         reasoning: Option<String>,
         tool_calls: Option<Vec<crate::types::ToolCall>>,
         session_id: Option<String>,
+        /// MCP session ID for bridge providers (used for continuation lookup).
+        mcp_session_id: Option<String>,
     },
     Error(String),
 }
@@ -36,7 +39,7 @@ pub trait CliProvider: Send + Sync {
     fn is_available(&self) -> bool;
     fn set_available(&mut self, available: bool);
     async fn check_available(&self) -> bool;
-    fn scan_models(&self) -> Result<Vec<String>, anyhow::Error>;
+    async fn scan_models(&self) -> Result<Vec<String>, anyhow::Error>;
     /// Whether this provider runs through the MCP bridge adapter.
     fn is_bridge(&self) -> bool {
         false
@@ -60,7 +63,7 @@ pub trait CliProvider: Send + Sync {
         tx: mpsc::Sender<RunEvent>,
     ) -> Result<(), anyhow::Error> {
         match self.send_chat_completion(model, request).await? {
-            ProviderResponse::Success { content, reasoning, tool_calls, session_id: _ } => {
+            ProviderResponse::Success { content, reasoning, tool_calls, session_id: _, .. } => {
                 if let Some(reasoning) = reasoning.filter(|r| !r.trim().is_empty()) {
                     if tx
                         .send(RunEvent::ReasoningStart {
@@ -119,6 +122,7 @@ pub trait CliProvider: Send + Sync {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct CliProviderImpl {
     pub id: String,
     pub bin: Option<String>,
@@ -157,62 +161,88 @@ impl CliProvider for CliProviderImpl {
             None => return false,
         };
 
-        // Direct path check (handles absolute/relative paths)
-        if std::path::Path::new(bin).exists() {
-            return true;
-        }
-
-        // PATH search via which crate
-        if which::which(bin).is_ok() {
-            return true;
-        }
-
-        // Windows: try common extensions for PATH search
-        if cfg!(target_os = "windows") {
-            for ext in &[".cmd", ".bat", ".exe", ".ps1"] {
-                if !bin.to_lowercase().ends_with(ext) {
-                    let candidate = format!("{}{}", bin, ext);
-                    if which::which(&candidate).is_ok() {
-                        return true;
-                    }
+                // Verify by actually spawning the binary (the `which` crate can
+        // disagree with the OS on some platforms, e.g. npm shims on Linux).
+        // Resolve to a runnable path first (handles Windows PATHEXT).
+        let resolved = self.resolve_binary(bin).unwrap_or_else(|| bin.to_string());
+        let mut cmd = std::process::Command::new(&resolved);
+        cmd.arg("--version");
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        match cmd.output() {
+            Ok(out) => {
+                tracing::info!(provider = %self.id, bin = %bin, resolved = %resolved, status = %out.status, "check_available: resolved");
+                true
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    tracing::warn!(provider = %self.id, bin = %bin, "check_available: NOT found on PATH");
+                    false
+                } else {
+                    tracing::warn!(provider = %self.id, bin = %bin, error = %e, "check_available: spawn error, assuming present");
+                    true
                 }
             }
         }
-
-        false
     }
 
-    fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> {
-        tracing::debug!("Scanning models for provider {}", self.id);
-        if let Some(cmds) = &self.models_cmd {
-            if cmds.is_empty() {
-                tracing::debug!("models_cmd is empty, returning config models");
-                return Ok(self.models.clone());
+    async fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> {
+        let provider_id = self.id.clone();
+        let models_cmd = self.models_cmd.clone();
+        let bin = self.bin.clone();
+        let config_models = self.models.clone();
+        let provider_id_inner = provider_id.clone();
+        let config_models_inner = config_models.clone();
+
+        // Run the blocking command in a blocking task
+        let result = tokio::task::spawn_blocking(move || -> Result<Vec<String>, anyhow::Error> {
+            let start = std::time::Instant::now();
+            tracing::info!(provider = %provider_id_inner, "scan_models: starting");
+            
+            if let Some(cmds) = &models_cmd {
+                if cmds.is_empty() {
+                    tracing::info!(provider = %provider_id_inner, elapsed_ms = %start.elapsed().as_millis(), "scan_models: empty models_cmd, returning config models");
+                    return Ok(config_models_inner);
+                }
+
+                let bin = bin.ok_or_else(|| {
+                    anyhow::anyhow!("No binary configured for provider {}", provider_id_inner)
+                })?;
+                tracing::debug!(provider = %provider_id_inner, bin = %bin, cmd = ?cmds, "scan_models: executing command");
+
+                let output = execute_cmd_static(&bin, cmds)?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.is_empty() {
+                    tracing::debug!(provider = %provider_id_inner, stderr = %stderr, "scan_models: command stderr");
+                }
+                
+                // We need access to parse_models_output - use a static version
+                let models = parse_models_output_static(&stdout, &provider_id_inner);
+                tracing::info!(provider = %provider_id_inner, models_found = models.len(), elapsed_ms = %start.elapsed().as_millis(), "scan_models: completed");
+                
+                if !models.is_empty() {
+                    return Ok(models);
+                }
+
+                tracing::info!(provider = %provider_id_inner, "scan_models: no models found, falling back to config");
+                return Ok(config_models_inner);
             }
 
-            let bin = self.bin.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("No binary configured for provider {}", self.id)
-            })?;
-            tracing::debug!("Using bin: {}, cmd: {:?}", bin, cmds);
+            Ok(config_models_inner)
+        }).await;
 
-            let output = self.execute_cmd_inner(bin, cmds)?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            tracing::debug!("stdout: {}", stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !stderr.is_empty() {
-                tracing::debug!("stderr: {}", stderr);
+        match result {
+            Ok(Ok(models)) => Ok(models),
+            Ok(Err(e)) => {
+                tracing::warn!(provider = %provider_id, error = %e, "scan_models: command failed, using config models");
+                Ok(config_models)
             }
-            let models = self.parse_models_output(&stdout);
-            tracing::debug!("Parsed {} models", models.len());
-            if !models.is_empty() {
-                return Ok(models);
+            Err(e) => {
+                tracing::error!(provider = %provider_id, error = %e, "scan_models: task join error, using config models");
+                Ok(config_models)
             }
-
-            tracing::debug!("No models found via models_cmd, falling back to config");
-            return Ok(self.models.clone());
         }
-
-        Ok(self.models.clone())
     }
 
     async fn send_chat_completion(
@@ -222,7 +252,7 @@ impl CliProvider for CliProviderImpl {
     ) -> Result<ProviderResponse, anyhow::Error> {
         // Create empty session workdir per spec §11.3
         let session_id = uuid::Uuid::new_v4().to_string();
-        let data_dir = std::path::PathBuf::from("/tmp/agentgate");
+        let data_dir = std::env::temp_dir().join("agentgate");
         let workdir = data_dir.join("sessions").join(&session_id).join("work");
         tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
 
@@ -238,9 +268,76 @@ impl CliProvider for CliProviderImpl {
             }
         }
 
-        let output = child.wait_with_output().await?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Drain stderr concurrently so a chatty CLI cannot fill the pipe and
+        // deadlock while we wait. Taking stdout/stderr out of `child` keeps
+        // ownership of `child` with us, so we can still kill() it on timeout
+        // (wait_with_output would have consumed `child`).
+        let stderr_task = child.stderr.take().map(|mut stderr| {
+            tokio::spawn(async move {
+                let mut buf = String::new();
+                let _ = stderr.read_to_string(&mut buf).await;
+                buf
+            })
+        });
+        let mut stdout_handle = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Ok(ProviderResponse::Error(
+                    "stdout not captured for CLI".to_string(),
+                ));
+            }
+        };
+
+        // Bound the CLI so a hung process (missing auth, waiting for a TTY,
+        // unreachable upstream) cannot block the request forever. On timeout we
+        // kill the child and surface stderr so the failure is diagnosable
+        // instead of an indefinite "gantung"/hang.
+        const CLI_TIMEOUT_SECS: u64 = 300;
+        let mut stdout_bytes: Vec<u8> = Vec::new();
+        let read_result = tokio::time::timeout(
+            std::time::Duration::from_secs(CLI_TIMEOUT_SECS),
+            stdout_handle.read_to_end(&mut stdout_bytes),
+        )
+        .await;
+        if read_result.is_err() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let stderr_buf = match stderr_task {
+                Some(t) => t.await.unwrap_or_default(),
+                None => String::new(),
+            };
+            let msg = if stderr_buf.trim().is_empty() {
+                format!(
+                    "CLI timed out after {}s (no output) — cek PATH/auth/TTY opencode di mesin ini",
+                    CLI_TIMEOUT_SECS
+                )
+            } else {
+                format!(
+                    "CLI timed out after {}s: {}",
+                    CLI_TIMEOUT_SECS,
+                    stderr_buf.trim()
+                )
+            };
+            tracing::warn!(provider = %self.id, "{}", msg);
+            return Ok(ProviderResponse::Error(msg));
+        }
+        if let Err(e) = read_result.unwrap() {
+            return Err(e.into());
+        }
+        let status = child.wait().await?;
+        let stderr_buf = match stderr_task {
+            Some(t) => t.await.unwrap_or_default(),
+            None => String::new(),
+        };
+        // Rebuild an Output-like structure for downstream code.
+        let output_stdout = stdout_bytes;
+        let output_stderr = stderr_buf.into_bytes();
+        let output_status = status;
+
+        let stdout = String::from_utf8_lossy(&output_stdout);
+        let stderr = String::from_utf8_lossy(&output_stderr);
         let cleaned = if self.strip_ansi {
             String::from_utf8_lossy(&strip_ansi_escapes::strip(&*stdout)).to_string()
         } else {
@@ -248,10 +345,35 @@ impl CliProvider for CliProviderImpl {
         };
         // If stdout empty and stderr has content, treat as error
         if cleaned.trim().is_empty() && !stderr.trim().is_empty() {
+            // keep stderr path below via output_status? just return error
             return Ok(ProviderResponse::Error(stderr.trim().to_string()));
         }
-        let (content, reasoning) = parse_cli_output(cleaned.trim());
-        Ok(ProviderResponse::Success { content, reasoning, tool_calls: None, session_id: None })
+        if !output_status.success() && cleaned.trim().is_empty() {
+            // fall through to existing status check below? handle here
+        }
+        // Continue with existing parse; need status for the later check.
+        // Store status in a variable name expected below.
+        let _ = output_status;
+        // NOTE: the original code below references `output.status` and `output.stderr`.
+        // We have consumed them; skip by jumping to parse.
+        let (content, reasoning, error) = parse_cli_output(cleaned.trim());
+        if let Some(message) = error {
+            return Ok(ProviderResponse::Error(message));
+        }
+        if !output_status.success() && content.is_empty() {
+            return Ok(ProviderResponse::Error(format!(
+                "CLI exited with status {}",
+                output_status
+            )));
+        }
+        return Ok(ProviderResponse::Success {
+            content,
+            reasoning,
+            tool_calls: None,
+            session_id: None,
+            mcp_session_id: None,
+        });
+        // (handled above)
     }
 
     /// RS0: read CLI stdout incrementally and forward events immediately.
@@ -263,7 +385,7 @@ impl CliProvider for CliProviderImpl {
     ) -> Result<(), anyhow::Error> {
         // Create empty session workdir per spec §11.3
         let session_id = uuid::Uuid::new_v4().to_string();
-        let data_dir = std::path::PathBuf::from("/tmp/agentgate");
+        let data_dir = std::env::temp_dir().join("agentgate");
         let workdir = data_dir.join("sessions").join(&session_id).join("work");
         tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
 
@@ -316,7 +438,27 @@ impl CliProvider for CliProviderImpl {
                     let _ = child.wait().await;
                     return Ok(());
                 }
-                result = reader.read_until(b'\n', &mut line_buf) => result,
+                result = tokio::time::timeout(
+                    std::time::Duration::from_secs(180),
+                    reader.read_until(b'\n', &mut line_buf),
+                ) => {
+                    match result {
+                        Ok(r) => r,
+                        Err(_) => {
+                            let _ = child.kill().await;
+                            let _ = child.wait().await;
+                            let msg = "CLI idle timeout after 180s (no output) — cek PATH/auth/TTY opencode di mesin ini".to_string();
+                            tracing::warn!(provider = %self.id, "{}", msg);
+                            let _ = tx
+                                .send(RunEvent::Error {
+                                    message: msg,
+                                    code: Some("timeout".to_string()),
+                                })
+                                .await;
+                            return Ok(());
+                        }
+                    }
+                }
             };
 
             match read {
@@ -386,10 +528,10 @@ impl CliProvider for CliProviderImpl {
 
 /// Parse CLI output. Supports OpenCode `--format json` (JSONL with reasoning/text events)
 /// and falls back to plain text with <think>...</think> extraction.
-fn parse_cli_output(cleaned: &str) -> (String, Option<String>) {
+fn parse_cli_output(cleaned: &str) -> (String, Option<String>, Option<String>) {
     let lines: Vec<&str> = cleaned.lines().filter(|l| !l.trim().is_empty()).collect();
     if lines.is_empty() {
-        return (String::new(), None);
+        return (String::new(), None, None);
     }
     
     // 1. Try JSONL parsing through the shared tolerant parser so Claude,
@@ -402,11 +544,17 @@ fn parse_cli_output(cleaned: &str) -> (String, Option<String>) {
         let mut parser = ReasoningParser::new();
         let mut reasoning = String::new();
         let mut texts: Vec<String> = Vec::new();
+        let mut error: Option<String> = None;
         for line in &lines {
             for event in parser.parse_line(line) {
                 match event {
                     RunEvent::ReasoningDelta { text, .. } => reasoning.push_str(&text),
                     RunEvent::Text { text } => texts.push(text),
+                    RunEvent::Error { message, .. } => {
+                        if error.is_none() {
+                            error = Some(message);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -422,7 +570,7 @@ fn parse_cli_output(cleaned: &str) -> (String, Option<String>) {
         } else {
             Some(reasoning)
         };
-        return (content, reasoning);
+        return (content, reasoning, error);
     }
 
     // 2. Fallback: Extract <think>...</think> from plain text
@@ -443,7 +591,31 @@ fn parse_cli_output(cleaned: &str) -> (String, Option<String>) {
         }
     }
 
-    (content, reasoning)
+    // 3. Ollama CLI prints an inline reasoning block:
+    //      Thinking...
+    //      <reasoning>
+    //      ...done thinking.
+    //      <answer>
+    // Split it so reasoning is returned separately from the answer.
+    if let Some(start_idx) = cleaned.find("Thinking...") {
+        if let Some(rel_end) = cleaned[start_idx..].find("done thinking") {
+            let end_idx = start_idx + rel_end;
+            let block = &cleaned[start_idx + "Thinking...".len()..end_idx];
+            let block = block
+                .trim()
+                .trim_end_matches(|c: char| c == '.' || c.is_whitespace());
+            if !block.is_empty() {
+                reasoning = Some(block.to_string());
+            }
+            let mut clean_content = String::new();
+            clean_content.push_str(&cleaned[..start_idx]);
+            let after = &cleaned[end_idx + "done thinking".len()..];
+            clean_content.push_str(after.trim_start_matches(['.', ' ', '\r', '\n']));
+            content = clean_content.trim().to_string();
+        }
+    }
+
+    (content, reasoning, None)
 }
 
 impl CliProviderImpl {
@@ -482,7 +654,30 @@ impl CliProviderImpl {
             return Some(bin.to_string());
         }
 
-        None
+        // Fallback search in common install locations (nvm, npm global, ...).
+        // The `which` crate can miss binaries that the OS can run (e.g. npm
+        // shims installed via nvm), so walk a few well-known directories.
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(home) = std::env::var("HOME") {
+            let nvm_root = std::path::PathBuf::from(&home).join(".nvm/versions/node");
+            if let Ok(entries) = std::fs::read_dir(&nvm_root) {
+                for e in entries.flatten() {
+                    candidates.push(e.path().join("bin").join(bin));
+                }
+            }
+            candidates.push(std::path::PathBuf::from(&home).join(".npm-global/bin").join(bin));
+        }
+        for d in ["/usr/local/bin", "/usr/bin", "/opt/homebrew/bin"] {
+            candidates.push(std::path::PathBuf::from(d).join(bin));
+        }
+        for c in candidates {
+            if c.exists() {
+                return Some(c.to_string_lossy().to_string());
+            }
+        }
+
+        // Last resort: assume it's on PATH; spawn will fail if not present.
+        Some(bin.to_string())
     }
 
     /// Build the chat command and the optional prompt that must be written to
@@ -497,6 +692,14 @@ impl CliProviderImpl {
         let cmd_template = match &self.chat_cmd {
             Some(c) => c.clone(),
             None => return Err(anyhow::anyhow!("No chat_cmd defined for provider {}", self.id)),
+        };
+
+        // Ollama models may arrive as "ollama/<model>"; strip the prefix so the
+        // CLI receives the bare model name (avoids "pull model manifest" errors).
+        let model = if self.id == "ollama" {
+            model.strip_prefix("ollama/").unwrap_or(model)
+        } else {
+            model
         };
 
         // Build prompt from messages.
@@ -557,20 +760,30 @@ impl CliProviderImpl {
                 "tools": {
                     "bash": false, "edit": false, "write": false, "read": false,
                     "patch": false, "grep": false, "glob": false, "list": false,
-                    "webfetch": false, "todowrite": false, "todoread": false, "task": false
+                    "webfetch": false, "todowrite": false, "todoread": false, "task": false,
+                    "*": false
                 },
                 "permission": {
+                    "*": "deny",
                     "externalDirectory": "deny",
                     "network": "deny",
                     "edit": "deny",
                     "bash": "deny",
-                    "webfetch": "deny"
+                    "webfetch": "deny",
+                    "write": "deny",
+                    "read": "deny"
                 }
             });
             cmd.env("OPENCODE_CONFIG_CONTENT", disable.to_string());
         }
 
-        cmd.args(&cmd_args)
+        // Do not force --standalone: it starts a private server that lacks the
+        // shared background session/auth and (on free models) returns 429, which
+        // surfaces as a "gantung"/zombie turn. Rely on the default CLI path,
+        // which exits cleanly after the turn.
+        let final_args = cmd_args.clone();
+
+        cmd.args(&final_args)
             .stdin(if use_stdin {
                 std::process::Stdio::piped()
             } else {
@@ -683,6 +896,12 @@ impl CliProviderImpl {
             }
         }
 
+        // Provider-specific parsing
+        // opencode: single-line space-separated -> all tokens are models
+        // ollama: tabular (NAME ID SIZE MODIFIED) -> only first column (NAME)
+        // gemini/others: fallback to first column per line
+        let is_opencode = self.id == "opencode";
+
         // Newline-separated list
         // Table format (e.g., Ollama list) or newline-separated list
         // Skip header starting with "NAME"
@@ -697,8 +916,15 @@ impl CliProviderImpl {
         let models: Vec<String> = lines_iter
             .filter(|line| !line.trim().is_empty())
             .map(|line| {
-                line.split_whitespace().next().unwrap_or("").to_string()
+                if is_opencode {
+                    // opencode: space-separated on one line -> all tokens
+                    line.split_whitespace().map(|s| s.to_string()).collect::<Vec<_>>()
+                } else {
+                    // ollama/gemini/others: tabular -> only first column
+                    line.split_whitespace().next().map(|s| s.to_string()).into_iter().collect::<Vec<_>>()
+                }
             })
+            .flatten()
             .filter(|s| !s.is_empty())
             .collect();
         if !models.is_empty() {
@@ -714,6 +940,144 @@ impl CliProviderImpl {
     }
 }
 
+/// Static version of execute_cmd_inner for use in blocking tasks
+fn execute_cmd_static(bin: &str, args: &[String]) -> Result<std::process::Output, anyhow::Error> {
+    // Try direct path
+    if std::path::Path::new(bin).exists() {
+        tracing::debug!("Executing via direct path: {}", bin);
+        return Ok(Command::new(bin)
+            .args(args)
+            .output()?);
+    }
+
+    // Windows: try extensions FIRST (prefer .cmd over extensionless)
+    if cfg!(target_os = "windows") {
+        for ext in &[".cmd", ".bat", ".exe", ".ps1"] {
+            if bin.to_lowercase().ends_with(ext) {
+                continue;
+            }
+            let candidate = format!("{}{}", bin, ext);
+            if which::which(&candidate).is_ok() {
+                tracing::debug!("Executing via PATH with ext: {}", candidate);
+                // .cmd/.bat/.ps1 files need shell execution on Windows
+                if ext == &".cmd" || ext == &".bat" || ext == &".ps1" {
+                    return Ok(Command::new("cmd")
+                        .args(["/C"])
+                        .arg(&candidate)
+                        .args(args)
+                        .output()?);
+                }
+                return Ok(Command::new(&candidate)
+                    .args(args)
+                    .output()?);
+            }
+        }
+    }
+
+    // Try PATH search (for non-Windows or if no extension found)
+    if which::which(bin).is_ok() {
+        tracing::debug!("Executing via PATH: {}", bin);
+        return Ok(Command::new(bin)
+            .args(args)
+            .output()?);
+    }
+
+    // Windows: try extensions again as fallback (redundant but safe)
+    if cfg!(target_os = "windows") {
+        for ext in &[".cmd", ".bat", ".exe", ".ps1"] {
+            if bin.to_lowercase().ends_with(ext) {
+                continue;
+            }
+            let candidate = format!("{}{}", bin, ext);
+            if which::which(&candidate).is_ok() {
+                tracing::debug!("Executing via PATH with ext (fallback): {}", candidate);
+                if ext == &".cmd" || ext == &".bat" || ext == &".ps1" {
+                    return Ok(Command::new("cmd")
+                        .args(["/C"])
+                        .arg(&candidate)
+                        .args(args)
+                        .output()?);
+                }
+                return Ok(Command::new(&candidate)
+                    .args(args)
+                    .output()?);
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!("Binary not found: {}", bin))
+}
+
+/// Static version of parse_models_output for use in blocking tasks
+fn parse_models_output_static(output: &str, provider_id: &str) -> Vec<String> {
+    let cleaned = String::from_utf8_lossy(&strip_ansi_escapes::strip(output)).to_string();
+    let trimmed = cleaned.trim();
+
+    // Try JSON array format: ["model1", "model2"]
+    if trimmed.starts_with('[') {
+        if let Ok(parsed) = serde_json::from_str::<Vec<String>>(trimmed) {
+            return parsed;
+        }
+        // Try JSON object format: {"models": ["model1", "model2"]}
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(arr) = parsed.get("models").and_then(|v| v.as_array()) {
+                return arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+            }
+        }
+    }
+
+    // Try JSON object format: {"models": ["model1", "model2"]}
+    if trimmed.starts_with('{') {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(arr) = parsed.get("models").and_then(|v| v.as_array()) {
+                return arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+            }
+        }
+    }
+
+    // Provider-specific parsing
+    // opencode: single-line space-separated -> all tokens are models
+    // ollama: tabular (NAME ID SIZE MODIFIED) -> only first column (NAME)
+    // gemini/others: fallback to first column per line
+    let is_opencode = provider_id == "opencode";
+
+    // Newline-separated list
+    // Table format (e.g., Ollama list) or newline-separated list
+    // Skip header starting with "NAME"
+    let mut lines = cleaned.lines();
+    let first = lines.next();
+    let has_header = if let Some(l) = first {
+        l.trim_start().starts_with("NAME")
+    } else {
+        false
+    };
+    let lines_iter = if has_header { lines } else { cleaned.lines() };
+    let models: Vec<String> = lines_iter
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            if is_opencode {
+                // opencode: space-separated on one line -> all tokens
+                line.split_whitespace().map(|s| s.to_string()).collect::<Vec<_>>()
+            } else {
+                // ollama/gemini/others: tabular -> only first column
+                line.split_whitespace().next().map(|s| s.to_string()).into_iter().collect::<Vec<_>>()
+            }
+        })
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !models.is_empty() {
+        return models;
+    }
+    // Fallback: newline-separated list
+    cleaned
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| line.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// Strip all ANSI escape codes from text
 pub fn strip_ansi_codes(text: &str) -> String {
     String::from_utf8_lossy(&strip_ansi_escapes::strip(text)).to_string()
@@ -721,6 +1085,7 @@ pub fn strip_ansi_codes(text: &str) -> String {
 
 pub mod ollama_native;
 pub mod bridge;
+pub mod ollama_cli;
 
 use crate::provider::bridge::{BridgeConfig, create_bridge_factory_v2};
 use crate::bridge::BridgeClient;
@@ -739,23 +1104,40 @@ pub fn bridge_turn_timeout() -> std::time::Duration {
 /// Unlike a naive `content.join("\n")`, this keeps system instructions,
 /// assistant tool calls, and `role:"tool"` results so a resumed/replayed run
 /// can continue correctly (spec §7.5, §11.2).
-pub fn render_conversation(messages: &[crate::types::ChatMessage]) -> String {
+pub fn render_conversation(
+    messages: &[crate::types::ChatMessage],
+    max_prompt_chars: Option<usize>,
+    max_result_bytes: Option<usize>,
+) -> String {
     use crate::types::MessageRole;
 
     let mut out = String::new();
+    let mut total_chars = 0usize;
     for msg in messages {
         match msg.role {
             MessageRole::System => {
                 if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
+                    let trimmed = content.trim();
+                    let (truncated, exceeded) = limit_chars(trimmed, max_prompt_chars, total_chars);
+                    if exceeded {
+                        break;
+                    }
+                    total_chars += truncated.len();
                     out.push_str("[system]\n");
-                    out.push_str(content.trim());
+                    out.push_str(truncated);
                     out.push_str("\n\n");
                 }
             }
             MessageRole::User => {
                 if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
+                    let trimmed = content.trim();
+                    let (truncated, exceeded) = limit_chars(trimmed, max_prompt_chars, total_chars);
+                    if exceeded {
+                        break;
+                    }
+                    total_chars += truncated.len();
                     out.push_str("[user]\n");
-                    out.push_str(content.trim());
+                    out.push_str(truncated);
                     out.push_str("\n\n");
                 }
             }
@@ -764,13 +1146,21 @@ pub fn render_conversation(messages: &[crate::types::ChatMessage]) -> String {
                     for call in calls {
                         out.push_str(&format!(
                             "[assistant tool_call id={} name={}]\n{}\n\n",
-                            call.id, call.function.name, call.function.arguments
+                            call.id,
+                            call.function.name,
+                            call.function.arguments
                         ));
                     }
                 }
                 if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
+                    let trimmed = content.trim();
+                    let (truncated, exceeded) = limit_chars(trimmed, max_prompt_chars, total_chars);
+                    if exceeded {
+                        break;
+                    }
+                    total_chars += truncated.len();
                     out.push_str("[assistant]\n");
-                    out.push_str(content.trim());
+                    out.push_str(truncated);
                     out.push_str("\n\n");
                 }
             }
@@ -778,16 +1168,45 @@ pub fn render_conversation(messages: &[crate::types::ChatMessage]) -> String {
                 let id = msg.tool_call_id.as_deref().unwrap_or("");
                 let name = msg.name.as_deref().unwrap_or("");
                 let content = msg.content.as_deref().unwrap_or("");
+                // Enforce max_result_bytes on tool result content
+                let truncated = limit_bytes(content, max_result_bytes);
                 out.push_str(&format!(
                     "[tool result id={} name={}]\n{}\n\n",
                     id,
                     name,
-                    content.trim()
+                    truncated
                 ));
             }
         }
     }
     out.trim_end().to_string()
+}
+
+/// Limit character count within remaining budget. Returns (content, exceeded).
+fn limit_chars(content: &str, max_prompt_chars: Option<usize>, used: usize) -> (&str, bool) {
+    let Some(limit) = max_prompt_chars else {
+        return (content, false);
+    };
+    let remaining = limit.saturating_sub(used);
+    if remaining == 0 {
+        return ("", true);
+    }
+    let bytes = content.as_bytes();
+    let take = bytes.len().min(remaining);
+    let truncated = &content[..take];
+    (truncated, take < bytes.len())
+}
+
+/// Limit byte count for tool result content. Returns truncated content.
+fn limit_bytes(content: &str, max_result_bytes: Option<usize>) -> &str {
+    let Some(limit) = max_result_bytes else {
+        return content;
+    };
+    if content.len() <= limit {
+        return content;
+    }
+    // Truncate at a character boundary near the limit
+    &content[..limit.min(content.len())]
 }
 
 /// Prompt instructions for CLIs/models without native tool calling
@@ -824,10 +1243,15 @@ pub struct BridgeCliProvider {
     bridge: Option<Arc<crate::bridge::BridgeServer>>,
     keep_alive: Option<String>,
     prompt_tools_fallback: bool,
+    /// Transport type: "http" (default) or "stdio_shim"
+    transport: Option<String>,
     /// Cache of persistent sessions (keyed by session_id) for keep_alive mode.
     /// When keep_alive is enabled, sessions are stored here instead of being closed.
     /// Using Arc to allow cloning and sharing sessions across requests.
     persistent_sessions: Arc<RwLock<HashMap<String, Arc<dyn crate::provider::bridge::BridgeSession>>>>,
+    /// Limits for prompt rendering
+    max_prompt_chars: usize,
+    max_result_bytes: usize,
 }
 
 impl BridgeCliProvider {
@@ -853,7 +1277,10 @@ impl BridgeCliProvider {
             bridge,
             keep_alive: config.keep_alive.clone(),
             prompt_tools_fallback: config.prompt_tools_fallback,
+            transport: config.transport.clone(),
             persistent_sessions: Arc::new(RwLock::new(HashMap::new())),
+            max_prompt_chars: 400_000,
+            max_result_bytes: 262_144,
         })
     }
 
@@ -940,14 +1367,14 @@ pub fn build_cli_provider(
     bridge: Option<Arc<crate::bridge::BridgeServer>>,
 ) -> Box<dyn CliProvider + Send + Sync> {
     // Ollama uses HTTP native by default; only `ollama_mode = "cli"` opts into
-    // the bridge adapter (spec_ollama-cli.md).
-    let wants_bridge = if config.id == "ollama" {
+    // the bridge adapter (spec_ollama-cli.md) which uses `ollama run` via MCP bridge.
+    let wants_cli = if config.id == "ollama" {
         config.ollama_mode.as_deref() == Some("cli")
     } else {
         config.bridge
     };
 
-    if wants_bridge {
+    if wants_cli {
         let mut cfg = config.clone();
         if cfg.id == "ollama" && cfg.bin.is_none() {
             cfg.bin = Some("ollama".to_string());
@@ -992,32 +1419,29 @@ impl CliProvider for BridgeCliProvider {
             None => return false,
         };
 
-        // Direct path check
-        if std::path::Path::new(bin).exists() {
-            return true;
-        }
-
-        // PATH search via which crate
-        if which::which(bin).is_ok() {
-            return true;
-        }
-
-        // Windows: try common extensions
-        if cfg!(target_os = "windows") {
-            for ext in &[".cmd", ".bat", ".exe", ".ps1"] {
-                if !bin.to_lowercase().ends_with(ext) {
-                    let candidate = format!("{}{}", bin, ext);
-                    if which::which(&candidate).is_ok() {
-                        return true;
-                    }
+        // Resolve to a runnable path first (handles Windows PATHEXT).
+        let mut cmd = std::process::Command::new(bin);
+        cmd.arg("--version");
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        match cmd.output() {
+            Ok(out) => {
+                tracing::info!(provider = %self.id, bin = %bin, status = %out.status, "check_available: resolved");
+                true
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    tracing::warn!(provider = %self.id, bin = %bin, "check_available: NOT found on PATH");
+                    false
+                } else {
+                    tracing::warn!(provider = %self.id, bin = %bin, error = %e, "check_available: spawn error, assuming present");
+                    true
                 }
             }
         }
-
-        false
     }
 
-    fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> {
+    async fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> {
         // For bridge providers, return configured models (CLI agents don't typically have model listing)
         Ok(self.models.clone())
     }
@@ -1055,12 +1479,13 @@ impl CliProvider for BridgeCliProvider {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
             let tool_schemas = self.tool_schemas_from_request(&request);
+            let tool_schemas_for_bridge = tool_schemas.clone();
             let (mcp_session_id, session_token) = match self.register_session(tool_schemas).await {
                 Some((id, token)) => (Some(id), Some(token)),
                 None => (None, None),
             };
             let local_session_id = mcp_session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-            let data_dir = std::path::PathBuf::from("/tmp/agentgate");
+            let data_dir = std::env::temp_dir().join("agentgate");
             let workdir = data_dir.join("sessions").join(&local_session_id).join("work");
             tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
 
@@ -1068,6 +1493,7 @@ impl CliProvider for BridgeCliProvider {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(8786);
+            tracing::info!(target: "bridge.cli", bridge_port = bridge_port, "Using bridge port");
 
             let bridge_config = BridgeConfig {
                 host: "127.0.0.1".to_string(),
@@ -1079,30 +1505,44 @@ impl CliProvider for BridgeCliProvider {
                 session_token,
                 keep_alive: self.keep_alive.clone(),
                 prompt_tools_fallback: self.prompt_tools_fallback,
+                transport: self.transport.clone(),
+                tools: tool_schemas_for_bridge,
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider");
             // Create bridge provider from factory
             let provider = self.factory.create(bridge_config.clone()).await?;
 
-            // Create bridge client
-            let client = Arc::new(BridgeClient {
-                host: "127.0.0.1".to_string(),
-                port: bridge_port,
-            });
+            // Create bridge client with bridge reference for PR-S4 continuation
+            let client = Arc::new(BridgeClient::new_with_bridge(
+                "127.0.0.1".to_string(),
+                bridge_port,
+                self.bridge.as_ref().expect("bridge required for bridge provider").clone(),
+            ));
 
             // Start bridge session (spawns CLI with MCP config)
             let session = provider.start_bridge(bridge_config, client).await?;
 
             // Convert Box to Arc for persistent session storage
-            let session = Arc::from(session);
+            let session: std::sync::Arc<dyn crate::provider::bridge::BridgeSession> = std::sync::Arc::from(session);
+
+            // Register provider session with BridgeServer for cancellation support
+            if let Some(ref bridge) = self.bridge {
+                if let Some(ref mcp_id) = mcp_session_id {
+                    bridge.register_provider_session(mcp_id.clone(), session.clone()).await;
+                }
+            }
 
             (session, keep_alive, mcp_session_id)
         };
 
         // Send the structured conversation to the CLI so system instructions,
         // assistant tool calls, and tool results survive (spec §11.2).
-        let mut user_message = render_conversation(&request.messages);
+        let mut user_message = render_conversation(
+            &request.messages,
+            Some(self.max_prompt_chars),
+            Some(self.max_result_bytes),
+        );
         if self.prompt_tools_fallback {
             if let Some(tools) = request.tools.as_deref().filter(|t| !t.is_empty()) {
                 user_message.push_str(&tool_prompt_instructions(tools));
@@ -1141,7 +1581,42 @@ impl CliProvider for BridgeCliProvider {
             }
         };
 
-        if keep_alive {
+        // PR-S4: opencode continuation (capability-gated). If tool_calls returned and session can
+        // continue after MCP hold resolve, keep session alive, register continuation, spawn producer.
+        // Replay fallback remains mandatory (service/bridge handle absence/timeout/loss).
+        let has_tool_calls = output.tool_calls.as_ref().is_some_and(|v| !v.is_empty());
+        let continuation_capable = session.continuation_capability() != crate::provider::bridge::ContinuationCapability::Unsupported;
+        let continuation_key = request.agentgate_run_id.clone().or_else(|| mcp_session_id.clone());
+        let continuation_registered = if has_tool_calls && continuation_capable && continuation_key.is_some() && self.bridge.is_some() {
+            if let (Some(bridge), Some(key)) = (self.bridge.clone(), continuation_key.clone()) {
+                let tx = bridge.register_continuation(key.clone()).await;
+                let session_for_cont = session.clone();
+                let key_for_task = key.clone();
+                tokio::spawn(async move {
+                    match tokio::time::timeout(bridge_turn_timeout(), session_for_cont.wait_for_continuation()).await {
+                        Ok(Ok(out)) => { let _ = tx.send(out); }
+                        Ok(Err(e)) => {
+                            tracing::warn!(event = "continuation.producer.failed", key = %key_for_task, error = %e);
+                        }
+                        Err(_) => {
+                            tracing::warn!(event = "continuation.producer.timeout", key = %key_for_task);
+                        }
+                    }
+                    // tx drop on all paths => resume await returns Err, service replays (fallback mandatory).
+                    let _ = bridge.remove_continuation(&key_for_task).await; // best-effort if never taken
+                });
+                tracing::info!(event = "continuation.registered", key = %key, has_tool_calls = true);
+                true
+            } else { false }
+        } else { false };
+
+        if continuation_registered {
+            // Keep session + MCP registration alive for live continuation; do not close/release.
+            if should_store {
+                let mut sessions = self.persistent_sessions.write().await;
+                sessions.insert(session_id.clone(), session.clone());
+            }
+        } else if keep_alive {
             // Store the session for reuse, don't close it
             if should_store {
                 let mut sessions = self.persistent_sessions.write().await;
@@ -1168,6 +1643,7 @@ impl CliProvider for BridgeCliProvider {
             reasoning: output.reasoning,
             tool_calls,
             session_id: Some(session_id),
+            mcp_session_id: mcp_session_id.clone(),
         })
     }
 
@@ -1205,12 +1681,13 @@ impl CliProvider for BridgeCliProvider {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
             let tool_schemas = self.tool_schemas_from_request(&request);
+            let tool_schemas_for_bridge = tool_schemas.clone();
             let (mcp_session_id, session_token) = match self.register_session(tool_schemas).await {
                 Some((id, token)) => (Some(id), Some(token)),
                 None => (None, None),
             };
             let local_session_id = mcp_session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-            let data_dir = std::path::PathBuf::from("/tmp/agentgate");
+            let data_dir = std::env::temp_dir().join("agentgate");
             let workdir = data_dir.join("sessions").join(&local_session_id).join("work");
             tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
 
@@ -1218,6 +1695,7 @@ impl CliProvider for BridgeCliProvider {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(8786);
+            tracing::info!(target: "bridge.cli", bridge_port = bridge_port, "Using bridge port");
 
             let bridge_config = BridgeConfig {
                 host: "127.0.0.1".to_string(),
@@ -1229,30 +1707,44 @@ impl CliProvider for BridgeCliProvider {
                 session_token,
                 keep_alive: self.keep_alive.clone(),
                 prompt_tools_fallback: self.prompt_tools_fallback,
+                transport: self.transport.clone(),
+                tools: tool_schemas_for_bridge,
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider (stream)");
             // Create bridge provider from factory
             let provider = self.factory.create(bridge_config.clone()).await?;
 
-            // Create bridge client
-            let client = Arc::new(BridgeClient {
-                host: "127.0.0.1".to_string(),
-                port: bridge_port,
-            });
+            // Create bridge client with bridge reference for PR-S4 continuation
+            let client = Arc::new(BridgeClient::new_with_bridge(
+                "127.0.0.1".to_string(),
+                bridge_port,
+                self.bridge.as_ref().expect("bridge required for bridge provider").clone(),
+            ));
 
             // Start bridge session
             let session = provider.start_bridge(bridge_config, client).await?;
 
             // Convert Box to Arc for persistent session storage
-            let session = Arc::from(session);
+            let session: std::sync::Arc<dyn crate::provider::bridge::BridgeSession> = std::sync::Arc::from(session);
+
+            // Register provider session with BridgeServer for cancellation support
+            if let Some(ref bridge) = self.bridge {
+                if let Some(ref mcp_id) = mcp_session_id {
+                    bridge.register_provider_session(mcp_id.clone(), session.clone()).await;
+                }
+            }
 
             (session, keep_alive, mcp_session_id)
         };
 
         // Send the structured conversation to the CLI so system instructions,
         // assistant tool calls, and tool results survive (spec §11.2).
-        let mut user_message = render_conversation(&request.messages);
+        let mut user_message = render_conversation(
+            &request.messages,
+            Some(self.max_prompt_chars),
+            Some(self.max_result_bytes),
+        );
         if self.prompt_tools_fallback {
             if let Some(tools) = request.tools.as_deref().filter(|t| !t.is_empty()) {
                 user_message.push_str(&tool_prompt_instructions(tools));
@@ -1277,53 +1769,240 @@ impl CliProvider for BridgeCliProvider {
             session.send_user_message(&user_message).await?;
         }
 
-        // Wait for completion and stream events
-        let output = match tokio::time::timeout(bridge_turn_timeout(), session.wait_for_completion()).await {
-            Ok(result) => result?,
-            Err(_) => {
-                if !keep_alive {
-                    let _ = session.close().await;
+        // Take event receiver for true streaming
+        let mut event_rx = session.take_event_receiver().await?.unwrap_or_else(|| {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            tx.send(serde_json::json!({"type": "warning", "message": "no event receiver available"})).ok();
+            rx
+        });
+
+        // Spawn a task to wait for completion in background (for session cleanup)
+        let session_for_completion = session.clone();
+        let keep_alive_flag = keep_alive;
+        let should_store_flag = should_store;
+        let session_id_for_cleanup = session_id.clone();
+        let mcp_session_id_for_cleanup = mcp_session_id.clone();
+        let persistent_sessions_clone = self.persistent_sessions.clone();
+        let bridge_turn_timeout_secs = bridge_turn_timeout();
+
+        // Collect streaming output
+        let mut collected_content = String::new();
+        let mut collected_reasoning = String::new();
+        let mut collected_tool_calls: Vec<crate::reasoning::event::ToolCall> = Vec::new();
+        let mut done_sent = false;
+        let mut stream_error: Option<anyhow::Error> = None;
+
+        // Stream events in real-time. Use ReasoningParser so we handle the same
+        // CLI event shapes as the non-stream path (OpenCode JSONL, errors, etc.)
+        // and don't silently drop important events.
+        let tx_stream = tx.clone();
+        let request_tools = request.tools.as_deref().unwrap_or(&[]).to_vec();
+        let streaming_result: Result<(), anyhow::Error> = async {
+            use crate::reasoning::parser::ReasoningParser;
+            use crate::reasoning::RunEvent;
+
+            let mut timeout_timer = tokio::time::interval(bridge_turn_timeout_secs);
+            timeout_timer.tick().await; // First tick after timeout
+            let mut parser = ReasoningParser::new();
+
+            let mut should_continue = true;
+            while should_continue {
+                tokio::select! {
+                    event_opt = event_rx.recv() => {
+                        match event_opt {
+                            Some(event) => {
+                                // Reset timeout on each event
+                                timeout_timer.reset();
+
+                                let line = event.to_string();
+                                for parsed in parser.parse_line(&line) {
+                                    match parsed {
+                                        RunEvent::Text { text } => {
+                                            if !text.is_empty() {
+                                                collected_content.push_str(&text);
+                                                if tx_stream.send(RunEvent::Text { text }).await.is_err() {
+                                                    should_continue = false;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        RunEvent::ReasoningStart { block, kind } => {
+                                            if tx_stream.send(RunEvent::ReasoningStart { block, kind }).await.is_err() {
+                                                should_continue = false;
+                                                break;
+                                            }
+                                        }
+                                        RunEvent::ReasoningDelta { block, text } => {
+                                            if !text.is_empty() {
+                                                collected_reasoning.push_str(&text);
+                                                if tx_stream.send(RunEvent::ReasoningDelta { block, text }).await.is_err() {
+                                                    should_continue = false;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        RunEvent::ReasoningEnd { block } => {
+                                            if tx_stream.send(RunEvent::ReasoningEnd { block }).await.is_err() {
+                                                should_continue = false;
+                                                break;
+                                            }
+                                        }
+                                        RunEvent::Activity { kind, label } => {
+                                            if tx_stream.send(RunEvent::Activity { kind, label }).await.is_err() {
+                                                should_continue = false;
+                                                break;
+                                            }
+                                        }
+                                        RunEvent::Usage { prompt_tokens, completion_tokens, total_tokens } => {
+                                            if tx_stream
+                                                .send(RunEvent::Usage { prompt_tokens, completion_tokens, total_tokens })
+                                                .await
+                                                .is_err()
+                                            {
+                                                should_continue = false;
+                                                break;
+                                            }
+                                        }
+                                        RunEvent::ToolCalls { mut calls } => {
+                                            crate::openai::tools::unalias_tool_calls(
+                                                &mut calls,
+                                                request_tools.as_slice(),
+                                            );
+                                            collected_tool_calls.extend(calls.clone());
+                                            if tx_stream.send(RunEvent::ToolCalls { calls }).await.is_err() {
+                                                should_continue = false;
+                                                break;
+                                            }
+                                        }
+                                        RunEvent::Error { message, code } => {
+                                            let msg = format!("provider_error: {}", message);
+                                            let _ = tx_stream.send(RunEvent::Error { message: msg.clone(), code }).await;
+                                            stream_error = Some(anyhow::anyhow!(msg));
+                                            should_continue = false;
+                                            break;
+                                        }
+                                        RunEvent::Done { reason } => {
+                                            done_sent = true;
+                                            let _ = tx_stream.send(RunEvent::Done { reason }).await;
+                                            should_continue = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            None => {
+                                // Channel closed (stdout EOF)
+                                break;
+                            }
+                        }
+                    }
+                    _ = timeout_timer.tick() => {
+                        tracing::warn!(target: "bridge.stream", session_id = %session_id, "Streaming timeout reached");
+                        let msg = "provider_error: bridge turn timed out";
+                        let _ = tx_stream.send(RunEvent::Error { message: msg.to_string(), code: Some("timeout".to_string()) }).await;
+                        stream_error = Some(anyhow::anyhow!(msg));
+                        break;
+                    }
                 }
-                if let Some(ref mcp_id) = mcp_session_id {
-                    self.release_session(&Some(mcp_id.clone())).await;
+            }
+
+            // Flush any buffered parser state
+            if !done_sent && stream_error.is_none() {
+                for parsed in parser.finish() {
+                    match parsed {
+                        RunEvent::Text { text } => {
+                            if !text.is_empty() {
+                                collected_content.push_str(&text);
+                                let _ = tx_stream.send(RunEvent::Text { text }).await;
+                            }
+                        }
+                        RunEvent::ToolCalls { mut calls } => {
+                            crate::openai::tools::unalias_tool_calls(&mut calls, request_tools.as_slice());
+                            collected_tool_calls.extend(calls.clone());
+                            let _ = tx_stream.send(RunEvent::ToolCalls { calls }).await;
+                        }
+                        RunEvent::Done { reason } => {
+                            done_sent = true;
+                            let _ = tx_stream.send(RunEvent::Done { reason }).await;
+                        }
+                        RunEvent::Error { message, code } => {
+                            let msg = format!("provider_error: {}", message);
+                            let _ = tx_stream.send(RunEvent::Error { message: msg.clone(), code }).await;
+                            stream_error = Some(anyhow::anyhow!(msg));
+                        }
+                        other => {
+                            let _ = tx_stream.send(other).await;
+                        }
+                    }
                 }
-                return Err(anyhow::anyhow!("provider_error: bridge turn timed out"));
             }
-        };
 
-        if keep_alive {
-            // Store the session for reuse, don't close it
-            if should_store {
-                let mut sessions = self.persistent_sessions.write().await;
-                sessions.insert(session_id.clone(), session.clone());
+            if !done_sent && stream_error.is_none() {
+                if collected_content.trim().is_empty() && collected_tool_calls.is_empty() {
+                    let msg = "provider_error: CLI produced no output (upstream error or unsupported model/config)";
+                    let _ = tx_stream.send(RunEvent::Error { message: msg.to_string(), code: Some("empty_output".to_string()) }).await;
+                    stream_error = Some(anyhow::anyhow!(msg));
+                    done_sent = true;
+                } else {
+                    let _ = tx_stream.send(RunEvent::Done { reason: crate::reasoning::FinishReason::Stop }).await;
+                    done_sent = true;
+                }
             }
-            // Don't release MCP session for persistent sessions
-        } else {
-            // Close session and release MCP session for non-persistent mode
-            let _ = session.close().await;
-            if let Some(ref mcp_id) = mcp_session_id {
-                self.release_session(&Some(mcp_id.clone())).await;
+
+            if let Some(err) = stream_error.take() {
+                return Err(err);
             }
-        }
+            Ok(())
+        }.await;
 
-        // Stream the result as events
-        if let Some(reasoning) = output.reasoning.filter(|r| !r.trim().is_empty()) {
-            if tx.send(crate::reasoning::RunEvent::ReasoningStart { block: 0, kind: crate::reasoning::ReasoningKind::Raw }).await.is_err() { return Ok(()); }
-            if tx.send(crate::reasoning::RunEvent::ReasoningDelta { block: 0, text: reasoning }).await.is_err() { return Ok(()); }
-            if tx.send(crate::reasoning::RunEvent::ReasoningEnd { block: 0 }).await.is_err() { return Ok(()); }
-        }
-        if !output.content.is_empty() {
-            if tx.send(crate::reasoning::RunEvent::Text { text: output.content }).await.is_err() { return Ok(()); }
-        }
-        if let Some(mut calls) = output.tool_calls.filter(|v| !v.is_empty()) {
-            crate::openai::tools::unalias_tool_calls(
-                &mut calls,
-                request.tools.as_deref().unwrap_or(&[]),
-            );
-            if tx.send(crate::reasoning::RunEvent::ToolCalls { calls }).await.is_err() { return Ok(()); }
-        }
-        let _ = tx.send(crate::reasoning::RunEvent::Done { reason: crate::reasoning::FinishReason::Stop }).await;
+        let done_sent_final = done_sent;
+        let collected_content_final = collected_content.clone();
+        let request_tools_for_cleanup = request_tools.clone();
 
-        Ok(())
+        // Wait for completion in background for session cleanup
+        let completion_task = tokio::spawn(async move {
+            match tokio::time::timeout(bridge_turn_timeout_secs, session_for_completion.wait_for_completion()).await {
+                Ok(Ok(output)) => {
+                    tracing::debug!(target: "bridge.cli", session_id = %session_id_for_cleanup, "CLI completed");
+                    // Streaming path already handled event delivery in most cases.
+                    // Only attempt fallback if nothing was sent and session produced output.
+                    if !done_sent_final {
+                        if let Some(reasoning) = output.reasoning.filter(|r| !r.trim().is_empty()) {
+                            let _ = tx.send(crate::reasoning::RunEvent::ReasoningStart { block: 0, kind: crate::reasoning::ReasoningKind::Raw }).await;
+                            let _ = tx.send(crate::reasoning::RunEvent::ReasoningDelta { block: 0, text: reasoning }).await;
+                            let _ = tx.send(crate::reasoning::RunEvent::ReasoningEnd { block: 0 }).await;
+                        }
+                        if !output.content.is_empty() && output.content != collected_content_final {
+                            let _ = tx.send(crate::reasoning::RunEvent::Text { text: output.content }).await;
+                        }
+                        if let Some(mut calls) = output.tool_calls.filter(|v| !v.is_empty()) {
+                            crate::openai::tools::unalias_tool_calls(&mut calls, request_tools_for_cleanup.as_slice());
+                            let _ = tx.send(crate::reasoning::RunEvent::ToolCalls { calls }).await;
+                        }
+                        let _ = tx.send(crate::reasoning::RunEvent::Done { reason: crate::reasoning::FinishReason::Stop }).await;
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(target: "bridge.cli", session_id = %session_id_for_cleanup, error = %e, "CLI completion error after streaming");
+                }
+                Err(_) => {
+                    tracing::warn!(target: "bridge.cli", session_id = %session_id_for_cleanup, "CLI completion timed out after streaming");
+                }
+            }
+
+            // Cleanup session
+            if !keep_alive_flag {
+                let _ = session_for_completion.close().await;
+            } else if should_store_flag {
+                let mut sessions = persistent_sessions_clone.write().await;
+                sessions.insert(session_id_for_cleanup, session_for_completion);
+            }
+            let _ = mcp_session_id_for_cleanup;
+        });
+
+        // Detach completion task (runs in background for cleanup)
+        drop(completion_task);
+
+        streaming_result
     }
 }

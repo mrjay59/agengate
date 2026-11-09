@@ -12,6 +12,8 @@ pub struct Metrics {
     pub runs_active: AtomicU64,
     /// Runs currently Parked waiting for the client resume request.
     pub runs_parked: AtomicU64,
+    /// Bridge keepalive ticks emitted.
+    pub bridge_keepalive_ticks: AtomicU64,
     /// Resume attempts that succeeded.
     pub resume_ok: AtomicU64,
     /// Resume attempts served via replay fallback.
@@ -39,6 +41,7 @@ impl Metrics {
         Self {
             runs_active: AtomicU64::new(0),
             runs_parked: AtomicU64::new(0),
+            bridge_keepalive_ticks: AtomicU64::new(0),
             resume_ok: AtomicU64::new(0),
             resume_replay: AtomicU64::new(0),
             resume_conflict: AtomicU64::new(0),
@@ -112,6 +115,10 @@ impl Metrics {
         self.ttft_ms_count.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_bridge_keepalive(&self) {
+        self.bridge_keepalive_ticks.fetch_add(1, Ordering::Relaxed);
+    }
+
     fn ms(v: u64) -> f64 {
         v as f64 / 1000.0
     }
@@ -126,6 +133,7 @@ impl Metrics {
         let mut out = String::with_capacity(1024);
         line(&mut out, "agentgate_runs_active", self.runs_active.load(Ordering::Relaxed) as f64);
         line(&mut out, "agentgate_runs_parked", self.runs_parked.load(Ordering::Relaxed) as f64);
+        line(&mut out, "agentgate_bridge_keepalive_ticks_total", self.bridge_keepalive_ticks.load(Ordering::Relaxed) as f64);
         
         // resume_total with labels per spec
         let resume_ok = self.resume_ok.load(Ordering::Relaxed) as f64;

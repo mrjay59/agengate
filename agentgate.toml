@@ -21,7 +21,8 @@ models_cmd = ["models"]
 chat_cmd = ["run", "--model", "{model}", "--thinking", "--format", "json", "{prompt}"]
 strip_ansi = true
 enabled = true
-models = ["opencode/beam-free", "opencode/beam", "opencode/codestral"]
+models = ["opencode/beam-free", "opencode/flint-40b-free", "opencode/deepseek-v4.1-flash-free", "opencode/beam", "opencode/codestral"]
+transport = "stdio_shim"
 
 [[provider]]
 id = "gemini"
@@ -35,6 +36,7 @@ models = ["gemini-2.5-pro", "gemini-2.5-flash"]
 [[provider]]
 id = "ollama"
 bin = "ollama"
+ollama_mode = "cli"
 models_cmd = ["list"]
 chat_cmd = ["run", "{model}"]
 strip_ansi = true

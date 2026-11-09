@@ -157,6 +157,17 @@ fn coalescer_keeps_reasoning_before_text_under_load() {
             seen_reasoning_end = true;
         }
     }
+    // Text is buffered until ReasoningEnd or force_flush. Call force_flush to emit it.
+    let out = c.force_flush();
+    for ev in out {
+        if matches!(ev, RunEvent::Text { .. }) {
+            assert!(seen_reasoning_end, "text must not precede ReasoningEnd");
+            seen_text = true;
+        }
+        if matches!(ev, RunEvent::ReasoningEnd { .. }) {
+            seen_reasoning_end = true;
+        }
+    }
     assert!(seen_text);
 }
 

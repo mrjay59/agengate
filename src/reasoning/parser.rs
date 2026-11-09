@@ -51,17 +51,32 @@ impl ReasoningParser {
         if line.starts_with('[') && line.contains(']') {
             return self.parse_activity(line).into_iter().collect();
         }
+        // Ollama CLI inline reasoning markers:
+        //   Thinking...
+        //   <reasoning>
+        //   ...done thinking.
+        if line.starts_with("Thinking...") {
+            return self.ensure_reasoning_start(ReasoningKind::Raw);
+        }
+        if line.contains("done thinking") {
+            return self.end_reasoning();
+        }
         if self.in_reasoning || line.starts_with("<think>") || line.starts_with("Thinking:") {
             let mut events = self.ensure_reasoning_start(ReasoningKind::Raw);
             events.push(RunEvent::ReasoningDelta {
                 block: self.current_block,
-                text: line.to_string(),
+                text: format!("{}\n", line),
             });
             return events;
         }
 
         let mut events = self.end_reasoning();
-        events.push(RunEvent::Text { text: line.to_string() });
+        // Preserve line boundaries for plain-text CLI output (`ollama run`,
+        // `gemini generate`, …). Without the trailing newline, consecutive
+        // stdout lines would be concatenated into a single run-on paragraph.
+        events.push(RunEvent::Text {
+            text: format!("{}\n", line),
+        });
         events
     }
 
@@ -197,19 +212,94 @@ impl ReasoningParser {
                 });
                 events
             }
-            // Gemini: error event.
+            // OpenCode/flint: `{"type":"text","part":{"type":"text","text":"..."}}`.
+            // Also: `{"type":"text","delta":"..."}` (Claude-style).
+            "text" => {
+                let text = value
+                    .get("part")
+                    .and_then(|p| p.get("text"))
+                    .and_then(|t| t.as_str())
+                    .or_else(|| value.get("text").and_then(|t| t.as_str()))
+                    .or_else(|| value.get("delta").and_then(|t| t.as_str()))
+                    .or_else(|| value.get("content").and_then(|t| t.as_str()))
+                    .unwrap_or("");
+                if text.is_empty() {
+                    return Vec::new();
+                }
+                let mut events = self.end_reasoning();
+                events.push(RunEvent::Text {
+                    text: normalize_line_endings(text),
+                });
+                events
+            }
+            // OpenCode/flint: `{"type":"reasoning","part":{"type":"reasoning","text":"..."}}`.
+            "reasoning" => {
+                let text = value
+                    .get("part")
+                    .and_then(|p| p.get("text"))
+                    .and_then(|t| t.as_str())
+                    .or_else(|| value.get("text").and_then(|t| t.as_str()))
+                    .or_else(|| value.get("content").and_then(|t| t.as_str()))
+                    .or_else(|| value.get("delta").and_then(|d| d.as_str()))
+                    .unwrap_or("");
+                if text.is_empty() {
+                    return Vec::new();
+                }
+                self.current_block = block;
+                let mut events = self.ensure_reasoning_start(ReasoningKind::Summary);
+                events.push(RunEvent::ReasoningDelta {
+                    block,
+                    text: normalize_line_endings(text),
+                });
+                events
+            }
+            // emits `{"type":"error","error":{"type":"provider.free-limit",
+            // "message":"...","status":429}}`.
             "error" => {
-                let message = value
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .or_else(|| value.get("error").and_then(|e| e.as_str()))
-                    .unwrap_or("unknown error")
-                    .to_string();
-                let code = value.get("code").and_then(|c| c.as_str()).map(|s| s.to_string());
+                let (message, code) = match value.get("error") {
+                    Some(serde_json::Value::Object(obj)) => {
+                        let message = obj
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("unknown error")
+                            .to_string();
+                        let code = obj
+                            .get("type")
+                            .and_then(|c| c.as_str())
+                            .map(|s| s.to_string())
+                            .or_else(|| {
+                                obj.get("status").and_then(|c| {
+                                    c.as_str()
+                                        .map(|s| s.to_string())
+                                        .or_else(|| c.as_u64().map(|n| n.to_string()))
+                                })
+                            });
+                        (message, code)
+                    }
+                    Some(serde_json::Value::String(message)) => {
+                        let code = value
+                            .get("code")
+                            .and_then(|c| c.as_str())
+                            .map(|s| s.to_string());
+                        (message.clone(), code)
+                    }
+                    _ => {
+                        let message = value
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("unknown error")
+                            .to_string();
+                        let code = value
+                            .get("code")
+                            .and_then(|c| c.as_str())
+                            .map(|s| s.to_string());
+                        (message, code)
+                    }
+                };
                 vec![RunEvent::Error { message, code }]
             }
             // Legacy / simplified event shapes used by tests and other CLIs.
-            "thinking" | "reasoning" => {
+            "thinking" => {
                 let text = value
                     .get("delta")
                     .and_then(|d| d.as_str())
@@ -241,7 +331,7 @@ impl ReasoningParser {
                 events
             }
             "thinking_end" | "reasoning_end" | "redacted_thinking" => self.end_reasoning(),
-            "text" | "content" => {
+            "content" => {
                 let text = value
                     .get("delta")
                     .and_then(|d| d.as_str())
@@ -263,41 +353,71 @@ impl ReasoningParser {
                 events
             }
             "tool_calls" | "tool" | "tool_use" => {
-                let calls = value
-                    .get("calls")
-                    .and_then(|c| c.as_array())
-                    .map(|arr| arr.as_slice())
-                    .or_else(|| value.get("tool_calls").and_then(|c| c.as_array()).map(|a| a.as_slice()))
-                    .unwrap_or(&[]);
-                let tool_calls: Vec<super::event::ToolCall> = calls
-                    .iter()
-                    .filter_map(|c| {
-                        Some(super::event::ToolCall {
-                            id: c.get("id")?.as_str()?.to_string(),
-                            r#type: c
-                                .get("type")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("function")
-                                .to_string(),
-                            function: super::event::FunctionCall {
-                                name: c.get("function")?.get("name")?.as_str()?.to_string(),
-                                arguments: c
-                                    .get("function")?
-                                    .get("arguments")
-                                    .map(|a| {
-                                        a.as_str()
-                                            .map(|s| s.to_string())
-                                            .unwrap_or_else(|| a.to_string())
-                                    })
-                                    .unwrap_or_default(),
-                            },
-                        })
+                // OpenCode style: {"type":"tool_use","part":{"type":"tool","id":"...","tool":"shell","state":{"input":{...}}}}
+                let opencode_call = value.get("part").and_then(|p| {
+                    let tool_name = p.get("tool").and_then(|t| t.as_str())?;
+                    let id = p.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+                    let input = p.get("state").and_then(|s| s.get("input")).cloned().unwrap_or(serde_json::json!({}));
+                    let arguments = serde_json::to_string(&input).unwrap_or_default();
+                    Some(super::event::ToolCall {
+                        id,
+                        r#type: "function".to_string(),
+                        function: super::event::FunctionCall {
+                            name: tool_name.to_string(),
+                            arguments,
+                        },
                     })
-                    .collect();
+                });
+
+                let tool_calls: Vec<super::event::ToolCall> = if let Some(tc) = opencode_call {
+                    vec![tc]
+                } else {
+                    let calls = value
+                        .get("calls")
+                        .and_then(|c| c.as_array())
+                        .map(|arr| arr.as_slice())
+                        .or_else(|| value.get("tool_calls").and_then(|c| c.as_array()).map(|a| a.as_slice()))
+                        .unwrap_or(&[]);
+                    calls
+                        .iter()
+                        .filter_map(|c| {
+                            Some(super::event::ToolCall {
+                                id: c.get("id")?.as_str()?.to_string(),
+                                r#type: c
+                                    .get("type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("function")
+                                    .to_string(),
+                                function: super::event::FunctionCall {
+                                    name: c.get("function")?.get("name")?.as_str()?.to_string(),
+                                    arguments: c
+                                        .get("function")?
+                                        .get("arguments")
+                                        .map(|a| {
+                                            a.as_str()
+                                                .map(|s| s.to_string())
+                                                .unwrap_or_else(|| a.to_string())
+                                        })
+                                        .unwrap_or_default(),
+                                },
+                            })
+                        })
+                        .collect()
+                };
                 if tool_calls.is_empty() {
                     Vec::new()
                 } else {
-                    let mut events = self.end_reasoning();
+                    let mut events = self.ensure_reasoning_start(ReasoningKind::Summary);
+                    for c in &tool_calls {
+                        let line = crate::reasoning::tool_view::format_tool_view_step(
+                            &c.function.name,
+                            &c.function.arguments,
+                        );
+                        events.push(RunEvent::ReasoningDelta {
+                            block: self.current_block,
+                            text: format!("{}\n", line),
+                        });
+                    }
                     events.push(RunEvent::ToolCalls { calls: tool_calls });
                     events
                 }
@@ -457,9 +577,107 @@ mod tests {
     }
 
     #[test]
+    fn ollama_thinking_block_is_split_from_answer() {
+        let mut p = ReasoningParser::new();
+        assert!(matches!(
+            p.parse_line("Thinking...")[0],
+            RunEvent::ReasoningStart { .. }
+        ));
+        assert!(matches!(
+            p.parse_line("let me think")[0],
+            RunEvent::ReasoningDelta { .. }
+        ));
+        assert!(matches!(
+            p.parse_line("...done thinking.")[0],
+            RunEvent::ReasoningEnd { .. }
+        ));
+        let answer = p.parse_line("Rust aman.");
+        assert!(matches!(answer[0], RunEvent::Text { .. }));
+    }
+
+    #[test]
     fn oversized_line_is_dropped() {
         let mut p = ReasoningParser::new();
         let line = "x".repeat(MAX_LINE_BYTES + 1);
         assert!(p.parse_line(&line).is_empty());
+    }
+
+    #[test]
+    fn opencode_error_object_is_surfaced() {
+        let mut p = ReasoningParser::new();
+        let out = p.parse_line(
+            r#"{"type":"error","timestamp":1,"error":{"type":"provider.free-limit","message":"Free usage limit reached.","status":429}}"#,
+        );
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            RunEvent::Error { message, code } => {
+                assert_eq!(message, "Free usage limit reached.");
+                assert_eq!(code.as_deref(), Some("provider.free-limit"));
+            }
+            other => panic!("expected RunEvent::Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn opencode_text_part_is_forwarded() {
+        let mut p = ReasoningParser::new();
+        let out = p.parse_line(
+            r#"{"type":"text","timestamp":1,"part":{"type":"text","text":"Hello!"}}"#,
+        );
+        assert_eq!(out.len(), 1);
+        assert!(matches!(&out[0], RunEvent::Text { text } if text == "Hello!"));
+    }
+
+    #[test]
+    fn multi_tool_calls_grouped_in_single_reasoning_block() {
+        let mut p = ReasoningParser::new();
+        // Multiple tool calls in a single batch (simulating parallel shell + glob)
+        let out = p.parse_line(
+            r#"{"type":"tool_calls","timestamp":1,"calls":[
+                {"id":"call_1","type":"function","function":{"name":"shell","arguments":"{\"cmd\":\"ls\"}"}},
+                {"id":"call_2","type":"function","function":{"name":"glob","arguments":"{\"pattern\":\"**/*.rs\"}"}}
+            ]}"#,
+        );
+        // Should produce exactly 3 events: 1 ReasoningStart + 2 ReasoningDelta + 1 ToolCalls... 
+        // Actually: ensure_reasoning_start returns [ReasoningStart], then 2 ReasoningDelta, then ToolCalls = 4 events
+        assert!(out.len() >= 3, "expected at least 3 events, got {}: {:?}", out.len(), out);
+
+        // First event should be ReasoningStart
+        assert!(matches!(&out[0], RunEvent::ReasoningStart { .. }));
+
+        // Middle events should be ReasoningDelta with tool view steps
+        let deltas: Vec<&RunEvent> = out.iter().filter(|e| matches!(e, RunEvent::ReasoningDelta { .. })).collect();
+        assert!(deltas.len() >= 2, "expected at least 2 ReasoningDelta, got {}", deltas.len());
+
+        // Last event should be ToolCalls
+        assert!(matches!(&out[out.len() - 1], RunEvent::ToolCalls { .. }));
+
+        // No ReasoningEnd between tool calls (grouping preserved)
+        assert!(!out.iter().any(|e| matches!(e, RunEvent::ReasoningEnd { .. })));
+    }
+
+    #[test]
+    fn repeated_tool_call_batches_share_reasoning_block() {
+        let mut p = ReasoningParser::new();
+        // First batch of tool calls
+        let out1 = p.parse_line(
+            r#"{"type":"tool_calls","timestamp":1,"calls":[
+                {"id":"call_1","type":"function","function":{"name":"shell","arguments":"{\"cmd\":\"ls\"}"}}
+            ]}"#,
+        );
+        assert!(matches!(&out1[0], RunEvent::ReasoningStart { .. }));
+
+        // Second batch should NOT start a new reasoning block (no ReasoningStart)
+        let out2 = p.parse_line(
+            r#"{"type":"tool_calls","timestamp":2,"calls":[
+                {"id":"call_2","type":"function","function":{"name":"glob","arguments":"{\"pattern\":\"**/*.rs\"}"}}
+            ]}"#,
+        );
+        // First event of second batch should NOT be ReasoningStart
+        assert!(!out2.iter().any(|e| matches!(e, RunEvent::ReasoningStart { .. })),
+            "second batch should not start new reasoning block");
+        // Should contain ReasoningDelta for the new tool view step
+        assert!(out2.iter().any(|e| matches!(e, RunEvent::ReasoningDelta { .. })),
+            "second batch should emit ReasoningDelta");
     }
 }

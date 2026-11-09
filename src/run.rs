@@ -134,6 +134,12 @@ pub fn classify(
         if !ids.is_empty() && ids.iter().all(|id| known_ids.contains(id)) {
             return Classified::Resume { call_ids: ids };
         }
+        // Check if any of the trailing tool_call_ids correspond to a parked session
+        // that might be lost - this triggers deterministic replay-on-lost (§10.5)
+        let has_unknown_parked_ids = !ids.is_empty() && ids.iter().any(|id| !known_ids.contains(id));
+        if has_unknown_parked_ids {
+            info!(event = "run.replay.lost_session", unknown_ids = ?ids);
+        }
         info!(event = "run.replay", message_count = request.messages.len());
         return Classified::Replay { history: request.messages.clone() };
     }
@@ -200,6 +206,8 @@ impl RunRegistry {
             messages,
             tools,
             max_steps,
+            self.config.call_ttl_secs,
+            self.config.park_ttl_secs,
         ).await?;
 
         Ok(run)
@@ -246,7 +254,7 @@ impl RunRegistry {
         };
 
         match response {
-            ProviderResponse::Success { content: text, reasoning, tool_calls: _, session_id: _ } => {
+            ProviderResponse::Success { content: text, reasoning, tool_calls: _, session_id: _, .. } => {
                 let msg = Message {
                     role: MessageRole::Assistant,
                     content: Some(text),
@@ -269,6 +277,12 @@ impl RunRegistry {
     pub async fn resume_run(&self, run_id: &str, tool_result: ToolResult) -> Result<()> {
         let mut run = self.get_run(run_id).await
             .ok_or_else(|| anyhow::anyhow!("Run not found: {}", run_id))?;
+
+        // PR-S1/S2: linkage metadata lives on Run/pending_calls/provider_sessions.
+        // Live CLI continuation is wired in PR-S4; replay fallback handled by service/bridge policy.
+        if let Some(ref key) = run.provider_session_key.as_ref().or(run.mcp_session_id.as_ref()) {
+            info!(event = "run.resume.linkage", run_id, session_key = %key, continuation_capable = run.continuation_capable);
+        }
 
         run.resume(tool_result);
         self.bridge.runs().write().await.insert(run_id.to_string(), run);
@@ -352,11 +366,15 @@ impl RunRegistry {
         ids
     }
 
-    /// Cancel a run
+    /// Cancel a run (PR-S5: best-effort cleanup of continuation/provider session resources).
     pub async fn cancel_run(&self, run_id: &str) -> Result<()> {
         let mut run = self.get_run(run_id).await
             .ok_or_else(|| anyhow::anyhow!("Run not found: {}", run_id))?;
-
+        // Best-effort cleanup (keys may be absent; replay/fallback paths also clean).
+        self.bridge.remove_continuation(run_id).await;
+        if let Some(ref k) = run.mcp_session_id { self.bridge.remove_continuation(k).await; self.bridge.unregister_provider_session(k).await; }
+        if let Some(ref k) = run.provider_session_key { self.bridge.remove_continuation(k).await; self.bridge.unregister_provider_session(k).await; }
+        self.bridge.unregister_provider_session(run_id).await;
         run.cancel();
         self.bridge.runs().write().await.insert(run_id.to_string(), run);
         Ok(())
