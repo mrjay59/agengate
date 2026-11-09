@@ -1,4 +1,4 @@
-use crate::config::{BridgeConfig, ProviderConfig};
+﻿use crate::config::{BridgeConfig, ProviderConfig};
 use crate::types::Message;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -319,6 +319,17 @@ impl BridgeServer {
             .await
             .retain(|_, pending| pending.session_id != session_id);
         removed
+    }
+
+    /// Cancel a session: kill CLI child process, cleanup workdir, stop run.
+    pub async fn cancel_session(&self, session_id: &str) -> Result<()> {
+        // Close provider session (kill CLI child process / cleanup workdir), then
+        // drop session bookkeeping and wake held tool calls.
+        if let Some(provider_session) = self.provider_sessions.write().await.remove(session_id) {
+            provider_session.close().await?;
+        }
+        self.remove_session(session_id).await;
+        Ok(())
     }
 
     pub fn validate_token(session: &BridgeSession, token: &str) -> bool {
@@ -1230,6 +1241,9 @@ impl Run {
         }
     }
 }
+
+
+
 
 
 

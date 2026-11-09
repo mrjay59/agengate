@@ -1,4 +1,4 @@
-use crate::config::ReasoningConfig;
+﻿use crate::config::ReasoningConfig;
 use crate::error::AppError;
 use crate::reasoning::{
     format::{parse_reasoning_format, reasoning_headers, SseWriter},
@@ -563,7 +563,7 @@ async fn emit_event(
                         "id": call.id,
                         "type": call.r#type,
                         "function": {
-                            "name": call.function.name,
+                            "name": call.function.name.clone(),
                             "arguments": call.function.arguments
                         }
                     })
@@ -918,3 +918,7 @@ async fn bridge_resolve(
     }
     Json(serde_json::json!({ "resolved": true, "run_id": run_id_opt.flatten() })).into_response()
 }
+
+
+
+
