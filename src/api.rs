@@ -834,7 +834,10 @@ async fn bridge_mcp(
             let mcp_id = id.as_ref().map(|v| v.to_string()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             info!(event = "bridge.call_held", mcp_req_id = %mcp_id, session = %session.session_id, tool = %normalized_name);
             let hold_start = Instant::now();
-            match registry.bridge.hold_tool_call(mcp_id.clone(), session.session_id.clone(), normalized_name.clone(), registry.bridge_config.call_ttl_secs).await {
+            // P0-AUDIT seq2: Pass run_id/tool_call_id when available (None for MCP hold path).
+            let run_id: Option<String> = None;
+            let tool_call_id: Option<String> = None;
+            match registry.bridge.hold_tool_call(mcp_id.clone(), session.session_id.clone(), run_id, tool_call_id, normalized_name.clone(), registry.bridge_config.call_ttl_secs).await {
                 Ok(res) => {
                     crate::metrics::METRICS.observe_tool_wait(hold_start.elapsed().as_millis() as u64);
                     serde_json::json!({

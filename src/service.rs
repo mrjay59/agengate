@@ -817,11 +817,24 @@ impl ServiceRegistry {
                 let has_tool_calls = tool_calls.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
                 let finish_reason = if has_tool_calls { "tool_calls" } else { "stop" };
 
-                // Serial-mode gate (spec §10.3, `parallel_tool_calls: false`):
-                // keep at most one tool call per assistant turn, enforced on the
-                // CLI-bridge path as well (truncate before parking so only one
-                // tool call stays open per assistant turn).
-                truncate_tool_calls(&mut tool_calls, request.parallel_tool_calls);
+                let run_id_string = run.as_ref().map(|r| r.id.clone()).unwrap_or_default();
+
+                // P0-AUDIT seq2: Replace truncate_tool_calls with batch/queue remaining.
+// Serial-mode gate: instead of truncating to 1 tool call, keep first call
+// active and queue remaining calls for sequential processing on resume.
+let parallel = request.parallel_tool_calls == Some(false);
+let mut batched_tool_calls = tool_calls.clone();
+if parallel {
+    if let Some(ref mut calls) = batched_tool_calls {
+        if calls.len() > 1 {
+            let remaining = calls.split_off(1);
+            self.bridge.queue_tool_calls(&run_id_string, remaining).await
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+        }
+    }
+}
+
+let tool_calls = batched_tool_calls;
 
                 let has_tool_calls = tool_calls.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
 

@@ -1,10 +1,11 @@
 ﻿use crate::config::{BridgeConfig, ProviderConfig};
+use crate::reasoning::event::ToolCall;
 use crate::types::Message;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock, oneshot, mpsc};
 use tokio::time::interval;
 use tracing::{debug, info};
@@ -167,6 +168,13 @@ pub struct BridgeServer {
     batcher: Arc<Mutex<Option<RequestBatcher>>>,
     /// PR-S4: continuation waiters keyed by run_id (opencode live resume; replay fallback if absent/timeout).
     continuations: Arc<Mutex<HashMap<String, ParkedContinuation>>>,
+    /// P0-AUDIT seq2: queued tool calls for serial-mode (parallel_tool_calls=false).
+    /// Keyed by run_id, stores remaining ToolCalls to process sequentially on resume.
+    tool_call_queue: Arc<Mutex<HashMap<String, Vec<ToolCall>>>>,
+    /// P0-AUDIT seq2: NameMap for tool name -> alias reverse mapping.
+    tool_name_map: Arc<RwLock<HashMap<String, String>>>,
+    /// P0-AUDIT seq2: TTL tracking for tool_call_ids.
+    tool_call_ttls: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 /// A held `tools/call` bound to the session that issued it.
@@ -199,6 +207,74 @@ impl BridgeServer {
         self.pending_calls.lock().await.len()
     }
 
+    /// P0-AUDIT seq2: Queue remaining tool calls for a run (serial mode batch/queue).
+    /// Stores ToolCalls keyed by run_id for sequential processing on resume.
+    pub async fn queue_tool_calls(&self, run_id: &str, calls: Vec<ToolCall>) -> Result<()> {
+        let mut queue = self.tool_call_queue.lock().await;
+        queue.insert(run_id.to_string(), calls);
+        Ok(())
+    }
+
+    /// P0-AUDIT seq2: Pop the next queued tool call for a run (FIFO).
+    /// Returns None if queue is empty or run_id has no queued calls.
+    pub async fn pop_next_tool_call(&self, run_id: &str) -> Option<ToolCall> {
+        let mut queue = self.tool_call_queue.lock().await;
+        if let Some(calls) = queue.get_mut(run_id) {
+            let call = calls.remove(0);
+            if calls.is_empty() {
+                queue.remove(run_id);
+            }
+            Some(call)
+        } else {
+            None
+        }
+    }
+
+    /// P0-AUDIT seq2: Check if a run has queued tool calls remaining.
+    pub async fn has_queued_tool_calls(&self, run_id: &str) -> bool {
+        let queue = self.tool_call_queue.lock().await;
+        queue.contains_key(run_id)
+    }
+
+    /// P0-AUDIT seq2: Register tool name -> alias mapping (NameMap reverse lookup).
+    pub async fn register_tool_name_alias(&self, tool_name: String, alias: String) {
+        let mut map = self.tool_name_map.write().await;
+        map.insert(tool_name, alias);
+    }
+
+    /// P0-AUDIT seq2: Resolve alias -> tool_name reverse mapping.
+    pub async fn resolve_tool_alias(&self, alias: &str) -> Option<String> {
+        let map = self.tool_name_map.read().await;
+        map.iter()
+            .find(|(_, v)| *v == alias)
+            .map(|(k, _)| k.clone())
+    }
+
+    /// P0-AUDIT seq2: Record TTL expiry time for a tool_call_id.
+    pub async fn record_tool_call_ttl(&self, tool_call_id: &str, ttl_secs: u64) {
+        let mut ttl_map = self.tool_call_ttls.lock().await;
+        ttl_map.insert(
+            tool_call_id.to_string(),
+            Instant::now() + Duration::from_secs(ttl_secs),
+        );
+    }
+
+    /// P0-AUDIT seq2: Check if a tool_call_id has expired (TTL passed).
+    pub async fn is_tool_call_expired(&self, tool_call_id: &str) -> bool {
+        let ttl_map = self.tool_call_ttls.lock().await;
+        match ttl_map.get(tool_call_id) {
+            Some(deadline) => Instant::now() > *deadline,
+            None => false,
+        }
+    }
+
+    /// P0-AUDIT seq2: Cleanup expired tool_call_ids from TTL map.
+    pub async fn cleanup_expired_tool_call_ttls(&self) {
+        let mut ttl_map = self.tool_call_ttls.lock().await;
+        let now = Instant::now();
+        ttl_map.retain(|_, deadline| now <= *deadline);
+    }
+
     pub fn new(config: BridgeConfig) -> Self {
         let batcher = Arc::new(Mutex::new(None));
 
@@ -213,6 +289,9 @@ impl BridgeServer {
             cleanup_interval: Duration::from_secs(600),
             batcher,
             continuations: Arc::new(Mutex::new(HashMap::new())),
+            tool_call_queue: Arc::new(Mutex::new(HashMap::new())),
+            tool_name_map: Arc::new(RwLock::new(HashMap::new())),
+            tool_call_ttls: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -344,22 +423,39 @@ impl BridgeServer {
         diff == 0
     }
 
-    pub async fn hold_tool_call(&self, mcp_id: String, session_id: String, tool_name: String, timeout_secs: u64) -> Result<ToolResult> {
+    pub async fn hold_tool_call(
+        &self,
+        mcp_id: String,
+        session_id: String,
+        run_id: Option<String>,
+        tool_call_id: Option<String>,
+        tool_name: String,
+        timeout_secs: u64,
+    ) -> Result<ToolResult> {
         let (mut tx, mut rx) = oneshot::channel();
         self.pending_calls.lock().await.insert(
             mcp_id.clone(),
-            PendingCall { session_id, run_id: None, tool_name, tool_call_id: None, tx },
+            PendingCall { session_id, run_id: run_id.clone(), tool_name, tool_call_id: tool_call_id.clone(), tx },
         );
         
         info!(event = "bridge.tool_call.hold", mcp_id = %mcp_id, timeout = timeout_secs);
         
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+
+        // P0-AUDIT seq2: Wire hold↔Run live mapping — associate mcp_id with run_id/tool_call_id.
+        if let (Some(_run_id), Some(tool_call_id)) = (&run_id, &tool_call_id) {
+            self.associate_tool_call_ids(&mcp_id, tool_call_id).await;
+        }
+
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
 
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {
                 self.pending_calls.lock().await.remove(&mcp_id);
+                if let Some(id) = &tool_call_id {
+                    self.record_tool_call_ttl(id, timeout_secs).await;
+                }
                 info!(event = "bridge.tool_call.timeout", mcp_id = %mcp_id);
                 return Err(anyhow::anyhow!("timeout menunggu hasil dari client"));
             }
@@ -383,6 +479,9 @@ impl BridgeServer {
                 }
                 _ = tokio::time::sleep(remaining) => {
                     self.pending_calls.lock().await.remove(&mcp_id);
+                    if let Some(id) = &tool_call_id {
+                        self.record_tool_call_ttl(id, timeout_secs).await;
+                    }
                     info!(event = "bridge.tool_call.timeout", mcp_id = %mcp_id);
                     return Err(anyhow::anyhow!("timeout menunggu hasil dari client"));
                 }
