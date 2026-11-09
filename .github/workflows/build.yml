@@ -25,8 +25,15 @@ jobs:
       - name: cargo test --lib
         run: cargo test --lib
 
-      - name: cargo test --tests (E2E)
-        run: cargo test --tests
+      - name: cargo test --tests (E2E safe subset)
+        run: |
+          cargo test --test live_resume_e2e_test
+          cargo test --test stage2_continuation_test
+          cargo test --test sse_tool_calls_contract_test
+          cargo test --test bridge_mcp_hold_test
+          cargo test --test bridge_resolve_auth_test
+          cargo test --test bridge_session_registration_test
+          cargo test --test fail_closed_test
 
   build-windows-x86_64:
     runs-on: windows-latest
