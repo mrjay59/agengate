@@ -760,7 +760,7 @@ impl BridgeSession for OpenCodeSession {
         let mut content = String::new();
         let mut reasoning = String::new();
         let mut tool_calls: Vec<crate::types::ToolCall> = Vec::new();
-        let mut error: Option<String> = None;
+        let error: Option<String> = None;
 
         // Take the event receiver
         let mut rx_guard = self.event_rx.lock().await;
@@ -873,7 +873,7 @@ impl BridgeSession for OpenCodeSession {
         let mut content = String::new();
         let mut reasoning = String::new();
         let mut tool_calls: Vec<crate::types::ToolCall> = Vec::new();
-        let mut error: Option<String> = None;
+        let error: Option<String> = None;
 
         // Take the event receiver (put back by wait_for_completion)
         let mut rx_guard = self.event_rx.lock().await;
