@@ -521,6 +521,9 @@ cors = false
 workdir = "."
 max_concurrency_per_provider = 2
 model_cache_ttl_secs = 300
+# Fail fast: max seconds to wait for the first provider event on a streaming
+# request before returning an error chunk (code = first_token_timeout).
+first_token_timeout_secs = 120
 
 [routing]
 no_tools_policy = "chat_only"
