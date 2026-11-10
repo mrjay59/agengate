@@ -36,9 +36,9 @@ Reasoning formatting itself is **not** broken (see §4).
 | Service | `agentgate.service`, `ExecStart=/usr/local/bin/agentgate serve --host 0.0.0.0 --port 8780`, `Restart=always`, `User=root` |
 | Listening | `LISTEN 0 128 0.0.0.0:8780 users:(("agentgate",pid=3606118,fd=19))` |
 | Config | `/root/.config/agentgate.toml` (`[server] port = 8787`, overridden by `--port 8780`) |
-| Providers on PATH | `ollama` yes; `opencode` **not on PATH** (only via nvm fallback); `gemini` absent; `claude` absent |
+| Providers on PATH | `ollama` yes; `opencode` yes (`/usr/local/bin/opencode` → `@opencode/cli` 2.2.6); `gemini` absent; `claude` absent |
 | Ollama | 0.32.0 — `nemotron-3-nano:4b`, `qwen2.5-coder:7b`, `llama3:latest`, plus `*-cloud` (account-bound) |
-| opencode | `/root/.nvm/versions/node/v20.20.2/bin/opencode` → `../lib/node_modules/opencode-ai/bin/opencode.exe`, **version 1.19.5** |
+| opencode | `/usr/local/bin/opencode` → `/root/.nvm/versions/node/v20.20.2/lib/node_modules/@opencode/cli/bin/opencode.exe`, **version 2.2.6** (upgraded 2026-11-10; previously `opencode-ai` 1.19.5, removed) |
 
 ---
 
@@ -201,8 +201,8 @@ after deployment: `orphan_ollama_run=0` (see §8).
 2. Use ollama for a known-good path:
    `agg/ollama/nemotron-3-nano:4b`, `agg/ollama/qwen2.5-coder:7b`, `agg/ollama/llama3`.
    (`llama3:latest` is now installed on the VPS — it was pulled during this diagnosis.)
-3. Put opencode on the service PATH (systemd `Environment=PATH=...`), and upgrade to the CLI AgentGate
-   targets (`@opencode/cli` 2.x) instead of the legacy `opencode-ai` 1.19.5.
+3. `opencode` is now on the service PATH (`/usr/local/bin/opencode`, `@opencode/cli` 2.2.6); the
+   legacy `opencode-ai` 1.19.5 has been removed.
 4. Only list models that exist. Missing ollama models cause a multi-GB auto-pull while the client hangs.
 
 ---
@@ -313,12 +313,12 @@ Post-deploy matrix (zero opencode quota used):
 | `agg/ollama/nemotron-3-nano:4b` stream | 14 s, role=1 reasoning=2 content=1 stop=1 `[DONE]`=1 |
 | `agg/ollama/nemotron-3-nano:4b` non-stream | 200, content `Hello!`, reasoning 214 chars, `finish_reason: stop` |
 | cancel after 3 s (`qwen2.5-coder:7b`) | `orphan_ollama_run=0`; journal shows `stream.client_disconnected` then provider DONE 2 ms later |
-| `agentgate doctor` | `ollama OK`, `gemini MISSING`, `opencode MISSING` (accurate) |
+| `agentgate doctor` | `ollama OK`, `opencode OK`, `gemini MISSING` (accurate) |
+| opencode upgraded | `opencode-ai` 1.19.5 removed, `@opencode/cli` **2.2.6** installed with Node 20 npm; `/usr/local/bin/opencode` symlink for systemd; `opencode models` lists 57 models (auth intact) |
+| opencode smoke test | `agg/opencode/beam-free` stream returned reasoning + content + `stop` + `[DONE]` in **1.6 s** |
 
 ### Remaining environment limits (not code)
 
-1. `opencode` is still the legacy `opencode-ai` 1.19.5 under `/root/.nvm/...`, not on the systemd
-   `PATH`; upgrade to `@opencode/cli` 2.x and add it to the unit `Environment=PATH=...`.
-2. The VPS opencode account free quota is exhausted (`Free usage limit reached`); no gateway change
-   can fix that — use ollama models or another provider until the quota resets.
+1. `opencode` 2.2.6 now exits promptly on failure, so the stream terminates even when the upstream errors. Keep it on `/usr/local/bin` (or add it to the unit `Environment=PATH=...`) — a shell-only `nvm` PATH is not visible to systemd.
+2. opencode quota/model availability is account-side and can change independently of the gateway (the 1.19.5 `Free usage limit reached` error was reproduced during diagnosis; a fresh `beam-free` call on 2.2.6 succeeded). If it starts erroring again, the gateway now surfaces it instead of hanging.
 3. `usage.completion_tokens` is reported as `0` by the CLI path (separate, cosmetic defect).
