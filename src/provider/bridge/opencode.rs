@@ -54,6 +54,7 @@ impl OpenCodeBridgeProvider {
                     "todowrite".into(),
                     "todoread".into(),
                     "task".into(),
+                    "execute".into(),
                 ],
             },
         }
@@ -76,6 +77,7 @@ impl OpenCodeBridgeProvider {
                 "todowrite": false,
                 "todoread": false,
                 "task": false,
+                "execute": false,
                 "*": false
             },
             "permission": {
@@ -86,7 +88,8 @@ impl OpenCodeBridgeProvider {
                 "bash": "deny",
                 "webfetch": "deny",
                 "write": "deny",
-                "read": "deny"
+                "read": "deny",
+                "execute": "deny"
             }
         })
     }
@@ -970,7 +973,7 @@ impl BridgeProviderFactory for OpenCodeBridgeFactory {
             ),
             tool_schema_format: "openai".into(),
             supports_streaming: true,
-            guard_patterns: vec!["bash".into(), "edit".into(), "write".into()],
+            guard_patterns: vec!["bash".into(), "edit".into(), "write".into(), "execute".into()],
         }
     }
 }
