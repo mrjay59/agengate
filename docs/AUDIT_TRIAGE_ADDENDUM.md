@@ -53,9 +53,26 @@ All statuses dated 2026-11-09 unless noted.
 | Run #2 | 83d8f5f | TBD | PENDING | PENDING |
 | Run #3 | 7e38aff/a0053b3 | TBD | PENDING | PENDING |
 | Run #4 | 16ad1f5 | TBD | PENDING | PENDING |
-| Run #5 | ae0aabb | TBD | PENDING | PENDING |
+| Run #5 | ae0aabb | **FAILED** | NOT verified | **PENDING** — wait for green rerun |
 
 **CI Blocker (confirmed 2026-11-09):** `cargo build --release --target x86_64-unknown-linux-gnu` fails on `ring v0.17.14` — needs C compiler (cc) targeting x86_64-linux-gnu, not installed on Windows host. Cross-linker `x86_64-linux-gnu-gcc` configured in `.cargo/config.toml` but not installed. `cargo check --all-targets` passes on Linux host (WSL, per Lead). CI runner needs `build-essential` + `x86_64-linux-gnu-gcc` cross-toolchain. Likely runner/network/flake — needs further investigation.
+
+**CI Status Update (2026-11-10, Lead):**
+
+- Run 42730189734 (16ad1f5) — FAILED (pre-fix)
+- Run 42732008294 (ae0aabb) — FAILED (post-fix)
+- Run 42734242773 (0882f6c) — FAILED (post docs triage addendum)
+- Run 42734376276 (c960ae4) — FAILED (post triage addendum)
+- Run 42734504376 (ec55703) — **FAILED** (docs-only: ALL jobs incl. build-windows-x86_64; lint step 5 + build-linux steps + windows cargo step 4 all failed; verify-all-artifacts SKIPPED)
+
+**Local verification (2026-11-10) — SOURCE GREEN:**
+- WSL Ubuntu (gcc 15.2.0, rustc/cargo 1.99.1): `cargo check --all-targets` → Finished; `cargo check --all-targets --target x86_64-unknown-linux-gnu` → Finished; `cargo build --release --target x86_64-unknown-linux-gnu` → **Finished (2m47s)** ✅
+- Windows host: `cargo build --release` → Finished (post PR-S5 source, 34.75s) ✅
+- `cargo test --lib` 55/55; `cargo test --tests` all pass ✅
+
+**Conclusion:** Source + toolchain fully compilable on Linux x86_64 (WSL) and Windows x86_64 (local). CI red across ALL jobs/runs post-fix → systemic runner-side issue suspected (incl. build-windows-x86_64 which is green locally).
+
+**Latest eval evidence (2026-11-10):** `agentgate.exe test agg/opencode/nemotron-3.5-super-vl-free "You have AgentGate tools available. List the tools you can call and then call one with a concrete action."` → **SUCCESS** (exit 0): opencode spawned via bridge (stdio_shim, port 8786), tools listed, agent chose `glob`, reasoning + tool_use + text events parsed, response delivered. Model alternatif berhasil melewati free quota beam-free.
 
 **Note:** Do not claim S6 artifact closure until CI passes + artifacts+checksums verified per `scripts/pre_release_checklist.md §7` and `audit.md §11`.
 
