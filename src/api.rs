@@ -781,6 +781,9 @@ async fn bridge_mcp(
             return (axum::http::StatusCode::ACCEPTED, Json(serde_json::json!({}))).into_response();
         }
         "notifications/cancelled" => {
+            // P0-AUDIT seq1: cancel pending calls, stop run, kill CLI child/process tree,
+            // cleanup temp/agentgate/sessions/{id}. Best-effort; always ACK.
+            let _ = registry.bridge.cancel_session(&session_id).await;
             return (axum::http::StatusCode::ACCEPTED, Json(serde_json::json!({}))).into_response();
         }
         "ping" => serde_json::json!({}),
