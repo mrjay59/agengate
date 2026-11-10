@@ -756,38 +756,14 @@ impl CliProviderImpl {
             cmd.current_dir(dir);
         }
 
-        // Disable OpenCode built-in tools so nothing executes on server B.
-        // opencode 2.x reads project config from opencode.json in the working
-        // directory (OPENCODE_CONFIG_CONTENT is not honored), so write it to the
-        // session workdir when available.
-        if self.id == "opencode" {
-            let disable = serde_json::json!({
-                "tools": {
-                    "bash": false, "edit": false, "write": false, "read": false,
-                    "patch": false, "grep": false, "glob": false, "list": false,
-                    "webfetch": false, "todowrite": false, "todoread": false, "task": false,
-                    "execute": false,
-                    "*": false
-                },
-                "permission": {
-                    "*": "deny",
-                    "externalDirectory": "deny",
-                    "network": "deny",
-                    "edit": "deny",
-                    "bash": "deny",
-                    "webfetch": "deny",
-                    "write": "deny",
-                    "read": "deny",
-                    "execute": "deny"
-                }
-            });
-            if let Some(dir) = workdir {
-                let cfg = dir.join("opencode.json");
-                if let Err(e) = std::fs::write(&cfg, disable.to_string()) {
-                    tracing::warn!(target: "agentgate::provider", error = %e, path = %cfg.display(), "Failed to write opencode.json; built-in tool disabling may not apply");
-                }
-            }
-        }
+        // NOTE: opencode 2.x ignores OPENCODE_CONFIG_CONTENT and reads project
+        // config from opencode.json in the working directory. However, writing a
+        // disable-tools/permission config has been observed to trigger
+        // provider.free-limit on some free models (e.g. opencode/iceman-free),
+        // while the same run without opencode.json succeeds. To avoid breaking
+        // chat-only/native runs, do not inject a config file here; isolation
+        // relies on the empty session workdir. Bridge (MCP) sessions that must
+        // avoid E2BIG still write opencode.json in the bridge provider.
 
         // Do not force --standalone: it starts a private server that lacks the
         // shared background session/auth and (on free models) returns 429, which
