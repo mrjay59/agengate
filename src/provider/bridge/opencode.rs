@@ -230,7 +230,18 @@ impl OpenCodeSession {
             }
         }
 
-        // Set environment variables for MCP config (spec §12.2)
+        // Inject the MCP config as the session's *project* config file.
+        //
+        // Two independent reasons rule out the old `OPENCODE_CONFIG_CONTENT`
+        // env-var injection:
+        //   1. opencode 2.x ignores that variable (verified on v2.2.6 with
+        //      `opencode debug config`), so the bridge config was silently lost.
+        //   2. A single environment string may not exceed MAX_ARG_STRLEN
+        //      (128 KiB on Linux). A large tool set (~90 MCP tools) made the
+        //      JSON bigger than that, `execve` returned E2BIG and the run died
+        //      with "Failed to spawn opencode process".
+        // `opencode.json` in the child's working directory is honoured by the
+        // CLI and has no size limit.
         let mcp_config_json = Self::build_opencode_config_json(
             &mcp_token,
             mcp_port,
@@ -240,7 +251,10 @@ impl OpenCodeSession {
             config.host.as_str(),
             &config.tools,
         );
-        cmd.env("OPENCODE_CONFIG_CONTENT", &mcp_config_json);
+        let config_path = workdir.join("opencode.json");
+        fs::write(&config_path, mcp_config_json.as_bytes())
+            .await
+            .with_context(|| format!("Failed to write opencode config {}", config_path.display()))?;
 
         // Debug logging: verify config injection (spec §12.5)
         info!(
@@ -252,8 +266,9 @@ impl OpenCodeSession {
             mcp_port = mcp_port,
             mcp_token_len = mcp_token.len(),
             mcp_config_json_len = mcp_config_json.len(),
+            config_path = %config_path.display(),
             transport = %transport,
-            "Spawning OpenCode CLI with injected MCP config"
+            "Spawning OpenCode CLI with injected project config"
         );
         let path_env = std::env::var("PATH").unwrap_or_default();
         info!(
@@ -280,7 +295,15 @@ impl OpenCodeSession {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .context("Failed to spawn opencode process")?;
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to spawn opencode process: binary={} cwd={} config_bytes={} error={}",
+                    binary,
+                    workdir.display(),
+                    mcp_config_json.len(),
+                    e
+                )
+            })?;
 
         info!(
             target: "agentgate.bridge.opencode.spawn",

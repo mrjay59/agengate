@@ -757,12 +757,16 @@ impl CliProviderImpl {
         }
 
         // Disable OpenCode built-in tools so nothing executes on server B.
+        // opencode 2.x reads project config from opencode.json in the working
+        // directory (OPENCODE_CONFIG_CONTENT is not honored), so write it to the
+        // session workdir when available.
         if self.id == "opencode" {
             let disable = serde_json::json!({
                 "tools": {
                     "bash": false, "edit": false, "write": false, "read": false,
                     "patch": false, "grep": false, "glob": false, "list": false,
                     "webfetch": false, "todowrite": false, "todoread": false, "task": false,
+                    "execute": false,
                     "*": false
                 },
                 "permission": {
@@ -773,10 +777,16 @@ impl CliProviderImpl {
                     "bash": "deny",
                     "webfetch": "deny",
                     "write": "deny",
-                    "read": "deny"
+                    "read": "deny",
+                    "execute": "deny"
                 }
             });
-            cmd.env("OPENCODE_CONFIG_CONTENT", disable.to_string());
+            if let Some(dir) = workdir {
+                let cfg = dir.join("opencode.json");
+                if let Err(e) = std::fs::write(&cfg, disable.to_string()) {
+                    tracing::warn!(target: "agentgate::provider", error = %e, path = %cfg.display(), "Failed to write opencode.json; built-in tool disabling may not apply");
+                }
+            }
         }
 
         // Do not force --standalone: it starts a private server that lacks the
