@@ -8,6 +8,38 @@
 
 ---
 
+## TRIAGE ADDENDUM (2026-11-10) — P0/P1-AUDIT COMPLETE
+
+**Commits since original audit:**
+- `83d8f5f` seq1: SSE §7.4 exactness (2-chunk), cancelled kill+cleanup, MCP hold keepalive
+- `7e38aff` + `a0053b3` seq2: hold↔Run live mapping, truncate(1)→batch/queue, tool_call_id generator, NameMap/alias, ID/TTL
+- `16ad1f5` seq3: guard fail-closed+prefix (agentgate_*/mcp__agentgate__), .cmd/PATHEXT Windows, transport single source, `--tools ""`
+- `ae0aabb` PR-S5: replay session rotation (cli_gen++), cleanup hardening, orphan PID sweep
+- `5e35647` CI: build-essential on Linux jobs
+
+**Previously "STILL BROKEN" — NOW FIXED:**
+| Item | Was | Now | Commit |
+|---|---|---|---|
+| SSE tool_calls 2-chunk | single-chunk | 2-chunk + 512B continuation + finish_reason=tool_calls | 83d8f5f |
+| notifications/cancelled kill | no-op 202 | BRIDGE.cancel_session → kill child + cleanup workdir + stop run | 83d8f5f |
+| MCP hold keepalive | not used | 250ms ticker loop in SSE hold path | 83d8f5f |
+| cli.rs raw CliProviderImpl | bypassed bridge | uses build_cli_provider() | (prior) |
+| RequestBatcher dead code | truncate(1) active | batch/queue remaining for serial mode | 7e38aff |
+| tool_call_id from CLI | parser raw | ToolCallIdGenerator::call_id() in bridge | 7e38aff |
+| Guard prefix recognition | weak | agentgate_*/mcp__agentgate__ in guard_patterns | 16ad1f5 |
+| .cmd/PATHEXT Windows | not handled | resolve_binary_path() in claude/gemini | 16ad1f5 |
+| Transport single source | hardcoded http | {transport}/{transport_url} from agentgate.toml | 16ad1f5 |
+| Builtin disable | missing | claude --tools "" + guard_patterns | 16ad1f5 |
+| NameMap/limit | partial | full alias→tool_name reverse mapping | 7e38aff |
+
+**Remaining (infrastructure/operational):**
+- CI runner: build-essential + x86_64-linux-gnu-gcc (workflow updated 5e35647, re-run needed)
+- Target-env E2E (Linux + 9router/AionUI/VSC Copilot) — infra pending
+- CI artifacts/checksums — pending CI completion
+- Opencode free usage limit — quota reset needed for live eval
+
+**Local test status:** `cargo check` OK, `cargo test --lib` 55/55, `cargo test --tests` all pass (exit 0). WSL Linux build verified green.
+
 ## 0. Dukungan Linux vs Windows
 
 | Aspek | Linux | Windows |
