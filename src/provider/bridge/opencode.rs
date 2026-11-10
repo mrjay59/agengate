@@ -784,9 +784,10 @@ impl BridgeSession for OpenCodeSession {
                         RunEvent::ReasoningDelta { text, .. } => reasoning.push_str(&text),
                         RunEvent::ToolCalls { calls } => tool_calls.extend(calls),
                         RunEvent::Error { message, .. } => {
-                            if error.is_none() {
-                                error = Some(message);
-                            }
+                            // Treat an explicit CLI error event as terminal: return
+                            // immediately instead of waiting for process exit / turn timeout.
+                            drop(rx_guard);
+                            return Err(anyhow!("provider_error: {}", message));
                         }
                         _ => {}
                     }
@@ -798,6 +799,12 @@ impl BridgeSession for OpenCodeSession {
                     // Don't wait for process exit - CLI stays alive for continuation
                     break;
                 }
+            }
+            // rx.recv() returned None: stdout EOF / channel closed while turn still active.
+            // Treat as terminal if we haven't collected any output yet.
+            if content.trim().is_empty() && tool_calls.is_empty() && error.is_none() {
+                drop(rx_guard);
+                return Err(anyhow!("provider_error: CLI produced no output (stdout EOF, no output)"))
             }
             for parsed in parser.finish() {
                 match parsed {
@@ -886,13 +893,20 @@ impl BridgeSession for OpenCodeSession {
                         RunEvent::ReasoningDelta { text, .. } => reasoning.push_str(&text),
                         RunEvent::ToolCalls { calls } => tool_calls.extend(calls),
                         RunEvent::Error { message, .. } => {
-                            if error.is_none() {
-                                error = Some(message);
-                            }
+                            // Treat an explicit CLI error event as terminal: return
+                            // immediately instead of waiting for process exit.
+                            drop(rx_guard);
+                            return Err(anyhow!("provider_error: {}", message));
                         }
                         _ => {}
                     }
                 }
+            }
+            // rx.recv() returned None: stdout EOF / channel closed while turn still active.
+            // Treat as terminal if we haven't collected any output yet.
+            if content.trim().is_empty() && tool_calls.is_empty() && error.is_none() {
+                drop(rx_guard);
+                return Err(anyhow!("provider_error: CLI produced no output (stdout EOF, no output)"))
             }
             for parsed in parser.finish() {
                 match parsed {
