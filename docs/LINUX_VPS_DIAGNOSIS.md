@@ -1,9 +1,10 @@
 # Linux VPS diagnosis — "prompting gives no response / no reasoning"
 
-Status: **evidence collected against the live host** (2026-11-10, agentgate v0.1.0 release binary).
+Status: **resolved and deployed** (2026-11-10). The diagnosis below was taken against agentgate
+v0.1.0; the fixed build is released as **v0.2.0** (`1d61b9c`) and is what now runs on the VPS.
 Owner: Lead. Related tasks: `LINUX-VPS (Testing)`, `LINUX-VPS (BD)`, `LINUX-VPS (BD2)`.
-> The VPS runs the v0.1.0 artifact, i.e. commit `775bdc0`. It does **not** contain `affe25a`
-> (cancelled-request kill/cleanup) or later commits. Findings below are tagged where that matters.
+> Historical note: at diagnosis time the VPS ran the v0.1.0 artifact (commit `775bdc0`). It did
+> **not** contain `affe25a` (cancelled-request kill/cleanup) or later commits.
 
 ---
 
@@ -316,6 +317,18 @@ Post-deploy matrix (zero opencode quota used):
 | `agentgate doctor` | `ollama OK`, `opencode OK`, `gemini MISSING` (accurate) |
 | opencode upgraded | `opencode-ai` 1.19.5 removed, `@opencode/cli` **2.2.6** installed with Node 20 npm; `/usr/local/bin/opencode` symlink for systemd; `opencode models` lists 57 models (auth intact) |
 | opencode smoke test | `agg/opencode/beam-free` stream returned reasoning + content + `stop` + `[DONE]` in **1.6 s** |
+
+### v0.2.0 release (2026-11-10)
+
+- `chore(release): v0.2.0` (`1d61b9c`) bumps the crate version; tag/release **`v0.2.0`** has four
+  assets (`linux-x86_64`, `linux-aarch64`, `windows-x86_64`, `windows-aarch64`).
+- `.github/workflows/build.yml` now also triggers on `v*` tags and has a `release` job that packages
+  the CI artifacts and publishes them with `gh release create --generate-notes`.
+- VPS deployed from the public release asset (no local rebuild):
+  `agentgate 0.2.0`, max glibc symbol `GLIBC_2.34`, `doctor` → `opencode OK` / `ollama OK` /
+  `gemini MISSING`, catalog 59 models, gemini `503` in 0.0004 s, ollama stream OK,
+  `orphan_ollama_run=0` after a client cancel.
+- Backup of the previous binary: `/usr/local/bin/agentgate.bak.20261110-134311`.
 
 ### Remaining environment limits (not code)
 
