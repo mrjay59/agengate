@@ -42,9 +42,9 @@ agentgate serve         # start the gateway
 
 | Platform | Requirements |
 |----------|--------------|
-| **Linux** | glibc 2.31+, ca-certificates |
+| **Linux** | glibc 2.35+ (Ubuntu 22.04+ compatible), ca-certificates |
 | **Windows** | Windows 10+ |
-| **ARM64** | glibc 2.31+ (aarch64/arm64) |
+| **ARM64** | glibc 2.35+ (aarch64/arm64) |
 | **All** | Rust 1.75+ (only when building from source) |
 
 ### CLI Providers (optional, for CLI-agent mode)
@@ -417,6 +417,61 @@ Verify the CLI version flags. Claude requires `--include-partial-messages --verb
 
 ---
 
+## Linux Compatibility
+
+### Minimum glibc per artifact
+
+| Artifact | Triple | Minimum glibc | Build runner |
+|----------|--------|---------------|--------------|
+| `agentgate-linux-x86_64` | `x86_64-unknown-linux-gnu` | GLIBC_2.35 (Ubuntu 22.04+) | `ubuntu-22.04` |
+| `agentgate-linux-aarch64` | `aarch64-unknown-linux-gnu` | GLIBC_2.35 (Ubuntu 22.04+) | `ubuntu-22.04` |
+
+CI builds both Linux artifacts on `ubuntu-22.04` (glibc 2.35), so the released binary requires no symbol newer than GLIBC_2.35.
+
+### Exact mismatch error text
+
+Running a binary built on Ubuntu 24.04 (glibc 2.39) on Ubuntu 22.04 (glibc 2.35) prints:
+
+```
+agentgate: /lib/x86_64-linux-gnu/libc.so.6: weak version GLIBC_2.39 not found
+```
+
+The process still starts (weak symbol), but the mismatch indicates the binary is not ABI-compatible with the host.
+
+### Workaround
+
+Use the `ubuntu-22.04`-built release artifact from the GitHub Releases page, or rebuild from source on Ubuntu 22.04:
+
+```bash
+rustup target add x86_64-unknown-linux-gnu
+cargo build --release --target x86_64-unknown-linux-gnu
+```
+
+Verify the linked glibc ceiling:
+
+```bash
+objdump -T target/x86_64-unknown-linux-gnu/release/agentgate | grep -o 'GLIBC_[0-9.]*' | sort -u -V | tail -3
+# No symbol newer than GLIBC_2.35
+```
+
+### ARM64
+
+Same glibc floor (2.35). Cross-compile from x86_64:
+
+```bash
+rustup target add aarch64-unknown-linux-gnu
+sudo apt install gcc-aarch64-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu
+```
+
+## Model Catalog Truthfulness
+
+`GET /v1/models` advertises only models discovered by scanning each provider (`opencode models`, `gemini list`, `ollama list`, Ollama `/api/tags`). Scan results are cached for 300 seconds (`model_cache_ttl_secs`).
+
+**Fallback behaviour:** If a provider's `models_cmd` scan fails or times out (10s), the gateway falls back to the statically configured `models` list from `agentgate.toml` **only if the provider binary was resolved and answered** (`is_available()`). If the provider is unavailable, its configured models are **not** advertised — requesting such a provider fails immediately with HTTP 503 `provider_unavailable` instead of opening an SSE stream that only sends keep-alives.
+
+**Client guidance:** Treat `/v1/models` as a best-effort advertisement, and expect an explicit `provider_unavailable` / `first_token_timeout` / `provider_timeout` error rather than a silent hang. Run `agentgate doctor` for the resolved binary path of each provider.
+
 ## Environment Variables
 
 | Variable | Description | Default |
@@ -424,7 +479,22 @@ Verify the CLI version flags. Claude requires `--include-partial-messages --verb
 | `AGENTGATE_CONFIG` | Config file path | auto-detected |
 | `AGENTGATE_HOST` | Server bind address | `0.0.0.0` |
 | `AGENTGATE_PORT` | Server port | `8787` |
+| `AGENTGATE_PROVIDER_TIMEOUT_SECS` | Deadline for a single non-streaming provider call | `120` |
+| `AGENTGATE_STREAM_IDLE_TIMEOUT_SECS` | Max silence on an SSE stream after the first event | `120` |
+| `AGENTGATE_TEST_TIMEOUT_SECS` | Deadline for `agentgate test` | `180` |
 | `RUST_LOG` | Log level (trace/debug/info/warn/error) | `info` |
+
+### Fail-fast timeouts
+
+A hanging CLI agent used to leave the client with nothing but `: keep-alive` comments. AgentGate now bounds every wait and always terminates the stream:
+
+| Situation | Behaviour |
+|-----------|-----------|
+| Provider binary missing / broken | HTTP `503` with `"code": "provider_unavailable"`, before any streaming starts |
+| Provider produces no event | SSE error chunk `"code": "first_token_timeout"` then `data: [DONE]` (window = `[defaults] first_token_timeout_secs`, default `120`) |
+| Provider goes silent mid-stream | SSE error chunk `"code": "provider_timeout"` then `data: [DONE]` |
+| Provider reports an error but the CLI never exits (e.g. opencode quota error) | The error chunk is forwarded and the stream is terminated immediately |
+| Non-streaming provider call | `502` `"code": "provider_error"` with `produced no result within Ns (timed out)` |
 
 ---
 

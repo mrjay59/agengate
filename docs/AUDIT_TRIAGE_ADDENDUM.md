@@ -94,6 +94,16 @@ All statuses dated 2026-11-09 unless noted.
 
 ---
 
+## BD2 Fix Reference — LINUX-VPS (glibc portability + model-catalog truthfulness)
+
+**Task:** `01a1c397-0e4d-7672-b337-8378f0b6f9b8`
+
+- `GET /v1/models` used to fall back to the static config `models` list whenever a provider scan failed or timed out, so unavailable providers (gemini/opencode CLI absent) and non-installed ollama models were advertised as usable. That was a **defect**, not intended behaviour: clients picked models that could never answer and then hung.
+- **Fixed in `ServiceRegistry::list_models` (`src/service.rs`)**: the static fallback is now used only when the provider itself is reachable (`is_available()`); otherwise its configured models are dropped from the response. Requests for an unavailable provider are additionally rejected up-front with HTTP 503 `provider_unavailable`.
+- `agentgate models`, `agentgate doctor`, `agentgate test` and `agentgate providers` now register providers exactly like `serve` (`ServiceRegistry::register_configured`), so the CLI no longer prints the 10-entry static list while the server reports 98 scanned models, and `opencode` is no longer reported `MISSING` when `resolve_binary` can find it.
+- Linux artifacts now built on `ubuntu-22.04` (glibc 2.35) via `.github/workflows/build.yml` instead of `ubuntu-latest` (24.04, glibc 2.39). Minimum glibc per artifact: `x86_64` → GLIBC_2.35, `aarch64` → GLIBC_2.35.
+- See `INSTALL.md` § "Linux Compatibility" for exact mismatch error text and workaround.
+
 ## Next Refresh Triggers
 
 - After P0-AUDIT seq1 lands → **DONE** (commit 83d8f5f) — #2, #3, #6 now VALID with fix reference; #1 VALID (2ae7c15)
