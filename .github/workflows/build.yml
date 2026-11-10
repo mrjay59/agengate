@@ -3,6 +3,7 @@ name: Build & Test All Platforms
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -203,3 +204,35 @@ jobs:
           find artifacts/ -type f -exec ls -lh {} \;
           echo "---"
           find artifacts/ -type f -exec sha256sum {} \;
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [verify-all-artifacts]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Package release assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")
+            (cd "$dir" && zip -r "../../dist/${name}.zip" .)
+          done
+          ls -lh dist
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.zip \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "AgentGate ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag
