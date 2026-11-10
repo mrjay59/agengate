@@ -74,6 +74,8 @@ All statuses dated 2026-11-09 unless noted.
 
 **Latest eval evidence (2026-11-10):** `agentgate.exe test agg/opencode/nemotron-3.5-super-vl-free "You have AgentGate tools available. List the tools you can call and then call one with a concrete action."` → **SUCCESS** (exit 0): opencode spawned via bridge (stdio_shim, port 8786), tools listed, agent chose `glob`, reasoning + tool_use + text events parsed, response delivered. Model alternatif berhasil melewati free quota beam-free.
 
+**Additional eval evidence (2026-11-10):** `agentgate.exe test agg/opencode/mimo-v2.6-flash-free "List the tools you can call, then call shell to print the current date and working directory."` → **SUCCESS** (exit 0): tools listed, `shell` executed `Get-Location` returning per-session workdir `C:\\Users\\EDN\\AppData\\Local\\Temp\\agentgate\\sessions\\...\\work` (per-session isolation verified), reasoning + tool_use + text parsed, response delivered. Two distinct free models pass end-to-end reasoning+tooling.
+
 **Note:** Do not claim S6 artifact closure until CI passes + artifacts+checksums verified per `scripts/pre_release_checklist.md §7` and `audit.md §11`.
 
 ---
