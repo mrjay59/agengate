@@ -13,6 +13,8 @@ env:
 jobs:
   lint-and-check:
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: gcc
     steps:
       - uses: actions/checkout@v4
 
@@ -22,7 +24,16 @@ jobs:
       - name: Install C compiler (gcc)
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential
+          sudo apt-get install -y build-essential gcc-x86-64-linux-gnu
+
+      - name: Diagnose environment
+        run: |
+          echo "rustc: $(rustc --version)"
+          echo "cargo: $(cargo --version)"
+          echo "gcc: $(which gcc || echo MISSING)"
+          echo "x86_64-linux-gnu-gcc: $(which x86_64-linux-gnu-gcc || echo MISSING)"
+          echo "disk:"; df -h | head -5
+          echo "network probe crates.io:"; curl -sI --max-time 10 https://crates.io | head -3 || echo "NO NETWORK / probe failed"
 
       - name: cargo check (all targets)
         run: cargo check --all-targets
@@ -47,6 +58,13 @@ jobs:
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Diagnose environment (Windows)
+        run: |
+          rustc --version
+          cargo --version
+          where cl.exe 2>$null; if ($LASTEXITCODE -ne 0) { Write-Host "cl.exe NOT FOUND" }
+        shell: pwsh
 
       - name: cargo build --release (Windows x86_64)
         run: cargo build --release
