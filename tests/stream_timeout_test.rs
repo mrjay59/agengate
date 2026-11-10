@@ -209,3 +209,87 @@ async fn provider_error_is_terminal_even_if_process_stays_alive() {
         "terminal error took {elapsed:?}, expected < 10s"
     );
 }
+
+/// Provider that behaves like a real CLI child: it produces no output until
+/// either the client hangs up or a very long timeout elapses. `cancelled` proves
+/// the disconnect actually reached the provider task.
+struct DisconnectAwareProvider {
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl CliProvider for DisconnectAwareProvider {
+    fn id(&self) -> String {
+        "disconnect".into()
+    }
+    fn bin(&self) -> Option<String> {
+        Some("disconnect".into())
+    }
+    fn models(&self) -> Vec<String> {
+        vec!["disconnect-model".into()]
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn set_available(&mut self, _available: bool) {}
+    async fn check_available(&self) -> bool {
+        true
+    }
+    async fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> {
+        Ok(vec!["disconnect-model".into()])
+    }
+    async fn send_chat_completion(
+        &self,
+        _model: &str,
+        _request: ChatCompletionRequest,
+    ) -> Result<ProviderResponse, anyhow::Error> {
+        Ok(ProviderResponse::Error("not used".into()))
+    }
+    async fn send_chat_completion_stream(
+        &self,
+        _model: &str,
+        _request: ChatCompletionRequest,
+        tx: mpsc::Sender<RunEvent>,
+    ) -> Result<(), anyhow::Error> {
+        // Mirrors the CLI child wait: stop as soon as the client is gone.
+        tokio::select! {
+            _ = tx.closed() => {
+                self.cancelled
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            _ = tokio::time::sleep(Duration::from_secs(600)) => {}
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn client_disconnect_stops_the_provider_task() {
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut registry = ServiceRegistry::new();
+    // Keep the first-token deadline out of the way: only the client disconnect
+    // may close the provider channel in this test.
+    registry.first_token_timeout = Duration::from_secs(600);
+    registry
+        .register(Box::new(DisconnectAwareProvider {
+            cancelled: cancelled.clone(),
+        }))
+        .await;
+    let registry = Arc::new(registry);
+    let app = api().with_state(registry);
+
+    let (resp, _) = stream_body(app, "disconnect-model").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    // Drop the response body immediately: this is exactly what curl/browsers do
+    // when the user cancels a request.
+    drop(resp);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !cancelled.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        cancelled.load(std::sync::atomic::Ordering::SeqCst),
+        "dropping the SSE body must close the provider channel so the CLI child is killed"
+    );
+}

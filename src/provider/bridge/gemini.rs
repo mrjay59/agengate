@@ -246,6 +246,7 @@ impl GeminiSession {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .context("Failed to spawn gemini process")?;
 

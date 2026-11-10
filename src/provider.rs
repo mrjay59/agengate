@@ -257,6 +257,7 @@ impl CliProvider for CliProviderImpl {
         tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
 
         let (mut cmd, stdin_prompt) = self.build_chat_command(model, &request, Some(&workdir))?;
+        cmd.kill_on_drop(true);
         let mut child = cmd.spawn()?;
 
         // Write prompt to stdin if required, then close to signal EOF
@@ -390,6 +391,7 @@ impl CliProvider for CliProviderImpl {
         tokio::fs::create_dir_all(&workdir).await.context("Failed to create session workdir")?;
 
         let (mut cmd, stdin_prompt) = self.build_chat_command(model, &request, Some(&workdir))?;
+        cmd.kill_on_drop(true);
         let mut child = cmd.spawn()?;
 
         if let Some(prompt) = stdin_prompt {
@@ -1959,35 +1961,64 @@ impl CliProvider for BridgeCliProvider {
         let collected_content_final = collected_content.clone();
         let request_tools_for_cleanup = request_tools.clone();
 
-        // Wait for completion in background for session cleanup
+        // Wait for completion in background for session cleanup. If the client
+        // disconnects mid-turn the provider channel closes: drop the wait future
+        // (it owns the CLI child and spawn sites set `kill_on_drop`) and close the
+        // session so `ollama run` / `opencode` is not left running after the
+        // client is gone.
         let completion_task = tokio::spawn(async move {
-            match tokio::time::timeout(bridge_turn_timeout_secs, session_for_completion.wait_for_completion()).await {
-                Ok(Ok(output)) => {
-                    tracing::debug!(target: "bridge.cli", session_id = %session_id_for_cleanup, "CLI completed");
-                    // Streaming path already handled event delivery in most cases.
-                    // Only attempt fallback if nothing was sent and session produced output.
-                    if !done_sent_final {
-                        if let Some(reasoning) = output.reasoning.filter(|r| !r.trim().is_empty()) {
-                            let _ = tx.send(crate::reasoning::RunEvent::ReasoningStart { block: 0, kind: crate::reasoning::ReasoningKind::Raw }).await;
-                            let _ = tx.send(crate::reasoning::RunEvent::ReasoningDelta { block: 0, text: reasoning }).await;
-                            let _ = tx.send(crate::reasoning::RunEvent::ReasoningEnd { block: 0 }).await;
+            let mut client_disconnected = false;
+            {
+                let wait = tokio::time::timeout(
+                    bridge_turn_timeout_secs,
+                    session_for_completion.wait_for_completion(),
+                );
+                tokio::pin!(wait);
+                let outcome = tokio::select! {
+                    _ = tx.closed() => {
+                        client_disconnected = true;
+                        None
+                    }
+                    result = &mut wait => Some(result),
+                };
+
+                if let Some(result) = outcome {
+                    match result {
+                        Ok(Ok(output)) => {
+                            tracing::debug!(target: "bridge.cli", session_id = %session_id_for_cleanup, "CLI completed");
+                            // Streaming path already handled event delivery in most cases.
+                            // Only attempt fallback if nothing was sent and session produced output.
+                            if !done_sent_final {
+                                if let Some(reasoning) = output.reasoning.filter(|r| !r.trim().is_empty()) {
+                                    let _ = tx.send(crate::reasoning::RunEvent::ReasoningStart { block: 0, kind: crate::reasoning::ReasoningKind::Raw }).await;
+                                    let _ = tx.send(crate::reasoning::RunEvent::ReasoningDelta { block: 0, text: reasoning }).await;
+                                    let _ = tx.send(crate::reasoning::RunEvent::ReasoningEnd { block: 0 }).await;
+                                }
+                                if !output.content.is_empty() && output.content != collected_content_final {
+                                    let _ = tx.send(crate::reasoning::RunEvent::Text { text: output.content }).await;
+                                }
+                                if let Some(mut calls) = output.tool_calls.filter(|v| !v.is_empty()) {
+                                    crate::openai::tools::unalias_tool_calls(&mut calls, request_tools_for_cleanup.as_slice());
+                                    let _ = tx.send(crate::reasoning::RunEvent::ToolCalls { calls }).await;
+                                }
+                                let _ = tx.send(crate::reasoning::RunEvent::Done { reason: crate::reasoning::FinishReason::Stop }).await;
+                            }
                         }
-                        if !output.content.is_empty() && output.content != collected_content_final {
-                            let _ = tx.send(crate::reasoning::RunEvent::Text { text: output.content }).await;
+                        Ok(Err(e)) => {
+                            tracing::warn!(target: "bridge.cli", session_id = %session_id_for_cleanup, error = %e, "CLI completion error after streaming");
                         }
-                        if let Some(mut calls) = output.tool_calls.filter(|v| !v.is_empty()) {
-                            crate::openai::tools::unalias_tool_calls(&mut calls, request_tools_for_cleanup.as_slice());
-                            let _ = tx.send(crate::reasoning::RunEvent::ToolCalls { calls }).await;
+                        Err(_) => {
+                            tracing::warn!(target: "bridge.cli", session_id = %session_id_for_cleanup, "CLI completion timed out after streaming");
                         }
-                        let _ = tx.send(crate::reasoning::RunEvent::Done { reason: crate::reasoning::FinishReason::Stop }).await;
                     }
                 }
-                Ok(Err(e)) => {
-                    tracing::warn!(target: "bridge.cli", session_id = %session_id_for_cleanup, error = %e, "CLI completion error after streaming");
-                }
-                Err(_) => {
-                    tracing::warn!(target: "bridge.cli", session_id = %session_id_for_cleanup, "CLI completion timed out after streaming");
-                }
+            }
+            if client_disconnected {
+                tracing::info!(
+                    target: "bridge.cli",
+                    session_id = %session_id_for_cleanup,
+                    "client disconnected; cancelling CLI turn"
+                );
             }
 
             // Cleanup session

@@ -365,6 +365,18 @@ async fn chat_completions(
 
             loop {
                 tokio::select! {
+                    // The client hung up (browser closed, curl killed, proxy
+                    // dropped the body). Stop draining provider events and drop
+                    // the receiver when this task returns: the provider-side
+                    // stream then sees a closed channel and kills its CLI child
+                    // instead of orphaning `ollama run` / `opencode` processes.
+                    _ = tx.closed() => {
+                        info!(
+                            event = "stream.client_disconnected",
+                            run_id = %stream_run_id
+                        );
+                        break;
+                    }
                     event = events.recv() => {
                         match event {
                             Some(event) => {

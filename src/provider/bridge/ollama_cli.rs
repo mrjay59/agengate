@@ -267,6 +267,7 @@ impl OllamaCliSession {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
             .envs(&self.profile.env);
 
         let child = cmd.spawn()?;
