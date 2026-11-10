@@ -175,6 +175,14 @@ pub struct BridgeServer {
     tool_name_map: Arc<RwLock<HashMap<String, String>>>,
     /// P0-AUDIT seq2: TTL tracking for tool_call_ids.
     tool_call_ttls: Arc<Mutex<HashMap<String, Instant>>>,
+    /// PR-S5: session generation counter for replay rotation.
+    /// Incremented on each replay to guarantee fresh cli_gen/session_id.
+    cli_gen: Arc<Mutex<u64>>,
+    /// PR-S5: session generation per run_id (run_id -> generation).
+    /// Ensures replay uses a fresh generation.
+    session_generation: Arc<RwLock<HashMap<String, u64>>>,
+    /// PR-S5: tracked orphan PIDs for startup sweep.
+    orphan_pids: Arc<Mutex<Vec<u32>>>,
 }
 
 /// A held `tools/call` bound to the session that issued it.
@@ -292,6 +300,9 @@ impl BridgeServer {
             tool_call_queue: Arc::new(Mutex::new(HashMap::new())),
             tool_name_map: Arc::new(RwLock::new(HashMap::new())),
             tool_call_ttls: Arc::new(Mutex::new(HashMap::new())),
+            cli_gen: Arc::new(Mutex::new(0)),
+            session_generation: Arc::new(RwLock::new(HashMap::new())),
+            orphan_pids: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -398,6 +409,71 @@ impl BridgeServer {
             .await
             .retain(|_, pending| pending.session_id != session_id);
         removed
+    }
+
+    /// PR-S5: Sweep orphan CLI PIDs on startup.
+    /// Scans tracked orphan PIDs (from previous crashed runs) and attempts
+    /// best-effort kill. Always clears the tracking list after sweep.
+    pub async fn sweep_orphan_pids_on_startup(&self) {
+        let pids = {
+            let mut pids = self.orphan_pids.lock().await;
+            let mut cleared = Vec::new();
+            std::mem::swap(&mut cleared, &mut pids);
+            cleared
+        };
+        let count = pids.len();
+        for pid in &pids {
+            #[cfg(target_os = "windows")]
+            {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .output();
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", &pid.to_string()])
+                    .output();
+            }
+            debug!(event = "bridge.orphan_pid_sweep.killed", pid);
+        }
+        if count > 0 {
+            info!(event = "bridge.orphan_pid_sweep", swept = count);
+        }
+    }
+
+    /// PR-S5: Replay session rotation.
+    /// Increments cli_gen and records new generation for run_id.
+    /// Returns (new_session_id, new_token, cli_gen) so caller can create
+    /// a fresh provider session and not reuse stale CLI context.
+    pub async fn replay_rotate_session(&self, run_id: &str) -> (String, String, u64) {
+        let gen = {
+            let mut g = self.cli_gen.lock().await;
+            *g += 1;
+            *g
+        };
+        {
+            let mut sg = self.session_generation.write().await;
+            sg.insert(run_id.to_string(), gen);
+        }
+        let (session_id, token) = self.create_session(Vec::new(), Some(run_id.to_string())).await;
+        info!(event = "bridge.replay.rotate", run_id = %run_id, session_id = %session_id, cli_gen = gen);
+        (session_id, token, gen)
+    }
+
+    /// PR-S5: Get current session generation for a run_id.
+    pub async fn session_generation_for(&self, run_id: &str) -> u64 {
+        let sg = self.session_generation.read().await;
+        sg.get(run_id).copied().unwrap_or(0)
+    }
+
+    /// PR-S5: Register an orphan PID for startup sweep (provider adapters call
+    /// this when a CLI child exits unexpectedly without parent cleanup).
+    pub async fn register_orphan_pid(&self, pid: u32) {
+        let mut pids = self.orphan_pids.lock().await;
+        if !pids.contains(&pid) {
+            pids.push(pid);
+        }
     }
 
     /// Cancel a session: kill CLI child process, cleanup workdir, stop run.
@@ -817,6 +893,9 @@ pub fn normalize_tool_name(name: &str, session_tools: &[crate::bridge::ToolSchem
 
     /// Start cleanup task for expired runs
     pub async fn start_cleanup_task(&self) {
+        // PR-S5: Sweep orphan PIDs on startup (leftover CLI processes from crashed runs).
+        self.sweep_orphan_pids_on_startup().await;
+
         let runs = self.runs.clone();
         let parked_runs = self.parked_runs.clone();
         let sessions = self.sessions.clone();
