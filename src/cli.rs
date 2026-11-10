@@ -4,6 +4,7 @@ use crate::service::ServiceRegistry;
 use crate::types::{ChatCompletionRequest, MessageRole};
 use crate::provider::bridge::spike::{run_spike_bridge, SpikeConfig};
 use anyhow::Result;
+use std::time::{Duration, Instant};
 use tracing::error;
 
 pub async fn execute_providers(config: &Config) -> Result<()> {
@@ -16,12 +17,23 @@ pub async fn execute_providers(config: &Config) -> Result<()> {
     );
     for provider_cfg in &config.provider {
         // Bridge-capable agents use the MCP bridge adapter (spec_tooling.md §12).
+        // Also register the native impl so `providers` reports the real binary
+        // availability resolved through `resolve_binary` (nvm/npm fallbacks).
         let provider = crate::provider::build_cli_provider(
             provider_cfg,
             Some(registry.bridge.clone()),
         );
         let available = provider.check_available().await;
+        let native_available = crate::provider::CliProviderImpl::new(provider_cfg.clone())
+            .check_available()
+            .await;
         registry.register(provider).await;
+        registry
+            .register_native(Box::new(crate::provider::CliProviderImpl::new(
+                provider_cfg.clone(),
+            )))
+            .await;
+        let available = available || native_available;
         if available {
             tracing::info!("Provider {} is available", provider_cfg.id);
         } else {
@@ -46,12 +58,7 @@ pub async fn execute_models(config: &Config, provider_filter: Option<&str>) -> R
         config.defaults.clone(),
         false,
     );
-    for provider_cfg in &config.provider {
-        registry.register(crate::provider::build_cli_provider(
-            provider_cfg,
-            Some(registry.bridge.clone()),
-        )).await;
-    }
+    registry.register_configured(&config.provider).await;
 
     let models = registry
         .list_models(provider_filter)
@@ -76,12 +83,7 @@ pub async fn execute_test(config: &Config, model: &str, prompt: &str) -> Result<
         config.defaults.clone(),
         false,
     );
-    for provider_cfg in &config.provider {
-        registry.register(crate::provider::build_cli_provider(
-            provider_cfg,
-            Some(registry.bridge.clone()),
-        )).await;
-    }
+    registry.register_configured(&config.provider).await;
 
     let request = ChatCompletionRequest {
         model: model.to_string(),

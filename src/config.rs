@@ -275,7 +275,11 @@ pub struct DefaultsConfig {
     pub max_concurrency_per_provider: usize,
     #[serde(default = "default_cache_ttl")]
     pub model_cache_ttl_secs: u64,
+    #[serde(default = "default_first_token_timeout")]
+    pub first_token_timeout_secs: u64,
 }
+
+fn default_first_token_timeout() -> u64 { 120 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReasoningConfig {

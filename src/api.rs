@@ -259,13 +259,23 @@ async fn chat_completions(
             .await
             .ok_or_else(|| AppError::ModelNotFound(request.model.clone()))?,
     };
+
+    // Fail fast: reject unavailable providers (missing binary, broken install)
+    // before opening a stream that would only send keep-alives. Ollama served
+    // over HTTP (`ollama_mode = "native"`) is exempt: its availability is the
+    // Ollama server's responsibility, not the CLI's.
+    let is_http_native = !registry.ollama_cli_mode
+        && (provider_id == "ollama" || request.model.starts_with("ollama/"));
+    if !is_http_native && !registry.as_ref().is_provider_available(&provider_id).await {
+        return Err(AppError::ProviderUnavailable(provider_id));
+    }
+
     let (reasoning_cfg, format, _source) = resolve_reasoning(&registry, &headers, &request);
     let is_stream = request.stream.unwrap_or(false);
 
     // Observability (spec §15): run id, mode, counters, headers.
     let run_id = uuid::Uuid::new_v4().to_string();
-    let is_native = !registry.ollama_cli_mode
-        && (provider_id == "ollama" || request.model.starts_with("ollama/"));
+    let is_native = is_http_native;
     let known_ids: std::collections::HashSet<String> = registry
         .run_registry
         .get_known_tool_call_ids()
@@ -336,12 +346,29 @@ async fn chat_completions(
             let mut ticker = tokio::time::interval(Duration::from_millis(250));
             let mut last_heartbeat = Instant::now();
             let mut tool_calls_finished = false;
+            // Fail fast on silence. A provider that never produces an event
+            // (missing CLI, an upstream error the CLI never terminates after,
+            // stuck process) used to keep this loop alive forever: the client
+            // only ever saw `: keep-alive` comments and finally gave up with
+            // "no response". Bound the silence and end the stream with an
+            // explicit error chunk followed by `[DONE]`.
+            //
+            //  - before the first event: `defaults.first_token_timeout_secs`
+            //    (agentgate.toml, default 120 s so cold CPU model loads fit)
+            //  - after the first event: max silence, also 120 s by default
+            //    (`AGENTGATE_STREAM_IDLE_TIMEOUT_SECS`)
+            let first_token_timeout = registry_clone.first_token_timeout;
+            let mut first_token_timer = Box::pin(tokio::time::sleep(first_token_timeout));
+            let idle_timeout = stream_idle_timeout();
+            let mut last_provider_activity = Instant::now();
+            let mut terminated_by_error = false;
 
             loop {
                 tokio::select! {
                     event = events.recv() => {
                         match event {
                             Some(event) => {
+                                last_provider_activity = Instant::now();
                                 if !ttft_recorded {
                                     crate::metrics::METRICS
                                         .observe_ttft(ttft_start.elapsed().as_millis() as u64);
@@ -350,14 +377,46 @@ async fn chat_completions(
                                 if matches!(event, RunEvent::ToolCalls { .. }) {
                                     tool_calls_finished = true;
                                 }
+                                // An explicit provider error is terminal for the
+                                // client: forward the chunk, then stop waiting
+                                // for a CLI that may never exit (this is exactly
+                                // the opencode quota-error case, which used to
+                                // hang for ~2 minutes).
+                                let is_error = matches!(event, RunEvent::Error { .. });
                                 for processed in pipeline.process(event) {
                                     for coalesced in coalescer.add_event(processed) {
                                         emit_event(&tx, &ctx, &mut writer, coalesced, activity_via_reasoning).await;
                                     }
                                 }
+                                if is_error {
+                                    terminated_by_error = true;
+                                    break;
+                                }
                             }
                             None => break,
                         }
+                    }
+                    _ = &mut first_token_timer, if !ttft_recorded => {
+                        // First token timeout fired before any event received
+                        let error_msg = format!(
+                            "provider '{}' did not produce first token within {} seconds",
+                            provider_id, first_token_timeout.as_secs()
+                        );
+                        let chunk = serde_json::json!({
+                            "id": ctx.id,
+                            "object": "chat.completion.chunk",
+                            "created": ctx.created,
+                            "model": ctx.model,
+                            "choices": [{ "index": 0, "delta": {}, "finish_reason": "error" }],
+                            "error": { "message": error_msg, "code": "first_token_timeout" }
+                        });
+                        let _ = send_sse(&tx, &chunk.to_string()).await;
+                        // Emit [DONE] to properly terminate SSE stream
+                        let _ = tx
+                            .send(Ok(axum::response::sse::Event::default().data("[DONE]")))
+                            .await;
+                        terminated_by_error = true;
+                        break;
                     }
                     _ = ticker.tick() => {
                         for event in pipeline.tick(Instant::now()) {
@@ -372,6 +431,27 @@ async fn chat_completions(
                                 .send(Ok(axum::response::sse::Event::default().comment("keep-alive")))
                                 .await;
                             last_heartbeat = Instant::now();
+                        }
+                        // Ongoing idle timeout after first token
+                        if ttft_recorded && last_provider_activity.elapsed() >= idle_timeout {
+                            let error_msg = format!(
+                                "provider '{}' produced no output for {}s; stream aborted",
+                                provider_id, idle_timeout.as_secs()
+                            );
+                            let chunk = serde_json::json!({
+                                "id": ctx.id,
+                                "object": "chat.completion.chunk",
+                                "created": ctx.created,
+                                "model": ctx.model,
+                                "choices": [{ "index": 0, "delta": {}, "finish_reason": "error" }],
+                                "error": { "message": error_msg, "code": "provider_timeout" }
+                            });
+                            let _ = send_sse(&tx, &chunk.to_string()).await;
+                            let _ = tx
+                                .send(Ok(axum::response::sse::Event::default().data("[DONE]")))
+                                .await;
+                            terminated_by_error = true;
+                            break;
                         }
                     }
                 }
@@ -389,7 +469,7 @@ async fn chat_completions(
                 let _ = send_sse(&tx, &ctx.chunk(delta, None)).await;
             }
 
-            if !tool_calls_finished {
+            if !tool_calls_finished && !terminated_by_error {
                 let _ = send_sse(&tx, &ctx.chunk(serde_json::json!({}), Some("stop"))).await;
             }
             let _ = tx
@@ -570,17 +650,14 @@ async fn emit_event(
                         }
                     }]
                 })).await;
-                // Chunk 2+: 512-byte argument slices
+                // Chunk 2+: 512-byte argument slices (continuation: no id/type/name)
                 let args = call.function.arguments.as_str();
                 let args_bytes = args.as_bytes();
                 for chunk in args_bytes.chunks(512) {
                     send_delta(tx, ctx, serde_json::json!({
                         "tool_calls": [{
                             "index": index,
-                            "id": call.id,
-                            "type": call.r#type,
                             "function": {
-                                "name": name,
                                 "arguments": std::str::from_utf8(chunk).unwrap_or("")
                             }
                         }]
@@ -945,3 +1022,15 @@ async fn bridge_resolve(
 
 
 
+
+/// How long an SSE stream may stay silent before it is terminated with an
+/// explicit error chunk (default 120 s). Override with
+/// `AGENTGATE_STREAM_IDLE_TIMEOUT_SECS`.
+fn stream_idle_timeout() -> Duration {
+    std::env::var("AGENTGATE_STREAM_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(120))
+}

@@ -73,6 +73,9 @@ pub struct ServiceRegistry {
     pub provider_semaphores: RwLock<HashMap<String, Arc<Semaphore>>>,
     /// Default max concurrency per provider from config.
     pub max_concurrency_per_provider: usize,
+    /// Deadline for the first provider event on a streaming request
+    /// (`[defaults] first_token_timeout_secs`, default 120 s).
+    pub first_token_timeout: Duration,
     /// Model cache: provider_id -> (models, cached_at)
     model_cache: RwLock<HashMap<String, (Vec<String>, Instant)>>,
     /// Cache TTL for model scans (default 300s).
@@ -102,6 +105,11 @@ impl ServiceRegistry {
             ollama_cli_mode,
             provider_semaphores: RwLock::new(HashMap::new()),
             max_concurrency_per_provider: defaults.max_concurrency_per_provider,
+            first_token_timeout: Duration::from_secs(if defaults.first_token_timeout_secs == 0 {
+                120
+            } else {
+                defaults.first_token_timeout_secs
+            }),
             model_cache: RwLock::new(HashMap::new()),
             model_cache_ttl: Duration::from_secs(300), // default 5 minutes
         }
@@ -215,6 +223,48 @@ impl ServiceRegistry {
         providers.insert(id, Arc::from(provider));
     }
 
+    /// Whether a provider is registered **and** reported as available.
+    ///
+    /// Used to reject requests for dead providers (missing binary, broken
+    /// install) before opening an SSE stream that would only send keep-alives.
+    /// Both the bridge adapter and the native CLI provider are consulted
+    /// because a bridge adapter can report unavailable while the native CLI
+    /// works (and vice versa).
+    pub async fn is_provider_available(&self, provider_id: &str) -> bool {
+        {
+            let native = self.native_providers.read().await;
+            if let Some(p) = native.get(provider_id) {
+                if p.is_available() {
+                    return true;
+                }
+            }
+        }
+        match self.providers.read().await.get(provider_id) {
+            Some(p) => p.is_available(),
+            None => false,
+        }
+    }
+
+    /// Register every configured provider the way the server does: the bridge
+    /// adapter plus the native CLI implementation.
+    ///
+    /// Every CLI entry point (`serve`, `models`, `test`, `doctor`, `providers`)
+    /// must go through this. Registering only the bridge adapter made
+    /// `agentgate models` print the static `models` list from the config (10
+    /// entries) while the server scanned the real catalog (98), and made
+    /// `agentgate doctor` report `opencode MISSING` although the binary was
+    /// reachable through `resolve_binary`'s nvm fallback.
+    pub async fn register_configured(&mut self, providers: &[ProviderConfig]) {
+        for provider_cfg in providers {
+            let provider =
+                crate::provider::build_cli_provider(provider_cfg, Some(self.bridge.clone()));
+            self.register(provider).await;
+            let native: Box<dyn CliProvider + Send + Sync> =
+                Box::new(crate::provider::CliProviderImpl::new(provider_cfg.clone()));
+            self.register_native(native).await;
+        }
+    }
+
     pub async fn list_models(&self, _provider_filter: Option<&str>) -> Result<ModelsResponse, AppError> {
         let start = Instant::now();
         
@@ -289,11 +339,23 @@ impl ServiceRegistry {
                     cached_models.insert(id, models);
                 }
                 Ok((id, Err(e), elapsed)) => {
-                    tracing::warn!(provider = %id, elapsed_ms = elapsed.as_millis(), error = %e, "scan_models failed, using config models");
-                    // Fallback to config models
-                    if let Some((_, provider)) = all_providers.iter().find(|(pid, _)| pid == &id) {
-                        cache.insert(id.clone(), (provider.models(), Instant::now()));
-                        cached_models.insert(id, provider.models());
+                    // Only fall back to the static config list when the provider
+                    // itself is reachable. Advertising configured models for a
+                    // dead provider (missing/broken CLI) sent clients straight
+                    // into a hang: they picked a model that could never answer.
+                    let provider_available = all_providers
+                        .iter()
+                        .find(|(pid, _)| pid == &id)
+                        .map(|(_, p)| p.is_available())
+                        .unwrap_or(false);
+                    if provider_available {
+                        tracing::warn!(provider = %id, elapsed_ms = elapsed.as_millis(), error = %e, "scan_models failed, using config models");
+                        if let Some((_, provider)) = all_providers.iter().find(|(pid, _)| pid == &id) {
+                            cache.insert(id.clone(), (provider.models(), Instant::now()));
+                            cached_models.insert(id, provider.models());
+                        }
+                    } else {
+                        tracing::warn!(provider = %id, elapsed_ms = elapsed.as_millis(), error = %e, "scan_models failed and provider is unavailable; not advertising its configured models");
                     }
                 }
                 Err(e) => {
@@ -314,6 +376,23 @@ impl ServiceRegistry {
         let mut seen_ids = std::collections::HashSet::new();
 
         for (id, model_list) in &cached_models {
+            // Never advertise models of a provider that cannot serve them.
+            // `scan_models` falls back to the configured list when it finds
+            // nothing, so an absent binary (gemini, a mis-installed opencode)
+            // used to keep its whole static catalog visible. Ollama over HTTP
+            // is exempt: the CLI may be absent while the server is fine.
+            let is_ollama_http = !self.ollama_cli_mode && id == "ollama";
+            if !is_ollama_http {
+                let available = all_providers
+                    .iter()
+                    .find(|(pid, _)| pid == id)
+                    .map(|(_, p)| p.is_available())
+                    .unwrap_or(false);
+                if !available {
+                    tracing::debug!(provider = %id, "list_models: provider unavailable, hiding its models");
+                    continue;
+                }
+            }
             for model_id in model_list {
                 let (prefixed_id, owner) = match model_id.split_once('/') {
                     Some((prefix, _)) if all_providers.iter().any(|(pid, _)| pid == prefix) => {
@@ -585,9 +664,30 @@ impl ServiceRegistry {
 
     async fn call_provider_native_with(&self, provider: Arc<dyn CliProvider + Send + Sync>, request: ChatCompletionRequest) -> Result<ChatCompletionResponse, AppError> {
         let model = request.model.clone();
-        tracing::info!(model, provider_id = %provider.id(), "call_provider_native_with: calling send_chat_completion");
-        let response = provider.send_chat_completion(&model, request).await.map_err(provider_error_to_app_error)?;
-        tracing::info!(model, provider_id = %provider.id(), "call_provider_native_with: got response");
+        let provider_id = provider.id().to_string();
+        tracing::info!(model, provider_id = %provider_id, "call_provider_native_with: calling send_chat_completion");
+        // Fail fast: a CLI agent can hang forever (missing model → auto-pull,
+        // upstream quota error that never terminates the process, broken
+        // version). Without a deadline the HTTP client waits until its own
+        // timeout and reports "no response". Bound the whole call instead.
+        let timeout_secs = provider_call_timeout_secs();
+        let response = match tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            provider.send_chat_completion(&model, request),
+        )
+        .await
+        {
+            Ok(result) => result.map_err(provider_error_to_app_error)?,
+            Err(_) => {
+                crate::metrics::METRICS.record_cli_exit(false);
+                tracing::error!(model, provider_id = %provider_id, timeout_secs, "call_provider_native_with: provider call timed out");
+                return Err(AppError::ProviderError(format!(
+                    "provider '{}' produced no result within {}s (timed out)",
+                    provider_id, timeout_secs
+                )));
+            }
+        };
+        tracing::info!(model, provider_id = %provider_id, "call_provider_native_with: got response");
         match response {
             crate::provider::ProviderResponse::Success { content: text, reasoning, tool_calls, session_id, .. } => {
                 crate::metrics::METRICS.record_cli_exit(true);
@@ -1077,4 +1177,18 @@ impl ServiceRegistry {
         self.add_providers.write().await.push(request);
         Ok(())
     }
+}
+
+/// Deadline (seconds) for a single non-streaming provider call.
+///
+/// CLI agents can block indefinitely: a missing ollama model starts a multi-GB
+/// auto-pull, and some CLI versions do not exit after an upstream error. Without
+/// this bound the HTTP client sees no response at all. Override with
+/// `AGENTGATE_PROVIDER_TIMEOUT_SECS`.
+fn provider_call_timeout_secs() -> u64 {
+    std::env::var("AGENTGATE_PROVIDER_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(120)
 }

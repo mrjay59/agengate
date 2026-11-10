@@ -60,6 +60,9 @@ pub enum AppError {
     #[error("provider_error: {0}")]
     ProviderError(String),
 
+    #[error("provider_unavailable: {0}")]
+    ProviderUnavailable(String),
+
     #[error("tool_isolation_violation: {0}")]
     ToolIsolationViolation(String),
 }
@@ -75,6 +78,7 @@ impl AppError {
             AppError::UnsupportedToolType => "unsupported_tool_type",
             AppError::ModelNoToolSupport => "model_no_tool_support",
             AppError::ProviderError(_) => "provider_error",
+            AppError::ProviderUnavailable(_) => "provider_unavailable",
             AppError::ToolIsolationViolation(_) => "tool_isolation_violation",
             AppError::ToolError(_) => "tool_error",
             _ => "internal_error",
@@ -103,6 +107,7 @@ impl IntoResponse for AppError {
             AppError::UnsupportedToolType => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::ModelNoToolSupport => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::ProviderError(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+            AppError::ProviderUnavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
             AppError::ToolIsolationViolation(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
         };
 

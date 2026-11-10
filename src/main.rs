@@ -257,15 +257,7 @@ async fn main() -> Result<()> {
                 config.defaults.clone(),
                 ollama_cli_enabled(&config),
             );
-            for provider_cfg in &config.provider {
-                // Bridge-capable agents use the MCP bridge adapter (spec_tooling.md §12);
-                // set `bridge = false` on the provider to opt out.
-                let provider = agentgate::provider::build_cli_provider(
-                    provider_cfg,
-                    Some(registry.bridge.clone()),
-                );
-                registry.register(provider).await;
-            }
+            registry.register_configured(&config.provider).await;
             let provider_filter = provider.as_deref();
             let models_response = registry.list_models(provider_filter).await?;
 
@@ -278,15 +270,7 @@ async fn main() -> Result<()> {
             let mut registry = ServiceRegistry::new()
                 .with_reasoning(config.reasoning.clone())
                 .with_ollama_cli_mode(ollama_cli_enabled(&config));
-            for provider_cfg in &config.provider {
-                // Bridge-capable agents use the MCP bridge adapter (spec_tooling.md §12);
-                // set `bridge = false` on the provider to opt out.
-                let provider = agentgate::provider::build_cli_provider(
-                    provider_cfg,
-                    Some(registry.bridge.clone()),
-                );
-                registry.register(provider).await;
-            }
+            registry.register_configured(&config.provider).await;
             let request = ChatCompletionRequest {
                 model: model.clone(),
                 messages: vec![ChatMessage {
@@ -299,7 +283,26 @@ async fn main() -> Result<()> {
                 }],
                 ..Default::default()
             };
-            let response = registry.chat_completion(request).await?;
+            // Never block forever: a missing model or a CLI that does not exit
+            // would otherwise hang this command indefinitely.
+            let timeout_secs = std::env::var("AGENTGATE_TEST_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(180);
+            let response = match tokio::time::timeout(
+                std::time::Duration::from_secs(timeout_secs),
+                registry.chat_completion(request),
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => anyhow::bail!(
+                    "test request for '{}' timed out after {}s",
+                    model,
+                    timeout_secs
+                ),
+            };
             println!("Model: {}", response.model);
             println!("Content: {}", response.choices[0].message.content.as_deref().unwrap_or(""));
         }
@@ -330,13 +333,7 @@ async fn main() -> Result<()> {
                         config.defaults.clone(),
                         ollama_cli_enabled(&config),
                     );
-                for provider_cfg in &config.provider {
-                    let provider = agentgate::provider::build_cli_provider(
-                        provider_cfg,
-                        Some(registry.bridge.clone()),
-                    );
-                    registry.register(provider).await;
-                }
+                registry.register_configured(&config.provider).await;
                 agentgate::doctor::run_probe_chain(&registry, host, *port, *seconds).await?;
             } else {
                 let mut registry =
@@ -347,13 +344,7 @@ async fn main() -> Result<()> {
                         config.defaults.clone(),
                         ollama_cli_enabled(&config),
                     );
-                for provider_cfg in &config.provider {
-                    let provider = agentgate::provider::build_cli_provider(
-                        provider_cfg,
-                        Some(registry.bridge.clone()),
-                    );
-                    registry.register(provider).await;
-                }
+                registry.register_configured(&config.provider).await;
                 agentgate::doctor::run_report(&registry).await;
             }
         }
