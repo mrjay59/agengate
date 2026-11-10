@@ -6,22 +6,35 @@ Cross-platform installation guide for AgentGate — an OpenAI-compatible gateway
 
 ```bash
 # Linux/macOS (binary release)
-curl -sSL https://github.com/agentgate/agentgate/releases/latest/download/agentgate-linux-x86_64.tar.gz | tar xz
-sudo mv agentgate /usr/local/bin/
+curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-x86_64.zip -o /tmp/agentgate.zip
+unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
 agentgate serve --host 0.0.0.0 --port 8787
 
 # Windows (PowerShell)
-Invoke-WebRequest -Uri "https://github.com/agentgate/agentgate/releases/latest/download/agentgate-windows-x86_64.zip" -OutFile "$env:TEMP\agentgate.zip"
-Expand-Archive "$env:TEMP\agentgate.zip"
-./agentgate.exe serve --host 0.0.0.0 --port 8787
+Invoke-WebRequest -Uri "https://github.com/mrjay59/agengate/releases/latest/download/agentgate-windows-x86_64.zip" -OutFile "$env:TEMP\agentgate.zip"
+Expand-Archive "$env:TEMP\agentgate.zip" -DestinationPath "$env:USERPROFILE\bin" -Force
+agentgate.exe serve --host 0.0.0.0 --port 8787
 
 # ARM64 (Linux)
-curl -sSL https://github.com/agentgate/agentgate/releases/latest/download/agentgate-linux-aarch64.tar.gz | tar xz
-sudo mv agentgate /usr/local/bin/
+curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-aarch64.zip -o /tmp/agentgate.zip
+unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
 agentgate serve --host 0.0.0.0 --port 8787
 ```
 
 > The server only needs to be reachable by your client. Ollama-native mode additionally requires a running Ollama server at `base_url` (default `http://127.0.0.1:11434`).
+
+### First run (required)
+
+After extracting the binary, run once to generate the config file:
+
+```bash
+agentgate init          # creates agentgate.toml in the current dir (or ~/.config/agentgate/)
+agentgate doctor        # check provider availability
+agentgate models        # list available models
+agentgate serve         # start the gateway
+```
+
+> Without `agentgate init`, no providers are configured and `agentgate models` returns an empty list. See the **Configuration** section for the full `agentgate.toml` reference.
 
 ---
 
@@ -68,12 +81,12 @@ No Ollama binary is needed on the AgentGate host for native mode — only the HT
 
 ```bash
 # x86_64
-curl -sSL https://github.com/agentgate/agentgate/releases/latest/download/agentgate-linux-x86_64.tar.gz \
-  | sudo tar xz -C /usr/local/bin
+curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-x86_64.zip -o /tmp/agentgate.zip
+unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
 
 # ARM64 (Raspberry Pi, ARM servers)
-curl -sSL https://github.com/agentgate/agentgate/releases/latest/download/agentgate-linux-aarch64.tar.gz \
-  | sudo tar xz -C /usr/local/bin
+curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-aarch64.zip -o /tmp/agentgate.zip
+unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
 
 # Verify
 agentgate --version
@@ -87,10 +100,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 
 # Install agentgate
-cargo install --git https://github.com/agentgate/agentgate.git
+cargo install --git https://github.com/mrjay59/agengate.git
 
 # Or build locally
-git clone https://github.com/agentgate/agentgate.git
+git clone https://github.com/mrjay59/agengate.git
 cd agentgate
 cargo build --release
 sudo cp target/release/agentgate /usr/local/bin/
@@ -142,7 +155,7 @@ sudo systemctl enable --now agentgate
 ### Method 1: Binary Release (Recommended)
 
 ```powershell
-$url    = "https://github.com/agentgate/agentgate/releases/latest/download/agentgate-windows-x86_64.zip"
+$url    = "https://github.com/mrjay59/agengate/releases/latest/download/agentgate-windows-x86_64.zip"
 $output = "$env:TEMP\agentgate.zip"
 Invoke-WebRequest -Uri $url -OutFile $output
 Expand-Archive $output -DestinationPath "$env:USERPROFILE\bin" -Force
@@ -160,10 +173,10 @@ agentgate.exe --version
 ```powershell
 winget install Rustlang.Rust
 # restart shell
-cargo install --git https://github.com/agentgate/agentgate.git
+cargo install --git https://github.com/mrjay59/agengate.git
 
 # Or build locally
-git clone https://github.com/agentgate/agentgate.git
+git clone https://github.com/mrjay59/agengate.git
 cd agentgate
 cargo build --release
 copy target\release\agentgate.exe $env:USERPROFILE\bin\
@@ -201,7 +214,7 @@ nssm start AgentGate
 pkg update && pkg upgrade
 pkg install rust openssl ca-certificates
 
-git clone https://github.com/agentgate/agentgate.git
+git clone https://github.com/mrjay59/agengate.git
 cd agentgate
 cargo build --release
 
@@ -217,13 +230,13 @@ agentgate serve --host 0.0.0.0 --port 8787
 
 ```bash
 # Pre-built binary
-curl -sSL https://github.com/agentgate/agentgate/releases/latest/download/agentgate-linux-aarch64.tar.gz \
-  | sudo tar xz -C /usr/local/bin
+curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-aarch64.zip -o /tmp/agentgate.zip
+unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
 
 # Or build natively
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
-git clone https://github.com/agentgate/agentgate.git
+git clone https://github.com/mrjay59/agengate.git
 cd agentgate
 cargo build --release
 sudo cp target/release/agentgate /usr/local/bin/
@@ -419,11 +432,11 @@ Verify the CLI version flags. Claude requires `--include-partial-messages --verb
 
 ```bash
 # Binary (Linux)
-curl -sSL https://github.com/agentgate/agentgate/releases/latest/download/agentgate-linux-x86_64.tar.gz \
-  | sudo tar xz -C /usr/local/bin
+curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-x86_64.zip -o /tmp/agentgate.zip
+unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
 
 # Cargo
-cargo install --git https://github.com/agentgate/agentgate.git --force
+cargo install --git https://github.com/mrjay59/agengate.git --force
 
 # Verify
 agentgate --version
