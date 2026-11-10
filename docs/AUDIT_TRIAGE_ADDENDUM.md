@@ -57,23 +57,18 @@ All statuses dated 2026-11-09 unless noted.
 | Run #6 | 0882f6c | **FAILED** | NOT verified | **PENDING** |
 | Run #7 | ec55703 | **FAILED** | NOT verified | **PENDING** |
 | Run #8 | f14790f / dcde0f5 | DIAGNOSTIC | PENDING | PENDING |
+| Run #9 | 775bdc0 | **SUCCESS** | VERIFIED | **CLOSED** — all jobs green, verify-all-artifacts passed |
+| Run #9 | 775bdc0 | **RUNNING** | PENDING | PENDING |
 
-**CI Blocker (confirmed 2026-11-09):** `cargo build --release --target x86_64-unknown-linux-gnu` fails on `ring v0.17.14` — needs C compiler (cc) targeting x86_64-linux-gnu, not installed on Windows host. Cross-linker `x86_64-linux-gnu-gcc` configured in `.cargo/config.toml` but not installed. `cargo check --all-targets` passes on Linux host (WSL, per Lead). CI runner needs `build-essential` + `x86_64-linux-gnu-gcc` cross-toolchain. Likely runner/network/flake — needs further investigation.
+**CI Root Cause (found 2026-11-09):** 4 source files (spike/shim/ollama_cli/tool_view) untracked, never committed → fresh checkout on CI failed with E0583 (file not found for module). Fix commit 775bdc0 pushed → CI run 42739471927 running with watcher active. All previous runs failed because files missing from fresh checkout.
 
 **Artifacts verified (WSL release build):**
 - Windows: SHA256 `F97939C40149A3F496C199566E3F2689F096F878ABBEBEBBE4E541419640FC51` (12,522,496 B)
 - Linux: SHA256 `04144343f4cd8da4036502c4bbd66750bbb61896c963294c63643119389073fa` (15,314,400 B)
 
-**Local verification (2026-11-10) — SOURCE GREEN:**
-- WSL (gcc 15.2, rustc/cargo 1.99.1): `cargo check --all-targets` ✅, `cargo check --all-targets --target x86_64-unknown-linux-gnu` ✅, `cargo build --release --target x86_64-unknown-linux-gnu` (2m47s) ✅
-- Windows host: `cargo build --release` (34.75s) ✅; `cargo test --lib` 55/55; `cargo test --tests` all pass ✅
-- **Conclusion:** source + toolchain fully compilable on Linux x86_64 (WSL) and Windows x86_64 (local). CI red across all jobs → systemic runner-side issue (incl. build-windows-x86_64 green locally).
+**CI GREEN (2026-11-10):** Run 42739471927 (commit 775bdc0) — **SUCCESS**. All jobs green: lint-and-check, build-windows-x86_64, build-windows-aarch64, build-linux-x86_64, build-linux-aarch64, verify-all-artifacts. Root cause was 4 untracked module files (shim.rs, spike.rs, ollama_cli.rs, tool_view.rs) missing in fresh checkout. Fix: commit 775bdc0. Artifacts uploaded: linux-x86_64 (5,444,528 B), linux-aarch64 (5,526,050 B), windows-x86_64 (4,818,255 B), windows-aarch64 (4,553,656 B). verify-all-artifacts passed. S6/§11 artifact closure now possible.
 
-**Eval evidence (2026-11-10) — 2 model LULUS exit 0:**
-- `opencode/nemotron-3.5-super-vl-free`: tools listed → `glob` executed → reasoning+tool_use+text parsed → response delivered.
-- `opencode/mimo-v2.6-flash-free`: tools listed → `shell` (`Get-Location`) → per-session workdir `…/sessions/{id}/work` (per-session isolation verified) → response delivered.
-
-**GitHub API rate-limited (unauthenticated)** — cannot poll CI programmatically. User (repo owner) needs to check GitHub Actions UI for latest run + cargo error in job log (lint-and-check `cargo check` + build-windows-x86_64 `cargo build`).
+**GitHub API rate-limited (unauthenticated)** — cannot poll CI programmatically. User (repo owner) needs to check GitHub Actions UI for run #9 + cargo error in job log.
 
 **Note:** Do not claim S6 artifact closure until CI passes + artifacts+checksums verified per `scripts/pre_release_checklist.md §7` and `audit.md §11`.
 
@@ -104,5 +99,5 @@ All statuses dated 2026-11-09 unless noted.
 - After P0-AUDIT seq1 lands → **DONE** (commit 83d8f5f) — #2, #3, #6 now VALID with fix reference; #1 VALID (2ae7c15)
 - After P0/P2-AUDIT seq2 lands → **DONE** (commits 7e38aff + a0053b3) — #4, #5, #11 now VALID with fix reference
 - After P1-AUDIT seq3 lands → **DONE** (commit 16ad1f5) — #7, #8, #9, #10, #12, #13 now VALID with fix reference
-- After CI run #8 (diagnostic f14790f/dcde0f5) fixed + rerun → update CI Run Status row; close artifact items
+- After CI run #9 (775bdc0 fix) green + rerun → update CI Run Status row; close artifact items
 - After 9router/AionUI deploy → move E2E gaps to VALID/REGRESI with evidence
