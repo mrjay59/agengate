@@ -123,6 +123,16 @@ jobs:
       - name: cargo build --release (Linux x86_64)
         run: cargo build --release --target x86_64-unknown-linux-gnu
 
+      - name: Verify glibc ceiling (must stay <= GLIBC_2.35)
+        run: |
+          MAX=$(objdump -T target/x86_64-unknown-linux-gnu/release/agentgate \
+            | grep -o 'GLIBC_[0-9.]*' | sort -u -V | tail -1)
+          echo "max glibc symbol: $MAX"
+          case "$MAX" in
+            GLIBC_2.3[0-5]) ;;
+            *) echo "::error::artifact requires $MAX (newer than GLIBC_2.35, i.e. Ubuntu 22.04)"; exit 1 ;;
+          esac
+
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
@@ -159,6 +169,16 @@ jobs:
 
       - name: cargo build --release (Linux aarch64)
         run: cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Verify glibc ceiling (must stay <= GLIBC_2.35)
+        run: |
+          MAX=$(objdump -T target/aarch64-unknown-linux-gnu/release/agentgate \
+            | grep -o 'GLIBC_[0-9.]*' | sort -u -V | tail -1)
+          echo "max glibc symbol: $MAX"
+          case "$MAX" in
+            GLIBC_2.3[0-5]) ;;
+            *) echo "::error::artifact requires $MAX (newer than GLIBC_2.35, i.e. Ubuntu 22.04)"; exit 1 ;;
+          esac
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
