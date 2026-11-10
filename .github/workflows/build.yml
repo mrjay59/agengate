@@ -19,6 +19,11 @@ jobs:
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install C compiler (gcc)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
       - name: cargo check (all targets)
         run: cargo check --all-targets
 
@@ -89,6 +94,11 @@ jobs:
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install C compiler (gcc)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
       - name: Add Linux x86_64 target
         run: rustup target add x86_64-unknown-linux-gnu
 
@@ -109,6 +119,11 @@ jobs:
 
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install C compiler (gcc)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
 
       - name: Install aarch64 cross-linker
         run: |
