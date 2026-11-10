@@ -178,8 +178,10 @@ $ ps -eo pid,ppid,etime,cmd | grep 'ollama run'
   cwd -> /tmp/agentgate/sessions/f78f5989-.../work
 ```
 
-`affe25a` on `main` wires `notifications/cancelled` to `cancel_session` and fixes this; the released
-artifact predates it. Re-verify after the next artifact is built.
+`affe25a` on `main` wires `notifications/cancelled` to `cancel_session`, but that only covers MCP
+cancellation. Fix `d6a53f8` additionally closes the SSE-side loop when the client drops the
+response body, so the provider task sees a closed channel and kills the child. Verified on the VPS
+after deployment: `orphan_ollama_run=0` (see §8).
 
 ---
 
@@ -264,7 +266,8 @@ curl -sN -m 30 -X POST http://127.0.0.1:8780/v1/chat/completions \
 | Non-stream deadline | `src/service.rs` | `send_chat_completion` bounded by `AGENTGATE_PROVIDER_TIMEOUT_SECS` (default 120 s) → `502 provider_error: produced no result within Ns (timed out)`. |
 | `test` deadline | `src/main.rs` | `agentgate test` bounded by `AGENTGATE_TEST_TIMEOUT_SECS` (default 180 s). |
 | Portable Linux artifact | `.github/workflows/build.yml` | Linux jobs run on `ubuntu-22.04` → max symbol GLIBC_2.35 (was 2.39). |
-| Regression tests | `tests/stream_timeout_test.rs` | Silent provider → `first_token_timeout` + `[DONE]`; provider that errors then stays alive → error chunk + `[DONE]` in < 10 s. |
+| Regression tests | `tests/stream_timeout_test.rs` | Silent provider → `first_token_timeout` + `[DONE]`; provider that errors then stays alive → error chunk + `[DONE]` in < 10 s; client drops the SSE body → provider channel closes and the child is killed. |
+| Client-disconnect cancel | `src/api.rs`, `src/provider.rs`, `src/provider/bridge/*` | The SSE task selects on `tx.closed()`; dropping the response body stops the loop, closes the provider channel, and `kill_on_drop` + `session.close()` kill the CLI child (`ollama run`, opencode, gemini, claude). |
 
 ### Local verification (debug build, Linux-equivalent code paths)
 
@@ -287,9 +290,35 @@ POST agg/ollama/nemotron-3-nano:4b stream=true -> 59 s,
 
 `cargo test --lib` → 55 passed; `cargo test --tests` → all suites pass (2 new tests).
 
-### Remaining before this is closed on the VPS
+### VPS deployment (2026-11-10, commit `d6a53f8`)
 
-1. Ship a new artifact built on `ubuntu-22.04` and replace `/usr/local/bin/agentgate` (v0.1.0 predates every fix above, including the cancel-kill fix `affe25a`).
-2. Re-run the failure-mode matrix on the VPS: unavailable provider must answer `503` in ≤ 1 s; a registered provider that errors must terminate the stream in ≤ 15 s.
-3. Environment: put `opencode` on the service `PATH` (systemd `Environment=PATH=...`) and use `@opencode/cli` 2.x instead of the legacy `opencode-ai` 1.19.5, which does not exit after an upstream error.
-4. The VPS opencode account free quota is exhausted (`Free usage limit reached`); no gateway change can fix that — use ollama models or another provider until the quota resets/subscription is added.
+```bash
+# built on the VPS itself (Ubuntu 22.04.5, glibc 2.35) from a fresh clone
+cd /root/agentgate-build && cargo build --release -j 12      # ~20-50 s
+objdump -T target/release/agentgate | grep -o 'GLIBC_[0-9.]*' | sort -u -V | tail -1
+# -> GLIBC_2.34  (no more "GLIBC_2.39 not found")
+
+install -m 0755 target/release/agentgate /usr/local/bin/agentgate
+systemctl restart agentgate
+# backup kept at /usr/local/bin/agentgate.bak.20261110-130129
+```
+
+Post-deploy matrix (zero opencode quota used):
+
+| Case | Result |
+|---|---|
+| `/health` | 200 |
+| `/v1/models` | 96 models (`opencode` 89 + `ollama` 7); gemini not advertised |
+| gemini (binary absent) | HTTP **503** `provider_unavailable` in **0.0004 s** |
+| `agg/ollama/nemotron-3-nano:4b` stream | 14 s, role=1 reasoning=2 content=1 stop=1 `[DONE]`=1 |
+| `agg/ollama/nemotron-3-nano:4b` non-stream | 200, content `Hello!`, reasoning 214 chars, `finish_reason: stop` |
+| cancel after 3 s (`qwen2.5-coder:7b`) | `orphan_ollama_run=0`; journal shows `stream.client_disconnected` then provider DONE 2 ms later |
+| `agentgate doctor` | `ollama OK`, `gemini MISSING`, `opencode MISSING` (accurate) |
+
+### Remaining environment limits (not code)
+
+1. `opencode` is still the legacy `opencode-ai` 1.19.5 under `/root/.nvm/...`, not on the systemd
+   `PATH`; upgrade to `@opencode/cli` 2.x and add it to the unit `Environment=PATH=...`.
+2. The VPS opencode account free quota is exhausted (`Free usage limit reached`); no gateway change
+   can fix that — use ollama models or another provider until the quota resets.
+3. `usage.completion_tokens` is reported as `0` by the CLI path (separate, cosmetic defect).
