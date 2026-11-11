@@ -500,14 +500,19 @@ impl OpenCodeSession {
         Ok(config)
     }
 
-    /// Build the full OpenCode config JSON injected via OPENCODE_CONFIG_CONTENT.
-    /// Includes both the agentgate MCP server bridge and the tool-disabling
-    /// rules so the CLI actually disables its built-in tools (spec §12.2).
+    /// Build the full OpenCode project config JSON written to `opencode.json`.
+    /// Includes the agentgate MCP server bridge so the CLI can call bridged tools.
+    ///
+    /// NOTE: opencode 2.x (esp. free models) can return `provider.free-limit`
+    /// when a project config aggressively disables built-in tools/permissions
+    /// (same regression fixed for native chat-only runs in v0.2.2). To keep
+    /// bridge/tool runs working, we only inject MCP wiring here and avoid the
+    /// disable-tools/deny-permission blocks.
     fn build_opencode_config_json(
         token: &str,
         port: u16,
         session_id: &str,
-        tool_disable_config: &Value,
+        _tool_disable_config: &Value,
         transport: &str,
         bridge_host: &str,
         tools: &[crate::bridge::ToolSchema],
@@ -580,9 +585,7 @@ impl OpenCodeSession {
         serde_json::json!({
             "$schema": "https://opencode.ai/config.json",
             "mcp": mcp_config,
-            "mcpServers": mcp_servers_config,
-            "tools": tool_disable_config["tools"],
-            "permission": tool_disable_config["permission"]
+            "mcpServers": mcp_servers_config
         })
         .to_string()
     }
