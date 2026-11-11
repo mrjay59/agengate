@@ -386,7 +386,8 @@ async fn chat_completions(
                                         .observe_ttft(ttft_start.elapsed().as_millis() as u64);
                                     ttft_recorded = true;
                                 }
-                                if matches!(event, RunEvent::ToolCalls { .. }) {
+                                let is_tool_calls = matches!(event, RunEvent::ToolCalls { .. });
+                                if is_tool_calls {
                                     tool_calls_finished = true;
                                 }
                                 // An explicit provider error is terminal for the
@@ -402,6 +403,16 @@ async fn chat_completions(
                                 }
                                 if is_error {
                                     terminated_by_error = true;
+                                    let _ = tx
+                                        .send(Ok(axum::response::sse::Event::default().data("[DONE]")))
+                                        .await;
+                                    break;
+                                }
+                                // A tool-calling turn is complete once tool_calls are
+                                // emitted (client executes tools and sends results in a
+                                // follow-up request). Stop the stream to avoid trailing
+                                // events confusing OpenAI-compatible clients/UIs.
+                                if is_tool_calls {
                                     break;
                                 }
                             }
@@ -469,19 +480,30 @@ async fn chat_completions(
                 }
             }
 
-            for processed in pipeline.finish() {
-                for coalesced in coalescer.add_event(processed) {
-                    emit_event(&tx, &ctx, &mut writer, coalesced, activity_via_reasoning).await;
-                }
-            }
-            for coalesced in coalescer.force_flush() {
-                emit_event(&tx, &ctx, &mut writer, coalesced, activity_via_reasoning).await;
-            }
-            for delta in writer.close_think() {
-                let _ = send_sse(&tx, &ctx.chunk(delta, None)).await;
+            // Error/timeout paths already emitted their terminal chunk(s) and [DONE].
+            if terminated_by_error {
+                crate::metrics::METRICS.mark_run_ended();
+                info!(event = "run.end", run_id = %stream_run_id, tool_calls = tool_calls_finished, terminated_by_error = true);
+                return;
             }
 
-            if !tool_calls_finished && !terminated_by_error {
+            // For a completed tool-calling turn, avoid flushing buffered
+            // reasoning/activity after the tool_calls boundary; emit only the
+            // terminal finish_reason and [DONE].
+            if tool_calls_finished {
+                let _ = send_sse(&tx, &ctx.chunk(serde_json::json!({}), Some("tool_calls"))).await;
+            } else {
+                for processed in pipeline.finish() {
+                    for coalesced in coalescer.add_event(processed) {
+                        emit_event(&tx, &ctx, &mut writer, coalesced, activity_via_reasoning).await;
+                    }
+                }
+                for coalesced in coalescer.force_flush() {
+                    emit_event(&tx, &ctx, &mut writer, coalesced, activity_via_reasoning).await;
+                }
+                for delta in writer.close_think() {
+                    let _ = send_sse(&tx, &ctx.chunk(delta, None)).await;
+                }
                 let _ = send_sse(&tx, &ctx.chunk(serde_json::json!({}), Some("stop"))).await;
             }
             let _ = tx
@@ -647,7 +669,9 @@ async fn emit_event(
                 send_delta(tx, ctx, delta).await;
             }
             // SSE §7.4: emit per-tool-call chunks — Chunk 1 with empty arguments,
-            // then Chunk 2+ with 512-byte argument slices, final finish_reason="tool_calls".
+            // then Chunk 2+ with 512-byte argument slices. The terminal
+            // `finish_reason:"tool_calls"` chunk is emitted by the stream
+            // terminator to guarantee it is the last choice chunk before [DONE].
             for (index, call) in calls.iter().enumerate() {
                 let name = call.function.name.clone();
                 // Chunk 1: empty arguments
@@ -676,7 +700,6 @@ async fn emit_event(
                     })).await;
                 }
             }
-            let _ = send_sse(tx, &ctx.chunk(serde_json::json!({}), Some("tool_calls"))).await;
         }
         RunEvent::Usage {
             prompt_tokens,
