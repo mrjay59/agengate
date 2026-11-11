@@ -248,8 +248,25 @@ pub struct AddMcpRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Model {
     pub id: String,
+    /// OpenAI-compatible field (always `"model"`).
+    #[serde(default = "default_model_object")]
+    pub object: String,
+    /// OpenAI-compatible field (unix timestamp; 0 when unknown).
+    #[serde(default)]
+    pub created: u64,
+    /// OpenAI-compatible field (provider/owner identifier).
+    #[serde(default)]
+    pub owned_by: String,
+    /// AgentGate display name (kept for compatibility).
+    #[serde(default)]
     pub name: String,
+    /// AgentGate provider id (kept for compatibility).
+    #[serde(default)]
     pub provider: String,
+}
+
+fn default_model_object() -> String {
+    "model".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

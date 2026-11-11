@@ -404,6 +404,9 @@ impl ServiceRegistry {
                 if seen_ids.insert(prefixed_id.clone()) {
                     models.push(Model {
                         id: prefixed_id,
+                        object: "model".to_string(),
+                        created: 0,
+                        owned_by: owner.clone(),
                         provider: owner,
                         name: model_id.clone(),
                     });
@@ -430,6 +433,9 @@ impl ServiceRegistry {
                         if seen_ids.insert(prefixed.clone()) {
                             models.push(Model {
                                 id: prefixed,
+                                object: "model".to_string(),
+                                created: 0,
+                                owned_by: "ollama".to_string(),
                                 provider: "ollama".to_string(),
                                 name: m.name.clone(),
                             });
