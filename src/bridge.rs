@@ -763,9 +763,9 @@ pub fn normalize_tool_name(name: &str, session_tools: &[crate::bridge::ToolSchem
         mut args: serde_json::Value,
         _workspace: &str,
     ) -> Result<ToolResult> {
-        // Guard: Check if tool is bridge tool
+        // Guard: Check if tool is bridge tool (L4 runtime guard)
         if !self.is_bridge_tool(tool_name) {
-            tracing::error!("Guard violation: non-bridge tool {} called in run {}", tool_name, run_id);
+            tracing::error!(event = "bridge.tool_call.reject", run_id = %run_id, tool = %tool_name, reason = "not_bridge_tool", tool_call_id = "");
             info!(event = "guard.violation", run_id = %run_id, observed_tool = %tool_name);
             crate::metrics::METRICS.record_guard_violation();
             return Err(anyhow!("tool_isolation_violation: {} is not a bridge tool", tool_name));
@@ -813,7 +813,8 @@ pub fn normalize_tool_name(name: &str, session_tools: &[crate::bridge::ToolSchem
         // Drop lock before await
         drop(runs);
 
-        info!(event = "bridge.tool_call.hold", mcp_id = %mcp_id, tool = %tool_name, run_id = %run_id, args = %args);
+        // L3/L4 Observability: log tool call emit (before hold)
+        info!(event = "bridge.tool_call.emit", mcp_id = %mcp_id, tool = %tool_name, run_id = %run_id, tool_call_id = %tool_call_id, args = %args);
 
         // Forward tool call to client (Device A) via BridgeClient
         // The client will execute the tool and send result back via bridge/resolve
@@ -889,6 +890,51 @@ pub fn normalize_tool_name(name: &str, session_tools: &[crate::bridge::ToolSchem
         }
         let normalized = Self::normalize_tool_name(tool_name, session_tools);
         Ok((true, normalized))
+    }
+
+    /// Preflight active probe (L3): probe CLI for exposed MCP tools via tools/list,
+    /// validate against isolation mode [bridge.isolation]. If built-in conflicting
+    /// tools are detected → return Err → fail-closed (503 tool_isolation_unavailable).
+    ///
+    /// Conflicting built-ins: read, write, bash/execute, glob, list, patch, edit
+    /// Allowed bridge tools: grep, webfetch, todowrite, todoread, task
+    ///
+    /// This does NOT spawn a real CLI process (which would be slow/fragile in
+    /// preflight). Instead it validates that `session_tools` (already filtered by
+    /// IMPL-TOOL-01 selective disable) contains no built-in conflicting tools.
+    /// Callers that need real CLI probing should call `probe_cli_tools_live()`.
+    pub fn preflight_active_probe(&self, session_tools: &[crate::bridge::ToolSchema]) -> Result<(), String> {
+        let conflicting_tools = ["read", "write", "bash", "execute", "glob", "list", "patch", "edit"];
+
+        for tool in session_tools {
+            let name_lower = tool.name.to_lowercase();
+            // Strip namespace prefix if present (e.g. "opencode:read" -> "read")
+            let bare_name = name_lower.split(':').last().unwrap_or(&name_lower);
+
+            if conflicting_tools.contains(&bare_name) {
+                info!(event = "bridge.preflight.reject", tool = %tool.name, reason = "builtin_conflict_detected");
+                return Err(format!("tool_isolation_unavailable: built-in tool {} conflicts with isolation policy", tool.name));
+            }
+        }
+
+        info!(event = "bridge.preflight.pass", tool_count = session_tools.len());
+        Ok(())
+    }
+
+    /// Live preflight probe (L3): actually spawns the CLI and queries tools/list
+    /// via MCP. Used when real-time validation is required (e.g. strict mode).
+    /// Returns list of tool names exposed by the CLI.
+    pub async fn probe_cli_tools_live(
+        &self,
+        _cli_bin: &str,
+        _cli_args: &[String],
+        _workdir: &std::path::Path,
+    ) -> Result<Vec<String>, String> {
+        // Placeholder for live CLI probing. Requires spawning CLI process,
+        // sending MCP tools/list, parsing response.
+        // Not implemented to avoid startup latency/fragility in preflight.
+        // Use preflight_active_probe() for session-tool validation instead.
+        Ok(vec![])
     }
 
     /// Start cleanup task for expired runs

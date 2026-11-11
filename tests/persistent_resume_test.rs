@@ -38,7 +38,7 @@ fn provider_config_non_persistent() -> ProviderConfig {
 #[tokio::test]
 async fn test_persistent_session_cache_exists() {
     let registry = Arc::new(ServiceRegistry::new());
-    let provider = BridgeCliProvider::with_bridge(provider_config(), Some(registry.bridge.clone()))
+    let provider = BridgeCliProvider::with_bridge(provider_config(), Some(registry.bridge.clone()), None)
         .expect("opencode bridge provider");
 
     // The provider should have keep_alive enabled
@@ -49,7 +49,7 @@ async fn test_persistent_session_cache_exists() {
 #[tokio::test]
 async fn test_non_persistent_session_has_no_keep_alive() {
     let registry = Arc::new(ServiceRegistry::new());
-    let provider = BridgeCliProvider::with_bridge(provider_config_non_persistent(), Some(registry.bridge.clone()))
+    let provider = BridgeCliProvider::with_bridge(provider_config_non_persistent(), Some(registry.bridge.clone()), None)
         .expect("opencode bridge provider");
 
     assert!(!provider.is_keep_alive());
@@ -59,7 +59,7 @@ async fn test_non_persistent_session_has_no_keep_alive() {
 #[tokio::test]
 async fn test_persistent_sessions_keyed_by_session_id() {
     let registry = Arc::new(ServiceRegistry::new());
-    let provider = BridgeCliProvider::with_bridge(provider_config(), Some(registry.bridge.clone()))
+    let provider = BridgeCliProvider::with_bridge(provider_config(), Some(registry.bridge.clone()), None)
         .expect("opencode bridge provider");
 
     // Register a session to get a session_id

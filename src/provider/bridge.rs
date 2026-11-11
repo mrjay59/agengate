@@ -66,6 +66,12 @@ pub struct BridgeConfig {
     /// Tool schemas for this session (used by stdio_shim transport)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<crate::bridge::ToolSchema>,
+    /// Isolation config for selective tool disabling (TB-TOOL-02)
+    #[serde(default)]
+    pub isolation: Option<crate::config::IsolationConfig>,
+    /// System prompt to pass natively via CLI flag (IMPL-TOOL-02)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
 }
 
 fn default_data_dir() -> Option<PathBuf> {
@@ -86,6 +92,8 @@ impl Default for BridgeConfig {
             prompt_tools_fallback: false,
             transport: Some("http".to_string()),
             tools: Vec::new(),
+            isolation: None,
+            system_prompt: None,
         }
     }
 }

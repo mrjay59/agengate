@@ -257,7 +257,7 @@ impl ServiceRegistry {
     pub async fn register_configured(&mut self, providers: &[ProviderConfig]) {
         for provider_cfg in providers {
             let provider =
-                crate::provider::build_cli_provider(provider_cfg, Some(self.bridge.clone()));
+                crate::provider::build_cli_provider(provider_cfg, Some(self.bridge.clone()), Some(&self.bridge_config));
             self.register(provider).await;
             let native: Box<dyn CliProvider + Send + Sync> =
                 Box::new(crate::provider::CliProviderImpl::new(provider_cfg.clone()));

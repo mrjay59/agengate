@@ -48,3 +48,14 @@ enabled = true
 format = "reasoning_content"
 null_content = false
 early_role_chunk = true
+
+[bridge.isolation]
+# mode = "selective" | "strict" | "off"
+# selective: disable conflicting built-ins (read, write, bash/execute, glob, list, patch), allow grep, webfetch, todo*, task
+# strict: disable all built-in tools
+# off: no tool disabling
+mode = "selective"
+# Additional built-in tools to allow beyond the mode defaults
+allowed_builtins = []
+# Override: explicitly disable these built-in tools
+disabled_builtins = []

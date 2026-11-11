@@ -92,7 +92,7 @@ async fn client_tools_reject_wins_even_with_bridge_provider() {
         id: "opencode".into(),
         bin: Some("opencode".into()),
         ..Default::default()
-    }, None).expect("bridge provider for opencode");
+    }, None, None).expect("bridge provider for opencode");
     registry.register(Box::new(bp)).await;
 
     let err = registry

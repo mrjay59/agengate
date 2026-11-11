@@ -1103,19 +1103,8 @@ pub fn render_conversation(
     let mut total_chars = 0usize;
     for msg in messages {
         match msg.role {
-            MessageRole::System => {
-                if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
-                    let trimmed = content.trim();
-                    let (truncated, exceeded) = limit_chars(trimmed, max_prompt_chars, total_chars);
-                    if exceeded {
-                        break;
-                    }
-                    total_chars += truncated.len();
-                    out.push_str("[system]\n");
-                    out.push_str(truncated);
-                    out.push_str("\n\n");
-                }
-            }
+            // IMPL-TOOL-02: skip system messages — passed natively via CLI --system flag
+            MessageRole::System => continue,
             MessageRole::User => {
                 if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
                     let trimmed = content.trim();
@@ -1233,6 +1222,8 @@ pub struct BridgeCliProvider {
     prompt_tools_fallback: bool,
     /// Transport type: "http" (default) or "stdio_shim"
     transport: Option<String>,
+    /// Isolation config for selective tool disabling (TB-TOOL-02)
+    isolation_config: crate::config::IsolationConfig,
     /// Cache of persistent sessions (keyed by session_id) for keep_alive mode.
     /// When keep_alive is enabled, sessions are stored here instead of being closed.
     /// Using Arc to allow cloning and sharing sessions across requests.
@@ -1243,8 +1234,11 @@ pub struct BridgeCliProvider {
 }
 
 impl BridgeCliProvider {
-    pub fn new(config: crate::config::ProviderConfig) -> Option<Self> {
-        Self::with_bridge(config, None)
+    pub fn new(
+        config: crate::config::ProviderConfig,
+        bridge_config: Option<&crate::config::BridgeConfig>,
+    ) -> Option<Self> {
+        Self::with_bridge(config, None, bridge_config)
     }
 
     /// Create a bridge provider bound to the shared `BridgeServer` so each run
@@ -1252,9 +1246,15 @@ impl BridgeCliProvider {
     pub fn with_bridge(
         config: crate::config::ProviderConfig,
         bridge: Option<Arc<crate::bridge::BridgeServer>>,
+        bridge_config: Option<&crate::config::BridgeConfig>,
     ) -> Option<Self> {
         // Determine which bridge factory to use based on provider ID
         let factory = create_bridge_factory_v2(&config.id)?;
+
+        // Get isolation config from bridge config, defaulting to default IsolationConfig
+        let isolation_config = bridge_config
+            .map(|bc| bc.isolation.clone())
+            .unwrap_or_default();
 
         Some(Self {
             id: config.id,
@@ -1266,6 +1266,7 @@ impl BridgeCliProvider {
             keep_alive: config.keep_alive.clone(),
             prompt_tools_fallback: config.prompt_tools_fallback,
             transport: config.transport.clone(),
+            isolation_config,
             persistent_sessions: Arc::new(RwLock::new(HashMap::new())),
             max_prompt_chars: 400_000,
             max_result_bytes: 262_144,
@@ -1353,6 +1354,7 @@ impl BridgeCliProvider {
 pub fn build_cli_provider(
     config: &crate::config::ProviderConfig,
     bridge: Option<Arc<crate::bridge::BridgeServer>>,
+    bridge_config: Option<&crate::config::BridgeConfig>,
 ) -> Box<dyn CliProvider + Send + Sync> {
     // Ollama uses HTTP native by default; only `ollama_mode = "cli"` opts into
     // the bridge adapter (spec_ollama-cli.md) which uses `ollama run` via MCP bridge.
@@ -1367,7 +1369,7 @@ pub fn build_cli_provider(
         if cfg.id == "ollama" && cfg.bin.is_none() {
             cfg.bin = Some("ollama".to_string());
         }
-        if let Some(bp) = BridgeCliProvider::with_bridge(cfg, bridge) {
+        if let Some(bp) = BridgeCliProvider::with_bridge(cfg, bridge, bridge_config) {
             return Box::new(bp);
         }
     }
@@ -1483,6 +1485,15 @@ impl CliProvider for BridgeCliProvider {
                 .unwrap_or(8786);
             tracing::info!(target: "bridge.cli", bridge_port = bridge_port, "Using bridge port");
 
+            // IMPL-TOOL-02: Extract system prompt from messages (non-stream path)
+            let system_prompt = request
+                .messages
+                .iter()
+                .filter(|m| matches!(m.role, crate::types::MessageRole::System))
+                .filter_map(|m| m.content.as_deref().filter(|c| !c.trim().is_empty()))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+
             let bridge_config = BridgeConfig {
                 host: "127.0.0.1".to_string(),
                 port: bridge_port,
@@ -1495,6 +1506,8 @@ impl CliProvider for BridgeCliProvider {
                 prompt_tools_fallback: self.prompt_tools_fallback,
                 transport: self.transport.clone(),
                 tools: tool_schemas_for_bridge,
+                isolation: Some(self.isolation_config.clone()),
+                system_prompt: if system_prompt.is_empty() { None } else { Some(system_prompt) },
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider");
@@ -1685,6 +1698,15 @@ impl CliProvider for BridgeCliProvider {
                 .unwrap_or(8786);
             tracing::info!(target: "bridge.cli", bridge_port = bridge_port, "Using bridge port");
 
+            // IMPL-TOOL-02: Extract system prompt from messages (stream path)
+            let system_prompt = request
+                .messages
+                .iter()
+                .filter(|m| matches!(m.role, crate::types::MessageRole::System))
+                .filter_map(|m| m.content.as_deref().filter(|c| !c.trim().is_empty()))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+
             let bridge_config = BridgeConfig {
                 host: "127.0.0.1".to_string(),
                 port: bridge_port,
@@ -1697,6 +1719,8 @@ impl CliProvider for BridgeCliProvider {
                 prompt_tools_fallback: self.prompt_tools_fallback,
                 transport: self.transport.clone(),
                 tools: tool_schemas_for_bridge,
+                isolation: Some(self.isolation_config.clone()),
+                system_prompt: if system_prompt.is_empty() { None } else { Some(system_prompt) },
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider (stream)");

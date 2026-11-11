@@ -172,7 +172,7 @@ fn bridge_registration_applies_alias_ref_and_normalize() {
         id: "opencode".into(),
         bin: Some("opencode".into()),
         ..Default::default()
-    }, None).expect("bridge provider");
+    }, None, None).expect("bridge provider");
 
     let schemas = tools_from_request(&provider);
     assert_eq!(schemas.len(), 2);
@@ -199,7 +199,7 @@ async fn tools_list_advertises_aliased_names_over_mcp() {
         id: "opencode".into(),
         bin: Some("opencode".into()),
         ..Default::default()
-    }, Some(registry.bridge.clone())).expect("bridge provider");
+    }, Some(registry.bridge.clone()), None).expect("bridge provider");
 
     let request = ChatCompletionRequest {
         model: "opencode/m".into(),

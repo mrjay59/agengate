@@ -1,6 +1,7 @@
 //! OpenCode bridge provider — V2 adapter implementing spec_tooling.md.
 
 use crate::bridge::BridgeClient;
+use crate::config::IsolationConfig;
 use crate::provider::bridge::{
     BridgeConfig, BridgeProfile, BridgeProviderFactory, BridgeProviderV2, BridgeSession,
     BridgeToolResult, ContinuationCapability, ContinuationHandle, ContinuationOutput, McpConfig, McpServerConfig, SessionOutput,
@@ -61,37 +62,14 @@ impl OpenCodeBridgeProvider {
     }
 
     /// Build tool-disabling config for OpenCode per spec §12.2
-    /// OpenCode uses specific permission keys: externalDirectory, network, etc.
-    fn build_tool_disable_config(&self) -> Value {
-        serde_json::json!({
-            "tools": {
-                "bash": false,
-                "edit": false,
-                "write": false,
-                "read": false,
-                "patch": false,
-                "grep": false,
-                "glob": false,
-                "list": false,
-                "webfetch": false,
-                "todowrite": false,
-                "todoread": false,
-                "task": false,
-                "execute": false,
-                "*": false
-            },
-            "permission": {
-                "*": "deny",
-                "externalDirectory": "deny",
-                "network": "deny",
-                "edit": "deny",
-                "bash": "deny",
-                "webfetch": "deny",
-                "write": "deny",
-                "read": "deny",
-                "execute": "deny"
-            }
-        })
+    /// Delegates to OpenCodeSession methods for consistency.
+    fn build_tool_disable_config(&self, isolation: &IsolationConfig) -> Value {
+        match isolation.mode.as_str() {
+            "off" => serde_json::json!({}),
+            "strict" => OpenCodeSession::build_strict_disable_config(),
+            "selective" => OpenCodeSession::build_selective_disable_config(isolation),
+            _ => OpenCodeSession::build_selective_disable_config(isolation), // default to selective
+        }
     }
 }
 
@@ -112,7 +90,8 @@ impl BridgeProviderV2 for OpenCodeBridgeProvider {
         config: BridgeConfig,
         client: Arc<BridgeClient>,
     ) -> Result<Box<dyn BridgeSession>> {
-        let session = OpenCodeSession::spawn(config, client, self.profile.clone(), self.build_tool_disable_config()).await?;
+        let isolation = config.isolation.clone().unwrap_or_default();
+        let session = OpenCodeSession::spawn(config, client, self.profile.clone(), self.build_tool_disable_config(&isolation), isolation).await?;
         Ok(Box::new(session))
     }
 
@@ -148,6 +127,7 @@ impl OpenCodeSession {
         client: Arc<BridgeClient>,
         profile: BridgeProfile,
         tool_disable_config: Value,
+        isolation_config: IsolationConfig,
     ) -> Result<Self> {
         let session_id = config
             .session_id
@@ -199,6 +179,10 @@ impl OpenCodeSession {
         if has_run {
             cmd.arg("run");
             cmd.arg("--model").arg(&config.model);
+            // IMPL-TOOL-02: pass system prompt natively via CLI --system flag
+            if let Some(sys) = &config.system_prompt {
+                cmd.arg("--system").arg(sys);
+            }
             for a in &profile.args {
                 if a != "run" && a != "--model" {
                     // drop any stray --model (we set explicitly)
@@ -212,6 +196,10 @@ impl OpenCodeSession {
                 .arg("--format")
                 .arg("json")
                 .args(&profile.args);
+            // IMPL-TOOL-02: pass system prompt natively via CLI --system flag
+            if let Some(sys) = &config.system_prompt {
+                cmd.arg("--system").arg(sys);
+            }
         }
 
         // Set working directory to empty session workdir (spec §11.3)
@@ -250,6 +238,7 @@ impl OpenCodeSession {
             &transport,
             config.host.as_str(),
             &config.tools,
+            &isolation_config,
         );
         let config_path = workdir.join("opencode.json");
         fs::write(&config_path, mcp_config_json.as_bytes())
@@ -455,6 +444,99 @@ impl OpenCodeSession {
         Ok(session)
     }
 
+    /// Build strict mode disable config (all built-ins disabled)
+    fn build_strict_disable_config() -> Value {
+        serde_json::json!({
+            "tools": {
+                "bash": false,
+                "edit": false,
+                "write": false,
+                "read": false,
+                "patch": false,
+                "grep": false,
+                "glob": false,
+                "list": false,
+                "webfetch": false,
+                "todowrite": false,
+                "todoread": false,
+                "task": false,
+                "execute": false
+            },
+            "permission": {
+                "*": "deny",
+                "externalDirectory": "deny",
+                "network": "deny",
+                "edit": "deny",
+                "bash": "deny",
+                "webfetch": "deny",
+                "write": "deny",
+                "read": "deny",
+                "execute": "deny"
+            }
+        })
+    }
+
+    /// Build selective mode disable config (conflicting built-ins disabled, safe ones allowed)
+    fn build_selective_disable_config(isolation: &IsolationConfig) -> Value {
+        let mut tools = serde_json::Map::new();
+        let mut permissions = serde_json::Map::new();
+
+        // Conflicting built-ins to disable by default in selective mode
+        let conflicting_tools = [
+            "bash", "write", "read", "patch", "glob", "list", "execute", "edit"
+        ];
+
+        // Allowed built-ins in selective mode (unless explicitly disabled)
+        let mut allowed_tools = vec![
+            "grep".to_string(),
+            "webfetch".to_string(),
+            "todowrite".to_string(),
+            "todoread".to_string(),
+            "task".to_string(),
+        ];
+
+        // Add user-configured additional allowed builtins
+        for allowed in &isolation.allowed_builtins {
+            if !allowed_tools.contains(allowed) {
+                allowed_tools.push(allowed.clone());
+            }
+        }
+
+        // Build tools map: disable conflicting, allow permitted
+        for tool in &conflicting_tools {
+            // Check if user explicitly allowed this tool
+            if !allowed_tools.contains(&tool.to_string()) && !isolation.disabled_builtins.contains(&tool.to_string()) {
+                tools.insert(tool.to_string(), serde_json::Value::Bool(false));
+            } else {
+                tools.insert(tool.to_string(), serde_json::Value::Bool(true));
+            }
+        }
+
+        // Add allowed tools explicitly as enabled
+        for tool in &allowed_tools {
+            tools.insert(tool.clone(), serde_json::Value::Bool(true));
+        }
+
+        // Explicitly disabled builtins override
+        for tool in &isolation.disabled_builtins {
+            tools.insert(tool.clone(), serde_json::Value::Bool(false));
+        }
+
+        // Permission settings for selective mode
+        permissions.insert("externalDirectory".to_string(), serde_json::Value::String("deny".to_string()));
+        permissions.insert("network".to_string(), serde_json::Value::String("deny".to_string()));
+        permissions.insert("edit".to_string(), serde_json::Value::String("deny".to_string()));
+        permissions.insert("bash".to_string(), serde_json::Value::String("deny".to_string()));
+        permissions.insert("write".to_string(), serde_json::Value::String("deny".to_string()));
+        permissions.insert("read".to_string(), serde_json::Value::String("deny".to_string()));
+        permissions.insert("execute".to_string(), serde_json::Value::String("deny".to_string()));
+
+        serde_json::json!({
+            "tools": tools,
+            "permission": permissions
+        })
+    }
+
     fn build_mcp_config(token: &str, port: u16, session_id: &str, tool_disable_config: &Value) -> Result<McpConfig> {
         let mut mcp_servers = HashMap::new();
         mcp_servers.insert(
@@ -503,24 +585,34 @@ impl OpenCodeSession {
     /// Build the full OpenCode project config JSON written to `opencode.json`.
     /// Includes the agentgate MCP server bridge so the CLI can call bridged tools.
     ///
-    /// NOTE: opencode 2.x (esp. free models) can return `provider.free-limit`
-    /// when a project config aggressively disables built-in tools/permissions
-    /// (same regression fixed for native chat-only runs in v0.2.2). To keep
-    /// bridge/tool runs working, we only inject MCP wiring here and avoid the
-    /// disable-tools/deny-permission blocks.
+    /// Injects selective tool disable config (tools + permission) per isolation mode:
+    /// - "off": no disabling
+    /// - "selective" (default): disable conflicting built-ins (read, write, bash/execute, glob, list, patch, edit); allow safe (grep, webfetch, todowrite, todoread, task)
+    /// - "strict": disable all built-ins (may trigger provider.free-limit on free models)
+    ///
+    /// Selective mode is safe for free models as it doesn't use aggressive deny-permission blocks.
     fn build_opencode_config_json(
         token: &str,
         port: u16,
         session_id: &str,
-        _tool_disable_config: &Value,
+        tool_disable_config: &Value,
         transport: &str,
         bridge_host: &str,
         tools: &[crate::bridge::ToolSchema],
+        isolation_config: &IsolationConfig,
     ) -> String {
         let tools_json = serde_json::to_string(tools).unwrap_or_default();
         let agentgate_bin = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| "agentgate".to_string());
+
+        // Build tool disable config based on isolation mode
+        let tool_disable = match isolation_config.mode.as_str() {
+            "off" => serde_json::json!({}),
+            "selective" => Self::build_selective_disable_config(isolation_config),
+            "strict" => Self::build_strict_disable_config(),
+            _ => Self::build_selective_disable_config(isolation_config), // default to selective
+        };
 
         let (mcp_config, mcp_servers_config) = if transport == "stdio_shim" {
             // Command-based MCP server (stdio shim). Include multiple field names
@@ -582,12 +674,31 @@ impl OpenCodeSession {
         };
 
         // Include both `mcp` (spec/OpenCode style) and `mcpServers` for compatibility.
-        serde_json::json!({
+        // Also inject tool disable config (tools + permission) for selective/strict modes.
+        let mut config = serde_json::json!({
             "$schema": "https://opencode.ai/config.json",
             "mcp": mcp_config,
-            "mcpServers": mcp_servers_config
-        })
-        .to_string()
+            "mcpServers": mcp_servers_config,
+            "isolation": {
+                "mode": isolation_config.mode.clone(),
+                "allowed_builtins": isolation_config.allowed_builtins.clone(),
+                "disabled_builtins": isolation_config.disabled_builtins.clone()
+            }
+        });
+
+        // Merge tool disable config if not empty (selective/strict modes)
+        if !tool_disable.is_null() && !tool_disable.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            if let Some(obj) = config.as_object_mut() {
+                if let Some(tools_obj) = tool_disable.get("tools") {
+                    obj.insert("tools".to_string(), tools_obj.clone());
+                }
+                if let Some(perm_obj) = tool_disable.get("permission") {
+                    obj.insert("permission".to_string(), perm_obj.clone());
+                }
+            }
+        }
+
+        config.to_string()
     }
 
     async fn wait_for_mcp_initialize(&self) -> Result<()> {

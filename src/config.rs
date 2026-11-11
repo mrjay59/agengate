@@ -1,5 +1,5 @@
 use crate::permission::{ClientToolsPolicy, NoToolsPolicy};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::fs;
 
@@ -217,7 +217,39 @@ pub struct BridgeConfig {
     /// Spec §9.7 / §12.2.
     #[serde(default)]
     pub transport: Option<String>,
+    /// `[bridge.isolation]` (spec §13.2 / TB-TOOL-02).
+    /// Controls selective disabling of built-in OpenCode tools.
+    /// Modes:
+    ///   - "selective" (default): disable conflicting built-ins (read, write, bash/execute, glob, list, patch), allow grep, webfetch, todo*, task
+    ///   - "strict": disable all built-in tools
+    ///   - "off": no tool disabling
+    #[serde(default)]
+    pub isolation: IsolationConfig,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IsolationConfig {
+    #[serde(default = "default_isolation_mode")]
+    pub mode: String,
+    /// Additional built-in tools to allow beyond the mode defaults.
+    #[serde(default)]
+    pub allowed_builtins: Vec<String>,
+    /// Override: explicitly disable these built-in tools.
+    #[serde(default)]
+    pub disabled_builtins: Vec<String>,
+}
+
+impl Default for IsolationConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_isolation_mode(),
+            allowed_builtins: Vec::new(),
+            disabled_builtins: Vec::new(),
+        }
+    }
+}
+
+fn default_isolation_mode() -> String { "selective".to_string() }
 
 impl Default for BridgeConfig {
     fn default() -> Self {
@@ -227,7 +259,7 @@ impl Default for BridgeConfig {
             port: 0,
             park_ttl_secs: default_600(),
             call_ttl_secs: default_600(),
-              keepalive_interval_secs: default_15(),
+            keepalive_interval_secs: default_15(),
             max_parked_runs: default_8(),
             max_runs_per_key: default_4(),
             max_run_lifetime_secs: default_3600(),
@@ -239,6 +271,7 @@ impl Default for BridgeConfig {
             resume: ResumeConfig::default(),
             limits: LimitsConfig::default(),
             guard: GuardConfig::default(),
+            isolation: IsolationConfig::default(),
         }
     }
 }
@@ -561,6 +594,17 @@ max_prompt_chars = 400000
 [bridge.guard]
 enforce = true
 preflight_probe = true
+
+[bridge.isolation]
+# mode = "selective" | "strict" | "off"
+# selective: disable conflicting built-ins (read, write, bash/execute, glob, list, patch), allow grep, webfetch, todo*, task
+# strict: disable all built-in tools
+# off: no tool disabling
+mode = "selective"
+# Additional built-in tools to allow beyond the mode defaults
+allowed_builtins = []
+# Override: explicitly disable these built-in tools
+disabled_builtins = []
 
 [workspace.default]
 path = "."

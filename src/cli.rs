@@ -22,6 +22,7 @@ pub async fn execute_providers(config: &Config) -> Result<()> {
         let provider = crate::provider::build_cli_provider(
             provider_cfg,
             Some(registry.bridge.clone()),
+            Some(&config.bridge),
         );
         let available = provider.check_available().await;
         let native_available = crate::provider::CliProviderImpl::new(provider_cfg.clone())

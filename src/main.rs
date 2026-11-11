@@ -181,6 +181,7 @@ async fn main() -> Result<()> {
                 let provider = agentgate::provider::build_cli_provider(
                     provider_cfg,
                     Some(registry.bridge.clone()),
+                    Some(&config.bridge),
                 );
                 registry.register(provider).await;
 
