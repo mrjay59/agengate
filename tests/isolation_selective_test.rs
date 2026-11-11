@@ -9,7 +9,7 @@ fn test_isolation_config_default() {
     assert!(isolation.disabled_builtins.is_empty());
 }
 
-/// Test render_conversation strips system messages (IMPL-TOOL-02)
+/// Test render_conversation strips system messages (FIX-PROMPT-01: default strip)
 #[test]
 fn test_render_conversation_strips_system() {
     use agentgate::provider::render_conversation;

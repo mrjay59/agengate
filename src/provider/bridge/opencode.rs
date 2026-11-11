@@ -179,10 +179,7 @@ impl OpenCodeSession {
         if has_run {
             cmd.arg("run");
             cmd.arg("--model").arg(&config.model);
-            // IMPL-TOOL-02: pass system prompt natively via CLI --system flag
-            if let Some(sys) = &config.system_prompt {
-                cmd.arg("--system").arg(sys);
-            }
+            // FIX-PROMPT-01: strip system prompt by default — don't forward via --system
             for a in &profile.args {
                 if a != "run" && a != "--model" {
                     // drop any stray --model (we set explicitly)
@@ -196,10 +193,7 @@ impl OpenCodeSession {
                 .arg("--format")
                 .arg("json")
                 .args(&profile.args);
-            // IMPL-TOOL-02: pass system prompt natively via CLI --system flag
-            if let Some(sys) = &config.system_prompt {
-                cmd.arg("--system").arg(sys);
-            }
+            // FIX-PROMPT-01: strip system prompt by default — don't forward via --system
         }
 
         // Set working directory to empty session workdir (spec §11.3)

@@ -59,3 +59,5 @@ mode = "selective"
 allowed_builtins = []
 # Override: explicitly disable these built-in tools
 disabled_builtins = []
+# FIX-PROMPT-01: When true, client system prompt is forwarded via CLI --system flag (default false: strip)
+preserve_client_system_prompt = false

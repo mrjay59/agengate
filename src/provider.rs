@@ -1103,7 +1103,7 @@ pub fn render_conversation(
     let mut total_chars = 0usize;
     for msg in messages {
         match msg.role {
-            // IMPL-TOOL-02: skip system messages — passed natively via CLI --system flag
+            // FIX-PROMPT-01: skip system messages (default strip; preserve only with explicit config)
             MessageRole::System => continue,
             MessageRole::User => {
                 if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
@@ -1485,15 +1485,8 @@ impl CliProvider for BridgeCliProvider {
                 .unwrap_or(8786);
             tracing::info!(target: "bridge.cli", bridge_port = bridge_port, "Using bridge port");
 
-            // IMPL-TOOL-02: Extract system prompt from messages (non-stream path)
-            let system_prompt = request
-                .messages
-                .iter()
-                .filter(|m| matches!(m.role, crate::types::MessageRole::System))
-                .filter_map(|m| m.content.as_deref().filter(|c| !c.trim().is_empty()))
-                .collect::<Vec<_>>()
-                .join("\n\n");
-
+            // FIX-PROMPT-01: Default strip system prompt — do not forward to CLI
+            // System messages are skipped in render_conversation (see function)
             let bridge_config = BridgeConfig {
                 host: "127.0.0.1".to_string(),
                 port: bridge_port,
@@ -1507,7 +1500,6 @@ impl CliProvider for BridgeCliProvider {
                 transport: self.transport.clone(),
                 tools: tool_schemas_for_bridge,
                 isolation: Some(self.isolation_config.clone()),
-                system_prompt: if system_prompt.is_empty() { None } else { Some(system_prompt) },
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider");
@@ -1698,15 +1690,8 @@ impl CliProvider for BridgeCliProvider {
                 .unwrap_or(8786);
             tracing::info!(target: "bridge.cli", bridge_port = bridge_port, "Using bridge port");
 
-            // IMPL-TOOL-02: Extract system prompt from messages (stream path)
-            let system_prompt = request
-                .messages
-                .iter()
-                .filter(|m| matches!(m.role, crate::types::MessageRole::System))
-                .filter_map(|m| m.content.as_deref().filter(|c| !c.trim().is_empty()))
-                .collect::<Vec<_>>()
-                .join("\n\n");
-
+            // FIX-PROMPT-01: Default strip system prompt — do not forward to CLI
+            // System messages are skipped in render_conversation (see function)
             let bridge_config = BridgeConfig {
                 host: "127.0.0.1".to_string(),
                 port: bridge_port,
@@ -1720,7 +1705,6 @@ impl CliProvider for BridgeCliProvider {
                 transport: self.transport.clone(),
                 tools: tool_schemas_for_bridge,
                 isolation: Some(self.isolation_config.clone()),
-                system_prompt: if system_prompt.is_empty() { None } else { Some(system_prompt) },
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider (stream)");
