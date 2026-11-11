@@ -66,6 +66,10 @@ impl OllamaCliProvider {
     fn messages_to_prompt(&self, messages: &[ChatMessage]) -> String {
         let mut prompt = String::new();
         for msg in messages {
+            // Default strip client system prompt for isolation (consistent with bridge/CLI path).
+            if msg.role == MessageRole::System {
+                continue;
+            }
             let role_str = match msg.role {
                 MessageRole::System => "System",
                 MessageRole::User => "User",

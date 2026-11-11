@@ -255,7 +255,7 @@ async fn chat_completions(
     let provider_id = match request.provider.clone() {
         Some(provider) => provider,
         None => registry
-            .provider_for_model(&request.model)
+            .resolve_provider(&request.model)
             .await
             .ok_or_else(|| AppError::ModelNotFound(request.model.clone()))?,
     };

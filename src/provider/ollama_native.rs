@@ -242,14 +242,18 @@ impl OllamaNativeProvider {
         stream: bool,
         think: bool,
     ) -> OllamaChatRequest {
-        let messages: Vec<OllamaMessage> = request.messages.iter().map(|m| {
-            OllamaMessage {
+        // Default strip client system prompt for isolation (consistent with bridge/CLI path).
+        let messages: Vec<OllamaMessage> = request
+            .messages
+            .iter()
+            .filter(|m| m.role != crate::types::MessageRole::System)
+            .map(|m| OllamaMessage {
                 role: m.role.to_string(),
                 content: m.content.clone().unwrap_or_default(),
                 images: None,
                 thinking: None,
-            }
-        }).collect();
+            })
+            .collect();
 
         OllamaChatRequest {
             model: model.to_string(),
