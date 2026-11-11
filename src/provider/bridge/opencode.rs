@@ -439,7 +439,7 @@ impl OpenCodeSession {
     }
 
     /// Build strict mode disable config (all built-ins disabled)
-    fn build_strict_disable_config() -> Value {
+    pub(crate) fn build_strict_disable_config() -> Value {
         serde_json::json!({
             "tools": {
                 "bash": false,
@@ -454,7 +454,10 @@ impl OpenCodeSession {
                 "todowrite": false,
                 "todoread": false,
                 "task": false,
-                "execute": false
+                "execute": false,
+                // FIX-L1-01: opencode utility tools
+                "opencode_list_mcp_resources": false,
+                "list_mcp_resources": false
             },
             "permission": {
                 "*": "deny",
@@ -465,19 +468,23 @@ impl OpenCodeSession {
                 "webfetch": "deny",
                 "write": "deny",
                 "read": "deny",
-                "execute": "deny"
+                "execute": "deny",
+                "opencode_list_mcp_resources": "deny",
+                "list_mcp_resources": "deny"
             }
         })
     }
 
     /// Build selective mode disable config (conflicting built-ins disabled, safe ones allowed)
-    fn build_selective_disable_config(isolation: &IsolationConfig) -> Value {
+    pub(crate) fn build_selective_disable_config(isolation: &IsolationConfig) -> Value {
         let mut tools = serde_json::Map::new();
         let mut permissions = serde_json::Map::new();
 
         // Conflicting built-ins to disable by default in selective mode
+        // FIX-L1-01: added opencode utility tools (list_mcp_resources) that leak on resume
         let conflicting_tools = [
-            "bash", "write", "read", "patch", "glob", "list", "execute", "edit"
+            "bash", "write", "read", "patch", "glob", "list", "execute", "edit",
+            "opencode_list_mcp_resources", "list_mcp_resources"
         ];
 
         // Allowed built-ins in selective mode (unless explicitly disabled)
@@ -524,6 +531,9 @@ impl OpenCodeSession {
         permissions.insert("write".to_string(), serde_json::Value::String("deny".to_string()));
         permissions.insert("read".to_string(), serde_json::Value::String("deny".to_string()));
         permissions.insert("execute".to_string(), serde_json::Value::String("deny".to_string()));
+        // FIX-L1-01: deny opencode utility tools in selective mode
+        permissions.insert("opencode_list_mcp_resources".to_string(), serde_json::Value::String("deny".to_string()));
+        permissions.insert("list_mcp_resources".to_string(), serde_json::Value::String("deny".to_string()));
 
         serde_json::json!({
             "tools": tools,
@@ -1189,5 +1199,49 @@ mod tests {
         assert!(json.contains("test-token"));
         assert!(json.contains("8788"));
         assert!(json.contains("test-session"));
+    }
+
+    #[test]
+    fn test_selective_disable_config_includes_opencode_utils() {
+        let isolation = crate::config::IsolationConfig::default();
+        let config = OpenCodeSession::build_selective_disable_config(&isolation);
+        
+        let tools = config.get("tools").unwrap().as_object().unwrap();
+        let permissions = config.get("permission").unwrap().as_object().unwrap();
+        
+        // Conflicting tools should be disabled
+        assert_eq!(tools.get("execute"), Some(&serde_json::Value::Bool(false)));
+        assert_eq!(tools.get("opencode_list_mcp_resources"), Some(&serde_json::Value::Bool(false)));
+        assert_eq!(tools.get("list_mcp_resources"), Some(&serde_json::Value::Bool(false)));
+        
+        // Permissions should deny them
+        assert_eq!(permissions.get("execute"), Some(&serde_json::Value::String("deny".to_string())));
+        assert_eq!(permissions.get("opencode_list_mcp_resources"), Some(&serde_json::Value::String("deny".to_string())));
+        assert_eq!(permissions.get("list_mcp_resources"), Some(&serde_json::Value::String("deny".to_string())));
+        
+        // Safe tools should still be allowed
+        assert_eq!(tools.get("grep"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(tools.get("webfetch"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(tools.get("todowrite"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(tools.get("todoread"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(tools.get("task"), Some(&serde_json::Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_strict_disable_config_includes_opencode_utils() {
+        let config = OpenCodeSession::build_strict_disable_config();
+        
+        let tools = config.get("tools").unwrap().as_object().unwrap();
+        let permissions = config.get("permission").unwrap().as_object().unwrap();
+        
+        // All tools including opencode utils should be disabled
+        assert_eq!(tools.get("execute"), Some(&serde_json::Value::Bool(false)));
+        assert_eq!(tools.get("opencode_list_mcp_resources"), Some(&serde_json::Value::Bool(false)));
+        assert_eq!(tools.get("list_mcp_resources"), Some(&serde_json::Value::Bool(false)));
+        
+        // All permissions should deny
+        assert_eq!(permissions.get("execute"), Some(&serde_json::Value::String("deny".to_string())));
+        assert_eq!(permissions.get("opencode_list_mcp_resources"), Some(&serde_json::Value::String("deny".to_string())));
+        assert_eq!(permissions.get("list_mcp_resources"), Some(&serde_json::Value::String("deny".to_string())));
     }
 }

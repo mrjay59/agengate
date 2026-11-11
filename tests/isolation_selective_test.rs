@@ -144,3 +144,89 @@ async fn test_preflight_active_probe_passes_allowed() {
     let result = server.preflight_active_probe(&session_tools);
     assert!(result.is_ok());
 }
+
+/// Test preflight rejects opencode utility tools (FIX-L1-01: execute, list_mcp_resources)
+#[tokio::test]
+async fn test_preflight_active_probe_rejects_opencode_utils() {
+    use agentgate::bridge::BridgeServer;
+    use agentgate::bridge::ToolSchema;
+
+    let server = BridgeServer::new(Default::default());
+
+    // execute should be rejected
+    let session_tools = vec![ToolSchema::new(
+        "execute".to_string(),
+        "Execute shell".to_string(),
+        serde_json::json!({}),
+        "opencode".to_string(),
+        "/workspace".to_string(),
+    )];
+    let result = server.preflight_active_probe(&session_tools);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("tool_isolation_unavailable"));
+
+    // opencode_list_mcp_resources should be rejected
+    let session_tools = vec![ToolSchema::new(
+        "opencode_list_mcp_resources".to_string(),
+        "List MCP resources".to_string(),
+        serde_json::json!({}),
+        "opencode".to_string(),
+        "/workspace".to_string(),
+    )];
+    let result = server.preflight_active_probe(&session_tools);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("tool_isolation_unavailable"));
+
+    // list_mcp_resources (alias) should be rejected
+    let session_tools = vec![ToolSchema::new(
+        "list_mcp_resources".to_string(),
+        "List MCP resources".to_string(),
+        serde_json::json!({}),
+        "opencode".to_string(),
+        "/workspace".to_string(),
+    )];
+    let result = server.preflight_active_probe(&session_tools);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("tool_isolation_unavailable"));
+}
+
+/// Test preflight runs on every call (simulating resume/continuation consistency)
+/// FIX-L1-02: Preflight probe must run on initial AND subsequent turns
+#[tokio::test]
+async fn test_preflight_runs_on_every_call() {
+    use agentgate::bridge::BridgeServer;
+    use agentgate::bridge::ToolSchema;
+
+    let server = BridgeServer::new(Default::default());
+
+    // First call: allowed tools pass
+    let session_tools = vec![ToolSchema::new(
+        "grep".to_string(),
+        "Search".to_string(),
+        serde_json::json!({}),
+        "opencode".to_string(),
+        "/workspace".to_string(),
+    )];
+    let result = server.preflight_active_probe(&session_tools);
+    assert!(result.is_ok());
+
+    // Second call (simulating resume): same allowed tools still pass
+    let result = server.preflight_active_probe(&session_tools);
+    assert!(result.is_ok());
+
+    // Third call with conflicting tool: rejected on every call
+    let session_tools = vec![ToolSchema::new(
+        "execute".to_string(),
+        "Execute shell".to_string(),
+        serde_json::json!({}),
+        "opencode".to_string(),
+        "/workspace".to_string(),
+    )];
+    let result = server.preflight_active_probe(&session_tools);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("tool_isolation_unavailable"));
+
+    // Fourth call (continuation): still rejected
+    let result = server.preflight_active_probe(&session_tools);
+    assert!(result.is_err());
+}
