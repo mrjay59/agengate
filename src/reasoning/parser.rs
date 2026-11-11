@@ -363,7 +363,7 @@ impl ReasoningParser {
                         id,
                         r#type: "function".to_string(),
                         function: super::event::FunctionCall {
-                            name: tool_name.to_string(),
+                            name: crate::bridge::BridgeServer::strip_mcp_tool_prefix(tool_name),
                             arguments,
                         },
                     })
@@ -389,7 +389,9 @@ impl ReasoningParser {
                                     .unwrap_or("function")
                                     .to_string(),
                                 function: super::event::FunctionCall {
-                                    name: c.get("function")?.get("name")?.as_str()?.to_string(),
+                                    name: crate::bridge::BridgeServer::strip_mcp_tool_prefix(
+                                        c.get("function")?.get("name")?.as_str()?,
+                                    ),
                                     arguments: c
                                         .get("function")?
                                         .get("arguments")

@@ -507,19 +507,40 @@ pub fn openai_name_aliases(
 
 /// Rewrite tool calls to use the original (client-registered) names.
 /// Call this when emitting tool calls back to the client (spec §8 alias round trip).
+///
+/// Also normalizes MCP-namespaced names (e.g. `agentgate_glob`, `agentgate__Glob`)
+/// back to the registered client tool name so AionUI/clients can resolve them.
 pub fn unalias_tool_calls(
     calls: &mut [crate::reasoning::event::ToolCall],
     tools: &[crate::types::ToolDefinition],
 ) {
-    let reverse: HashMap<String, String> = openai_name_aliases(tools)
+    let alias_reverse: HashMap<String, String> = openai_name_aliases(tools)
         .into_iter()
         .map(|(orig, alias)| (alias, orig))
         .collect();
-    if reverse.is_empty() {
-        return;
+
+    // Build lookup for original client tool names (case-insensitive) to preserve
+    // the exact name the client registered/sent.
+    let mut by_lower: HashMap<String, String> = HashMap::new();
+    for t in tools {
+        by_lower
+            .entry(t.function.name.to_lowercase())
+            .or_insert_with(|| t.function.name.clone());
     }
+
     for call in calls.iter_mut() {
-        if let Some(orig) = reverse.get(&call.function.name) {
+        // 1) Reverse OpenAI invalid-name aliasing if applied.
+        if let Some(orig) = alias_reverse.get(&call.function.name) {
+            call.function.name = orig.clone();
+        }
+
+        // 2) Strip MCP server namespace prefix(es) (agentgate_ / agentgate__) and
+        //    map back to the exact client-registered tool name when possible.
+        let stripped = crate::bridge::BridgeServer::strip_mcp_tool_prefix(&call.function.name);
+        if stripped != call.function.name {
+            call.function.name = stripped;
+        }
+        if let Some(orig) = by_lower.get(&call.function.name.to_lowercase()) {
             call.function.name = orig.clone();
         }
     }

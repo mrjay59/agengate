@@ -565,23 +565,92 @@ impl BridgeServer {
         }
     }
 
-    /// Normalize tool name for bridge lookup (case-insensitive for builtin tools like Read/read).
-/// Returns the normalized name as it appears in the session's tool list.
-pub fn normalize_tool_name(name: &str, session_tools: &[crate::bridge::ToolSchema]) -> String {
-    // First try exact match
-    if session_tools.iter().any(|t| t.name == name) {
-        return name.to_string();
-    }
-    // Try case-insensitive match for known builtin tools
-    let lower = name.to_lowercase();
-    for t in session_tools {
-        if t.name.to_lowercase() == lower {
-            return t.name.clone(); // Return the canonical casing from session
+    /// Normalize tool name for bridge lookup.
+    ///
+    /// Strips known MCP server namespace prefixes added by clients (e.g. opencode
+    /// exposes tools from server "agentgate" as `agentgate_<tool>` / `agentgate__<tool>`),
+    /// then resolves to the canonical name as registered in the session tool list
+    /// (exact, then case-insensitive). Returns the original name if unresolved.
+    pub fn normalize_tool_name(name: &str, session_tools: &[crate::bridge::ToolSchema]) -> String {
+        let candidates = Self::tool_name_candidates(name);
+        for candidate in &candidates {
+            if session_tools.iter().any(|t| t.name == *candidate) {
+                return candidate.clone();
+            }
         }
+        for candidate in &candidates {
+            let lower = candidate.to_lowercase();
+            for t in session_tools {
+                if t.name.to_lowercase() == lower {
+                    return t.name.clone(); // Return the canonical casing from session
+                }
+            }
+        }
+        // Fallback: return de-prefixed candidate (or original) for consistent downstream handling.
+        candidates.into_iter().next().unwrap_or_else(|| name.to_string())
     }
-    // Fallback: return original name
-    name.to_string()
-}
+
+    /// Candidate tool names to try when resolving MCP-namespaced names.
+    /// Order: original, then progressively de-prefixed forms.
+    pub fn tool_name_candidates(name: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut push_unique = |s: String| {
+            if !s.is_empty() && !out.iter().any(|x: &String| x == &s) {
+                out.push(s);
+            }
+        };
+        push_unique(name.to_string());
+        let mut cur = name.to_string();
+        for _ in 0..4 {
+            let stripped = cur
+                .strip_prefix("agentgate__")
+                .or_else(|| cur.strip_prefix("agentgate_"))
+                .map(|s| s.to_string());
+            match stripped {
+                Some(s) if !s.is_empty() && s != cur => {
+                    push_unique(s.clone());
+                    cur = s;
+                }
+                _ => break,
+            }
+        }
+        // Also handle case-only prefix variants defensively (e.g. AgentGate_Glob).
+        let lower = name.to_lowercase();
+        if lower != name {
+            push_unique(lower.clone());
+            let mut cur2 = lower;
+            for _ in 0..4 {
+                let stripped = cur2
+                    .strip_prefix("agentgate__")
+                    .or_else(|| cur2.strip_prefix("agentgate_"))
+                    .map(|s| s.to_string());
+                match stripped {
+                    Some(s) if !s.is_empty() && s != cur2 => {
+                        push_unique(s.clone());
+                        cur2 = s;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        out
+    }
+
+    /// Strip known MCP server namespace prefixes from a tool name.
+    ///
+    /// Returns the de-prefixed form (preserving the remainder's casing when possible).
+    pub fn strip_mcp_tool_prefix(name: &str) -> String {
+        let candidates = Self::tool_name_candidates(name);
+        // Prefer the first candidate that differs from original (i.e. prefix stripped),
+        // which preserves the remainder's original casing.
+        candidates
+            .iter()
+            .skip(1)
+            .find(|c| c.to_lowercase() != name.to_lowercase() || !name.to_lowercase().starts_with("agentgate_"))
+            .cloned()
+            .or_else(|| candidates.get(1).cloned())
+            .unwrap_or_else(|| name.to_string())
+    }
 
 /// Session that owns a held `tools/call`, if still pending.
     pub async fn pending_session_id(&self, mcp_id: &str) -> Option<String> {
@@ -904,7 +973,12 @@ pub fn normalize_tool_name(name: &str, session_tools: &[crate::bridge::ToolSchem
     /// IMPL-TOOL-01 selective disable) contains no built-in conflicting tools.
     /// Callers that need real CLI probing should call `probe_cli_tools_live()`.
     pub fn preflight_active_probe(&self, session_tools: &[crate::bridge::ToolSchema]) -> Result<(), String> {
-        let conflicting_tools = ["read", "write", "bash", "execute", "glob", "list", "patch", "edit"];
+        // FIX-L1-01: expanded conflicting tools to include opencode utility tools
+        // (execute, list_mcp_resources) that leak on resume in selective mode
+        let conflicting_tools = [
+            "read", "write", "bash", "execute", "glob", "list", "patch", "edit",
+            "opencode_list_mcp_resources", "list_mcp_resources"
+        ];
 
         for tool in session_tools {
             let name_lower = tool.name.to_lowercase();

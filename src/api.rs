@@ -910,10 +910,18 @@ async fn bridge_mcp(
         "tools/call" => {
             let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
             let _args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+
+            // Normalize MCP-namespaced tool names (e.g. agentgate_glob / agentgate__glob)
+            // back to the canonical tool registered in this session before whitelist/guard checks.
+            let normalized_name = crate::bridge::BridgeServer::normalize_tool_name(&name, &session.tools);
+            if normalized_name != name {
+                info!(event = "tool.normalized", session = %session.session_id, original = %name, normalized = %normalized_name);
+            }
+
             // Fail-closed (spec §13.1): tool harus ada di whitelist session ini.
             // Bila tidak -> 503 `tool_isolation_unavailable` (tidak pernah hold/execute).
-            if !session.tools.iter().any(|t| t.name == name) {
-                info!(event = "guard.violation", session = %session.session_id, observed_tool = %name);
+            if !session.tools.iter().any(|t| t.name == normalized_name) {
+                info!(event = "guard.violation", session = %session.session_id, observed_tool = %name, normalized = %normalized_name);
                 crate::metrics::METRICS.record_guard_violation();
                 return (
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
@@ -927,8 +935,8 @@ async fn bridge_mcp(
                 ).into_response();
             }
             // Preflight isolation check (spec §13.2): verify guard is active for this bridge provider.
-            if let Err(e) = registry.bridge.preflight_isolation_check(&name, &session.tools) {
-                info!(event = "guard.violation", session = %session.session_id, observed_tool = %name, reason = %e);
+            if let Err(e) = registry.bridge.preflight_isolation_check(&normalized_name, &session.tools) {
+                info!(event = "guard.violation", session = %session.session_id, observed_tool = %name, normalized = %normalized_name, reason = %e);
                 crate::metrics::METRICS.record_guard_violation();
                 return (
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
@@ -940,11 +948,6 @@ async fn bridge_mcp(
                         }
                     })),
                 ).into_response();
-            }
-            // Normalize tool name for bridge lookup (handles Read/read case-insensitivity).
-            let normalized_name = crate::bridge::BridgeServer::normalize_tool_name(&name, &session.tools);
-            if normalized_name != name {
-                info!(event = "tool.normalized", session = %session.session_id, original = %name, normalized = %normalized_name);
             }
             let mcp_id = id.as_ref().map(|v| v.to_string()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             info!(event = "bridge.call_held", mcp_req_id = %mcp_id, session = %session.session_id, tool = %normalized_name);
