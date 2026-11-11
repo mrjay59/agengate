@@ -705,9 +705,11 @@ impl CliProviderImpl {
         };
 
         // Build prompt from messages.
+        // Default strip client system prompt for isolation (consistent with bridge/native paths).
         let prompt = request
             .messages
             .iter()
+            .filter(|msg| msg.role != crate::types::MessageRole::System)
             .filter_map(|msg| msg.content.clone())
             .collect::<Vec<String>>()
             .join("\n");
