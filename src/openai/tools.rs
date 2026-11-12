@@ -528,6 +528,25 @@ pub fn unalias_tool_calls(
             .or_insert_with(|| t.function.name.clone());
     }
 
+    // Title-case fallback for known opencode built-ins when client sent lowercase
+    // but registered title-case (e.g., client sent "shell" but registered "Shell").
+    const TITLE_CASE_BUILTINS: &[(&str, &str)] = &[
+        ("shell", "Shell"),
+        ("read", "Read"),
+        ("write", "Write"),
+        ("glob", "Glob"),
+        ("grep", "Grep"),
+        ("edit", "Edit"),
+        ("list", "List"),
+        ("patch", "Patch"),
+        ("execute", "Execute"),
+        ("create", "Create"),
+        ("bash", "Bash"),
+        ("ls", "Ls"),
+        ("cat", "Cat"),
+        ("find", "Find"),
+    ];
+
     for call in calls.iter_mut() {
         // 1) Reverse OpenAI invalid-name aliasing if applied.
         if let Some(orig) = alias_reverse.get(&call.function.name) {
@@ -540,8 +559,25 @@ pub fn unalias_tool_calls(
         if stripped != call.function.name {
             call.function.name = stripped;
         }
-        if let Some(orig) = by_lower.get(&call.function.name.to_lowercase()) {
-            call.function.name = orig.clone();
+        let lower = call.function.name.to_lowercase();
+        // Check if by_lower maps to a DIFFERENT casing (non-identity).
+        // If client sent "shell" but registered "Shell", by_lower["shell"] == "Shell" (different) → use "Shell".
+        // If client sent "shell" and registered "shell", by_lower["shell"] == "shell" (identity) → fall through.
+        let use_client_casing = by_lower.get(&lower).map(|orig| orig != &call.function.name).unwrap_or(false);
+        if use_client_casing {
+            if let Some(orig) = by_lower.get(&lower) {
+                call.function.name = orig.clone();
+            }
+        } else {
+            // Fallback: title-case known opencode built-ins.
+            // Applied when: no tools provided, OR identity mapping, OR no mapping for this tool.
+            if let Some(orig) = TITLE_CASE_BUILTINS
+                .iter()
+                .find(|(k, _)| *k == lower)
+                .map(|(_, v)| *v)
+            {
+                call.function.name = orig.to_string();
+            }
         }
     }
 }
