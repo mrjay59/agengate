@@ -563,7 +563,7 @@ pub fn unalias_tool_calls(
         // Check if by_lower maps to a DIFFERENT casing (non-identity).
         // If client sent "shell" but registered "Shell", by_lower["shell"] == "Shell" (different) → use "Shell".
         // If client sent "shell" and registered "shell", by_lower["shell"] == "shell" (identity) → fall through.
-        let use_client_casing = by_lower.get(&lower).map(|orig| orig != &call.function.name).unwrap_or(false);
+        let use_client_casing = by_lower.get(&lower).map(|orig| orig != &lower).unwrap_or(false);
         if use_client_casing {
             if let Some(orig) = by_lower.get(&lower) {
                 call.function.name = orig.clone();
