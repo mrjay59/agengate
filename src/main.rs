@@ -222,6 +222,10 @@ async fn main() -> Result<()> {
                         if path == "/health" || path == "/" {
                             return next.run(req).await;
                         }
+                        // Allow bridge MCP routes without API key — they use per-session tokens
+                        if path.starts_with("/_bridge") {
+                            return next.run(req).await;
+                        }
                         let auth = req.headers().get(axum::http::header::AUTHORIZATION);
                         let ok = auth
                             .and_then(|v| v.to_str().ok())
