@@ -60,6 +60,32 @@ impl ReasoningParser {
                 return orig.clone();
             }
         }
+        // Fallback: title-case known opencode built-ins if client didn't register them
+        // with exact casing. This handles AionUI registering "Shell" but sending "shell".
+        let lower = stripped.to_lowercase();
+        const TITLE_CASE_BUILTINS: &[(&str, &str)] = &[
+            ("shell", "Shell"),
+            ("read", "Read"),
+            ("write", "Write"),
+            ("glob", "Glob"),
+            ("grep", "Grep"),
+            ("edit", "Edit"),
+            ("list", "List"),
+            ("patch", "Patch"),
+            ("execute", "Execute"),
+            ("create", "Create"),
+            ("bash", "Bash"),
+            ("ls", "Ls"),
+            ("cat", "Cat"),
+            ("find", "Find"),
+        ];
+        if let Some(orig) = TITLE_CASE_BUILTINS
+            .iter()
+            .find(|(k, _)| *k == lower)
+            .map(|(_, v)| *v)
+        {
+            return orig.to_string();
+        }
         stripped
     }
 
