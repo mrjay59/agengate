@@ -55,14 +55,27 @@ impl ReasoningParser {
     /// Strip MCP prefix and restore original client-registered casing when possible.
     fn resolve_tool_name(&self, name: &str) -> String {
         let stripped = crate::bridge::BridgeServer::strip_mcp_tool_prefix(name);
-        if let Some(ref map) = self.tool_by_lower {
-            if let Some(orig) = map.get(&stripped.to_lowercase()) {
-                return orig.clone();
+        let lower = stripped.to_lowercase();
+        // Check if client registered a DIFFERENT casing (non-identity mapping).
+        // If client sent "shell" but registered "Shell", map["shell"] == "Shell" (different) → use "Shell".
+        // If client sent "shell" and registered "shell", map["shell"] == "shell" (identity) → fall through to title-case.
+        let use_client_casing = if let Some(ref map) = self.tool_by_lower {
+            map.get(&lower).map(|orig| orig != &stripped).unwrap_or(false)
+        } else {
+            false
+        };
+        if use_client_casing {
+            if let Some(ref map) = self.tool_by_lower {
+                if let Some(orig) = map.get(&lower) {
+                    return orig.clone();
+                }
             }
         }
-        // Fallback: title-case known opencode built-ins if client didn't register them
-        // with exact casing. This handles AionUI registering "Shell" but sending "shell".
-        let lower = stripped.to_lowercase();
+        // Fallback: title-case known opencode built-ins. Applied when:
+        // - no client tool defs provided (tool_by_lower is None), OR
+        // - client provided identity mapping (e.g., "shell" → "shell"), OR
+        // - client provided no mapping for this tool.
+        // This handles AionUI registering "Shell" but sending "shell" in request.tools.
         const TITLE_CASE_BUILTINS: &[(&str, &str)] = &[
             ("shell", "Shell"),
             ("read", "Read"),
