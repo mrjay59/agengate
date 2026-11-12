@@ -91,7 +91,8 @@ impl BridgeProviderV2 for OpenCodeBridgeProvider {
         client: Arc<BridgeClient>,
     ) -> Result<Box<dyn BridgeSession>> {
         let isolation = config.isolation.clone().unwrap_or_default();
-        let session = OpenCodeSession::spawn(config, client, self.profile.clone(), self.build_tool_disable_config(&isolation), isolation).await?;
+        let tool_names: Vec<String> = config.tools.iter().map(|t| t.name.clone()).collect();
+        let session = OpenCodeSession::spawn(config, client, self.profile.clone(), self.build_tool_disable_config(&isolation), isolation, tool_names).await?;
         Ok(Box::new(session))
     }
 
@@ -119,6 +120,8 @@ struct OpenCodeSession {
     workdir: PathBuf,
     /// PR-S4: continuation sender for live resume (opencode capability-gated).
     continuation_tx: Arc<Mutex<Option<oneshot::Sender<ContinuationOutput>>>>,
+    /// Client-registered tool names for case-preserving lookup in parser.
+    tool_names: Vec<String>,
 }
 
 impl OpenCodeSession {
@@ -128,6 +131,7 @@ impl OpenCodeSession {
         profile: BridgeProfile,
         tool_disable_config: Value,
         isolation_config: IsolationConfig,
+        tool_names: Vec<String>,
     ) -> Result<Self> {
         let session_id = config
             .session_id
@@ -445,6 +449,7 @@ impl OpenCodeSession {
             mcp_port,
             workdir,
             continuation_tx: Arc::new(Mutex::new(None)),
+            tool_names,
         };
 
         // Wait for MCP initialization
@@ -1005,6 +1010,9 @@ impl BridgeSession for OpenCodeSession {
         let mut rx_guard = self.event_rx.lock().await;
         if let Some(mut rx) = rx_guard.take() {
             let mut parser = ReasoningParser::new();
+            parser.with_client_tools(
+                self.tool_names.iter().cloned()
+            );
             while let Some(event) = rx.recv().await {
                 let line = event.to_string();
                 let parsed_events = parser.parse_line(&line);
@@ -1118,6 +1126,9 @@ impl BridgeSession for OpenCodeSession {
         let mut rx_guard = self.event_rx.lock().await;
         if let Some(mut rx) = rx_guard.take() {
             let mut parser = ReasoningParser::new();
+            parser.with_client_tools(
+                self.tool_names.iter().cloned()
+            );
             while let Some(event) = rx.recv().await {
                 let line = event.to_string();
                 let parsed_events = parser.parse_line(&line);

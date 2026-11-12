@@ -6,6 +6,7 @@
 
 use super::event::{ActivityKind, FinishReason, RunEvent, ReasoningKind};
 use super::limit::normalize_line_endings;
+use std::collections::HashMap;
 
 /// Maximum accepted stdout line (4 MiB).
 pub const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
@@ -16,6 +17,9 @@ pub struct ReasoningParser {
     in_reasoning: bool,
     reasoning_kind: ReasoningKind,
     done: bool,
+    /// Lowercase tool name → original client-registered name (case-preserving).
+    /// Used to restore exact casing after MCP prefix strip (e.g. `glob` → `Glob`).
+    tool_by_lower: Option<HashMap<String, String>>,
 }
 
 impl ReasoningParser {
@@ -25,7 +29,38 @@ impl ReasoningParser {
             in_reasoning: false,
             reasoning_kind: ReasoningKind::Raw,
             done: false,
+            tool_by_lower: None,
         }
+    }
+
+    /// Register client-registered tool names for case-preserving lookup.
+    pub fn with_client_tools(&mut self, tool_names: impl IntoIterator<Item = String>) {
+        let mut map = HashMap::new();
+        for name in tool_names {
+            map.insert(name.to_lowercase(), name);
+        }
+        self.tool_by_lower = Some(map);
+    }
+
+    /// Register client-registered tools from ToolDefinition slice.
+    pub fn with_client_tool_defs(&mut self, tools: &[crate::types::ToolDefinition]) {
+        let mut map = HashMap::new();
+        for t in tools {
+            let lower = t.function.name.to_lowercase();
+            map.insert(lower, t.function.name.clone());
+        }
+        self.tool_by_lower = Some(map);
+    }
+
+    /// Strip MCP prefix and restore original client-registered casing when possible.
+    fn resolve_tool_name(&self, name: &str) -> String {
+        let stripped = crate::bridge::BridgeServer::strip_mcp_tool_prefix(name);
+        if let Some(ref map) = self.tool_by_lower {
+            if let Some(orig) = map.get(&stripped.to_lowercase()) {
+                return orig.clone();
+            }
+        }
+        stripped
     }
 
     pub fn parse_line(&mut self, line: &str) -> Vec<RunEvent> {
@@ -363,7 +398,7 @@ impl ReasoningParser {
                         id,
                         r#type: "function".to_string(),
                         function: super::event::FunctionCall {
-                            name: crate::bridge::BridgeServer::strip_mcp_tool_prefix(tool_name),
+                            name: self.resolve_tool_name(tool_name),
                             arguments,
                         },
                     })
@@ -389,7 +424,7 @@ impl ReasoningParser {
                                     .unwrap_or("function")
                                     .to_string(),
                                 function: super::event::FunctionCall {
-                                    name: crate::bridge::BridgeServer::strip_mcp_tool_prefix(
+                                    name: self.resolve_tool_name(
                                         c.get("function")?.get("name")?.as_str()?,
                                     ),
                                     arguments: c

@@ -427,6 +427,7 @@ impl CliProvider for CliProviderImpl {
 
         let mut reader = tokio::io::BufReader::new(stdout);
         let mut parser = ReasoningParser::new();
+        parser.with_client_tool_defs(request.tools.as_deref().unwrap_or(&[]));
         let mut saw_event = false;
         let mut line_buf: Vec<u8> = Vec::new();
         let mut stream_error: Option<String> = None;
@@ -1471,7 +1472,15 @@ impl CliProvider for BridgeCliProvider {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
             let tool_schemas = self.tool_schemas_from_request(&request);
-            let tool_schemas_for_bridge = tool_schemas.clone();
+            // INVEST-TOOL-FILTER: Limit injected tools to avoid cold-start timeout on free models
+            let is_free_model = model.to_lowercase().contains("-free") || model.to_lowercase() == "free";
+            let max_inject = if is_free_model { 10 } else { 128 };
+            let tool_schemas_for_bridge: Vec<_> = if tool_schemas.len() > max_inject {
+                tracing::warn!(model = %model, total = tool_schemas.len(), max = max_inject, "Truncating injected tools");
+                tool_schemas[..max_inject].to_vec()
+            } else {
+                tool_schemas.clone()
+            };
             let (mcp_session_id, session_token) = match self.register_session(tool_schemas).await {
                 Some((id, token)) => (Some(id), Some(token)),
                 None => (None, None),
@@ -1676,7 +1685,15 @@ impl CliProvider for BridgeCliProvider {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
             let tool_schemas = self.tool_schemas_from_request(&request);
-            let tool_schemas_for_bridge = tool_schemas.clone();
+            // INVEST-TOOL-FILTER: Limit injected tools to avoid cold-start timeout on free models
+            let is_free_model = model.to_lowercase().contains("-free") || model.to_lowercase() == "free";
+            let max_inject = if is_free_model { 10 } else { 128 };
+            let tool_schemas_for_bridge: Vec<_> = if tool_schemas.len() > max_inject {
+                tracing::warn!(model = %model, total = tool_schemas.len(), max = max_inject, "Truncating injected tools");
+                tool_schemas[..max_inject].to_vec()
+            } else {
+                tool_schemas.clone()
+            };
             let (mcp_session_id, session_token) = match self.register_session(tool_schemas).await {
                 Some((id, token)) => (Some(id), Some(token)),
                 None => (None, None),
@@ -1802,6 +1819,7 @@ impl CliProvider for BridgeCliProvider {
             let mut timeout_timer = tokio::time::interval(bridge_turn_timeout_secs);
             timeout_timer.tick().await; // First tick after timeout
             let mut parser = ReasoningParser::new();
+            parser.with_client_tool_defs(request_tools.as_slice());
 
             let mut should_continue = true;
             while should_continue {
