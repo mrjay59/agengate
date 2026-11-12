@@ -237,6 +237,10 @@ pub struct IsolationConfig {
     /// Override: explicitly disable these built-in tools.
     #[serde(default)]
     pub disabled_builtins: Vec<String>,
+    /// When true (default), skip verbose `permission` block in opencode.json for free models
+    /// to avoid provider.free-limit errors (beam-free etc.). Keep `tools` block for safety.
+    #[serde(default = "default_true")]
+    pub minimal_free_model: bool,
 }
 
 impl Default for IsolationConfig {
@@ -245,6 +249,7 @@ impl Default for IsolationConfig {
             mode: default_isolation_mode(),
             allowed_builtins: Vec::new(),
             disabled_builtins: Vec::new(),
+            minimal_free_model: true,
         }
     }
 }

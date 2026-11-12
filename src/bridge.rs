@@ -639,17 +639,19 @@ impl BridgeServer {
     /// Strip known MCP server namespace prefixes from a tool name.
     ///
     /// Returns the de-prefixed form (preserving the remainder's casing when possible).
+    /// Handles both "agentgate_" (single underscore) and "agentgate__" (double underscore),
+    /// as well as case variants like "AgentGate_" / "AGENTGATE_".
     pub fn strip_mcp_tool_prefix(name: &str) -> String {
-        let candidates = Self::tool_name_candidates(name);
-        // Prefer the first candidate that differs from original (i.e. prefix stripped),
-        // which preserves the remainder's original casing.
-        candidates
-            .iter()
-            .skip(1)
-            .find(|c| c.to_lowercase() != name.to_lowercase() || !name.to_lowercase().starts_with("agentgate_"))
-            .cloned()
-            .or_else(|| candidates.get(1).cloned())
-            .unwrap_or_else(|| name.to_string())
+        // Check for known prefixes (case-sensitive then case-insensitive fallback).
+        for prefix in ["agentgate__", "agentgate_", "AgentGate__", "AgentGate_", "AGENTGATE__", "AGENTGATE_"] {
+            if name.starts_with(prefix) {
+                let stripped = &name[prefix.len()..];
+                if !stripped.is_empty() {
+                    return stripped.to_string();
+                }
+            }
+        }
+        name.to_string()
     }
 
 /// Session that owns a held `tools/call`, if still pending.

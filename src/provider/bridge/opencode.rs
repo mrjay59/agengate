@@ -691,13 +691,17 @@ impl OpenCodeSession {
         });
 
         // Merge tool disable config if not empty (selective/strict modes)
+        // FIX-FREELIMIT-01: Skip verbose permission block when minimal_free_model
+        // to avoid triggering provider.free-limit on free models (beam-free etc.)
         if !tool_disable.is_null() && !tool_disable.as_object().map(|o| o.is_empty()).unwrap_or(true) {
             if let Some(obj) = config.as_object_mut() {
                 if let Some(tools_obj) = tool_disable.get("tools") {
                     obj.insert("tools".to_string(), tools_obj.clone());
                 }
-                if let Some(perm_obj) = tool_disable.get("permission") {
-                    obj.insert("permission".to_string(), perm_obj.clone());
+                if !isolation_config.minimal_free_model {
+                    if let Some(perm_obj) = tool_disable.get("permission") {
+                        obj.insert("permission".to_string(), perm_obj.clone());
+                    }
                 }
             }
         }

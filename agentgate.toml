@@ -61,3 +61,6 @@ allowed_builtins = []
 disabled_builtins = []
 # FIX-PROMPT-01: When true, client system prompt is forwarded via CLI --system flag (default false: strip)
 preserve_client_system_prompt = false
+# FIX-FREELIMIT-01: When true (default), skip verbose permission block in opencode.json
+# to avoid triggering provider.free-limit on free models (beam-free etc.)
+minimal_free_model = true
