@@ -224,16 +224,31 @@ impl OpenCodeSession {
         //      with "Failed to spawn opencode process".
         // `opencode.json` in the child's working directory is honoured by the
         // CLI and has no size limit.
-        let mcp_config_json = Self::build_opencode_config_json(
-            &mcp_token,
-            mcp_port,
-            &session_id,
-            &tool_disable_config,
-            &transport,
-            config.host.as_str(),
-            &config.tools,
-            &isolation_config,
-        );
+        // FIX-FREELIMIT-04: Skip opencode.json injection for free models
+        // to avoid provider.free-limit. Free models (beam-free, iceman-free, etc.)
+        // fail when config is injected. Use minimal/no config for free models.
+        let is_free_model = Self::is_free_model(&config.model);
+
+        let mcp_config_json = if is_free_model {
+            info!(
+                target: "bridge.opencode.config",
+                session_id = %session_id,
+                model = %config.model,
+                "Free model detected — injecting MINIMAL opencode.json (MCP only, no tools/permission blocks)"
+            );
+            Self::build_minimal_mcp_config(&mcp_token, mcp_port, &session_id, &transport, config.host.as_str())
+        } else {
+            Self::build_opencode_config_json(
+                &mcp_token,
+                mcp_port,
+                &session_id,
+                &tool_disable_config,
+                &transport,
+                config.host.as_str(),
+                &config.tools,
+                &isolation_config,
+            )
+        };
         let config_path = workdir.join("opencode.json");
         fs::write(&config_path, mcp_config_json.as_bytes())
             .await
@@ -709,9 +724,87 @@ impl OpenCodeSession {
         config.to_string()
     }
 
+    /// Build minimal MCP-only config for free models (FIX-FREELIMIT-04).
+    /// Skips tools/permission/isolation blocks that trigger provider.free-limit.
+    /// Only includes MCP connection config.
+    fn build_minimal_mcp_config(
+        token: &str,
+        port: u16,
+        session_id: &str,
+        transport: &str,
+        bridge_host: &str,
+    ) -> String {
+        let agentgate_bin = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "agentgate".to_string());
+
+        let (mcp_config, mcp_servers_config) = if transport == "stdio_shim" {
+            let mcp = serde_json::json!({
+                "agentgate": {
+                    "type": "local",
+                    "command": [
+                        agentgate_bin.clone(),
+                        "mcp-shim".to_string(),
+                        "--session".to_string(),
+                        session_id.to_string(),
+                        "--token".to_string(),
+                        token.to_string(),
+                        "--host".to_string(),
+                        bridge_host.to_string(),
+                        "--port".to_string(),
+                        port.to_string()
+                    ],
+                    "enabled": true
+                }
+            });
+            let mcp_servers = serde_json::json!({
+                "agentgate": {
+                    "command": agentgate_bin,
+                    "args": ["mcp-shim", "--session", session_id, "--token", token, "--host", bridge_host, "--port", &port.to_string()],
+                }
+            });
+            (mcp, mcp_servers)
+        } else {
+            let url = format!("http://{bridge_host}:{port}/_bridge/mcp/{session_id}");
+            let mcp = serde_json::json!({
+                "agentgate": {
+                    "type": "remote",
+                    "url": url.clone(),
+                    "headers": { "Authorization": format!("Bearer {token}") },
+                    "enabled": true
+                }
+            });
+            let mcp_servers = serde_json::json!({
+                "agentgate": {
+                    "type": "http",
+                    "url": url,
+                    "headers": { "Authorization": format!("Bearer {token}") }
+                }
+            });
+            (mcp, mcp_servers)
+        };
+
+        let config = serde_json::json!({
+            "$schema": "https://opencode.ai/config.json",
+            "mcp": mcp_config,
+            "mcpServers": mcp_servers_config,
+        });
+
+        config.to_string()
+    }
+
+    /// Returns true if the model name suggests a free-tier provider model
+    /// (e.g. beam-free, iceman-free) that triggers provider.free-limit
+    /// when opencode.json config is injected.
+    fn is_free_model(model: &str) -> bool {
+        let lower = model.to_lowercase();
+        lower.contains("-free") || lower.contains("free") && !lower.contains("non-free")
+    }
+
+    /// Wait for the CLI to initialize and connect to MCP
+    /// This is a best-effort wait; actual initialization happens asynchronously
     async fn wait_for_mcp_initialize(&self) -> Result<()> {
         // Wait for the CLI to initialize and connect to MCP
-        // This is a best-effort wait; actual initialization happens asynchronously
         tokio::time::sleep(Duration::from_millis(500)).await;
         Ok(())
     }
