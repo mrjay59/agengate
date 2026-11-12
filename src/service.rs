@@ -291,6 +291,11 @@ impl ServiceRegistry {
         // Check cache for all providers
         let mut cached_models = HashMap::new();
         let mut providers_to_scan = Vec::new();
+        // Stale-but-previously-known models, kept as fallback when a scan fails.
+        // Prevents transient CLI failures from evicting dynamically-discovered
+        // models (e.g. 9router/* discovered via `opencode models`) that are not
+        // in the static config list.
+        let mut stale_models: HashMap<String, Vec<String>> = HashMap::new();
         let cache_ttl = self.model_cache_ttl;
         let now = Instant::now();
         
@@ -302,6 +307,8 @@ impl ServiceRegistry {
                         cached_models.insert(id.clone(), models.clone());
                         continue;
                     }
+                    // Expired but known: keep as fallback if scan fails.
+                    stale_models.insert(id.clone(), models.clone());
                 }
                 providers_to_scan.push((id.clone(), provider.clone()));
             }
@@ -339,18 +346,22 @@ impl ServiceRegistry {
                     cached_models.insert(id, models);
                 }
                 Ok((id, Err(e), elapsed)) => {
-                    // Only fall back to the static config list when the provider
-                    // itself is reachable. Advertising configured models for a
-                    // dead provider (missing/broken CLI) sent clients straight
-                    // into a hang: they picked a model that could never answer.
+                    // On scan failure, keep stale cached models as fallback.
+                    // This prevents transient CLI failures from evicting
+                    // dynamically-discovered models (e.g. 9router/* via
+                    // `opencode models`) that are not in the static config.
                     let provider_available = all_providers
                         .iter()
                         .find(|(pid, _)| pid == &id)
                         .map(|(_, p)| p.is_available())
                         .unwrap_or(false);
                     if provider_available {
-                        tracing::warn!(provider = %id, elapsed_ms = elapsed.as_millis(), error = %e, "scan_models failed, using config models");
-                        if let Some((_, provider)) = all_providers.iter().find(|(pid, _)| pid == &id) {
+                        if let Some(old) = stale_models.get(&id) {
+                            tracing::warn!(provider = %id, elapsed_ms = elapsed.as_millis(), error = %e, "scan_models failed, keeping stale cached models");
+                            cache.insert(id.clone(), (old.clone(), Instant::now()));
+                            cached_models.insert(id, old.clone());
+                        } else if let Some((_, provider)) = all_providers.iter().find(|(pid, _)| pid == &id) {
+                            tracing::warn!(provider = %id, elapsed_ms = elapsed.as_millis(), error = %e, "scan_models failed, no stale cache; using config models");
                             cache.insert(id.clone(), (provider.models(), Instant::now()));
                             cached_models.insert(id, provider.models());
                         }
