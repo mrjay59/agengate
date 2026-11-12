@@ -756,4 +756,39 @@ mod tests {
         assert!(out2.iter().any(|e| matches!(e, RunEvent::ReasoningDelta { .. })),
             "second batch should emit ReasoningDelta");
     }
+
+    #[test]
+    fn resolve_tool_name_title_case_fallback() {
+        let mut p = ReasoningParser::new();
+        // Simulate AionUI sending lowercase tool names in request.tools
+        p.with_client_tools(vec!["shell".to_string(), "read".to_string(), "glob".to_string()]);
+
+        // With identity mapping (client sent "shell"), fallback to title case
+        let result = p.resolve_tool_name("shell");
+        assert_eq!(result, "Shell", "identity mapping should fall through to title case");
+
+        let result = p.resolve_tool_name("read");
+        assert_eq!(result, "Read", "identity mapping should fall through to title case");
+
+        let result = p.resolve_tool_name("glob");
+        assert_eq!(result, "Glob", "identity mapping should fall through to title case");
+
+        // Non-lowercase opencode built-in — no match, return as-is
+        let result = p.resolve_tool_name("custom_tool");
+        assert_eq!(result, "custom_tool");
+    }
+
+    #[test]
+    fn resolve_tool_name_preserves_non_identity_casing() {
+        let mut p = ReasoningParser::new();
+        // Simulate client registering with different casing than what model emits
+        p.with_client_tools(vec!["Shell".to_string(), "Read".to_string()]);
+
+        // Client registered "Shell" but model emits "shell" → use client casing
+        let result = p.resolve_tool_name("shell");
+        assert_eq!(result, "Shell", "non-identity mapping should preserve client casing");
+
+        let result = p.resolve_tool_name("read");
+        assert_eq!(result, "Read", "non-identity mapping should preserve client casing");
+    }
 }
