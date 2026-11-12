@@ -572,7 +572,16 @@ impl BridgeServer {
     /// then resolves to the canonical name as registered in the session tool list
     /// (exact, then case-insensitive). Returns the original name if unresolved.
     pub fn normalize_tool_name(name: &str, session_tools: &[crate::bridge::ToolSchema]) -> String {
-        let candidates = Self::tool_name_candidates(name);
+        // Map common tool name variants to opencode's canonical built-in names
+        // before attempting prefix stripping / case-insensitive matching.
+        let mapped = match name.to_lowercase().as_str() {
+            "shell" | "sh" => "bash",
+            "cat" => "read",  // opencode uses read for file viewing
+            _ => name,
+        };
+        let mapped_str = if mapped == name { name } else { mapped };
+
+        let candidates = Self::tool_name_candidates(mapped_str);
         for candidate in &candidates {
             if session_tools.iter().any(|t| t.name == *candidate) {
                 return candidate.clone();
@@ -587,7 +596,7 @@ impl BridgeServer {
             }
         }
         // Fallback: return de-prefixed candidate (or original) for consistent downstream handling.
-        candidates.into_iter().next().unwrap_or_else(|| name.to_string())
+        candidates.into_iter().next().unwrap_or_else(|| mapped_str.to_string())
     }
 
     /// Candidate tool names to try when resolving MCP-namespaced names.
