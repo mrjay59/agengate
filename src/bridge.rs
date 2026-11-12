@@ -826,6 +826,26 @@ impl BridgeServer {
         removed
     }
 
+    /// Map parameter names for opencode built-in tools.
+    /// Opencode uses different parameter names than common conventions.
+    /// e.g., `read` tool expects `file_path` not `path`.
+    fn map_tool_params(tool_name: &str, args: &mut serde_json::Value) {
+        if let Some(obj) = args.as_object_mut() {
+            match tool_name {
+                // Opencode built-in tools use `file_path` instead of `path`
+                "read" | "write" | "edit" | "view" | "cat" => {
+                    if let Some(path_val) = obj.remove("path") {
+                        obj.insert("file_path".to_string(), path_val);
+                    }
+                }
+                // `bash`/`shell` use `command` (already correct)
+                // `glob`/`grep` use `pattern` (already correct)
+                // `list` uses `path` (already correct)
+                _ => {}
+            }
+        }
+    }
+
     /// Execute a tool call - parks run, forwards to client, waits for result
     pub async fn execute_tool(
         &self,
@@ -834,6 +854,9 @@ impl BridgeServer {
         mut args: serde_json::Value,
         _workspace: &str,
     ) -> Result<ToolResult> {
+        // Map parameter names for opencode built-in tools
+        Self::map_tool_params(tool_name, &mut args);
+
         // Guard: Check if tool is bridge tool (L4 runtime guard)
         if !self.is_bridge_tool(tool_name) {
             tracing::error!(event = "bridge.tool_call.reject", run_id = %run_id, tool = %tool_name, reason = "not_bridge_tool", tool_call_id = "");
