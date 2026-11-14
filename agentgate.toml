@@ -67,6 +67,9 @@ preserve_client_system_prompt = true
 minimal_free_model = true
 
 [routing]
-# Model alias mapping: Copilot model names -> AgentGate model names
-# Format: "copilot_model_name" = "agentgate_model_name"
-model_aliases = { "gpt-4o" = "agg/opencode/beam-free", "gpt-4o-mini" = "agg/opencode/flint-40b-free", "o1-mini" = "agg/opencode/deepseek-v4.1-flash-free", "o1-preview" = "agg/opencode/beam", "claude-3.5-sonnet" = "agg/opencode/codestral" }
+no_tools_policy = "chat_only"
+on_client_tools = "bridge"
+default_workspace = "default"
+# Model alias mapping handled in code defaults (service.rs resolve_model_alias)
+# For custom mappings, use inline table format:
+# model_aliases = { gpt4o = "agg/opencode/beam-free", ... }
