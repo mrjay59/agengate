@@ -576,6 +576,13 @@ impl BridgeServer {
         // Map common tool name variants to opencode's canonical built-in names
         // before attempting prefix stripping / case-insensitive matching.
         let mapped = match name.to_lowercase().as_str() {
+            // Copilot Chat → opencode built-in
+            "read_file" => "read",
+            "write_file" => "write",
+            "edit_file" => "edit",
+            "list_dir" => "list",
+            "terminal" => "bash",
+            // Other common variants
             "shell" | "sh" => "bash",
             "cat" => "read",  // opencode uses read for file viewing
             _ => name,
