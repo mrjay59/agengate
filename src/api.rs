@@ -266,6 +266,9 @@ async fn chat_completions(
             .ok_or_else(|| AppError::ModelNotFound(request.model.clone()))?,
     };
 
+    // Update request.model to resolved model for downstream processing
+    request.model = resolved_model.clone();
+
     // Fail fast: reject unavailable providers (missing binary, broken install)
     // before opening a stream that would only send keep-alives. Ollama served
     // over HTTP (`ollama_mode = "native"`) is exempt: its availability is the
