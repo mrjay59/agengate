@@ -71,26 +71,26 @@ impl ReasoningParser {
                 }
             }
         }
-        // Fallback: lowercase known opencode built-ins to match AionUI registry (lowercase).
-        // Applied when:
+        // Fallback: title-case known opencode built-ins. Applied when:
         // - no client tool defs provided (tool_by_lower is None), OR
         // - client provided identity mapping (e.g., "shell" → "shell"), OR
         // - client provided no mapping for this tool.
+        // This handles AionUI registering "Shell" but sending "shell" in request.tools.
         const TITLE_CASE_BUILTINS: &[(&str, &str)] = &[
-            ("shell", "shell"),
-            ("read", "read"),
-            ("write", "write"),
-            ("glob", "glob"),
-            ("grep", "grep"),
-            ("edit", "edit"),
-            ("list", "list"),
-            ("patch", "patch"),
-            ("execute", "execute"),
-            ("create", "create"),
-            ("bash", "bash"),
-            ("ls", "ls"),
-            ("cat", "cat"),
-            ("find", "find"),
+            ("shell", "Shell"),
+            ("read", "Read"),
+            ("write", "Write"),
+            ("glob", "Glob"),
+            ("grep", "Grep"),
+            ("edit", "Edit"),
+            ("list", "List"),
+            ("patch", "Patch"),
+            ("execute", "Execute"),
+            ("create", "Create"),
+            ("bash", "Bash"),
+            ("ls", "Ls"),
+            ("cat", "Cat"),
+            ("find", "Find"),
         ];
         if let Some(orig) = TITLE_CASE_BUILTINS
             .iter()
@@ -763,15 +763,16 @@ mod tests {
         // Simulate AionUI sending lowercase tool names in request.tools
         p.with_client_tools(vec!["shell".to_string(), "read".to_string(), "glob".to_string()]);
 
-        // With identity mapping (client sent "shell"), fallback to title case
+        // With identity mapping (client sent "shell"), fallback to LOWERCASE for opencode built-ins
+        // (to match AionUI registry convention)
         let result = p.resolve_tool_name("shell");
-        assert_eq!(result, "Shell", "identity mapping should fall through to title case");
+        assert_eq!(result, "shell", "identity mapping should fall through to lowercase for opencode built-ins");
 
         let result = p.resolve_tool_name("read");
-        assert_eq!(result, "Read", "identity mapping should fall through to title case");
+        assert_eq!(result, "read", "identity mapping should fall through to lowercase for opencode built-ins");
 
         let result = p.resolve_tool_name("glob");
-        assert_eq!(result, "Glob", "identity mapping should fall through to title case");
+        assert_eq!(result, "glob", "identity mapping should fall through to lowercase for opencode built-ins");
 
         // Non-lowercase opencode built-in — no match, return as-is
         let result = p.resolve_tool_name("custom_tool");

@@ -1,9 +1,9 @@
-﻿use crate::config::{BridgeConfig, ProviderConfig};
+﻿use crate::config::{BridgeConfig, ProviderConfig, IsolationConfig};
 use crate::reasoning::event::ToolCall;
 use crate::types::Message;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock, oneshot, mpsc};
@@ -1004,9 +1004,10 @@ impl BridgeServer {
     ///
     /// This does NOT spawn a real CLI process (which would be slow/fragile in
     /// preflight). Instead it validates that `session_tools` (already filtered by
-    /// IMPL-TOOL-01 selective disable) contains no built-in conflicting tools.
+    /// IMPL-TOOL-01 selective disable) contains no built-in conflicting tools,
+    /// unless explicitly allowed via isolation.allowed_builtins.
     /// Callers that need real CLI probing should call `probe_cli_tools_live()`.
-    pub fn preflight_active_probe(&self, session_tools: &[crate::bridge::ToolSchema]) -> Result<(), String> {
+    pub fn preflight_active_probe(&self, session_tools: &[crate::bridge::ToolSchema], isolation: &IsolationConfig) -> Result<(), String> {
         // FIX-L1-01: expanded conflicting tools to include opencode utility tools
         // (execute, list_mcp_resources) that leak on resume in selective mode
         let conflicting_tools = [
@@ -1014,14 +1015,55 @@ impl BridgeServer {
             "opencode_list_mcp_resources", "list_mcp_resources"
         ];
 
+        // All built-in tools (conflicting + safe) for strict mode
+        let all_builtins = [
+            "read", "write", "bash", "execute", "glob", "list", "patch", "edit",
+            "grep", "webfetch", "todowrite", "todoread", "task",
+            "opencode_list_mcp_resources", "list_mcp_resources"
+        ];
+
+        // Build allowed set from config (user explicitly allowed builtins)
+        let mut allowed = HashSet::new();
+        for tool in &isolation.allowed_builtins {
+            allowed.insert(tool.to_lowercase());
+        }
+
+        // Build disabled set from config (user explicitly disabled builtins)
+        let mut disabled = HashSet::new();
+        for tool in &isolation.disabled_builtins {
+            disabled.insert(tool.to_lowercase());
+        }
+
         for tool in session_tools {
             let name_lower = tool.name.to_lowercase();
             // Strip namespace prefix if present (e.g. "opencode:read" -> "read")
             let bare_name = name_lower.split(':').last().unwrap_or(&name_lower);
 
-            if conflicting_tools.contains(&bare_name) {
-                info!(event = "bridge.preflight.reject", tool = %tool.name, reason = "builtin_conflict_detected");
-                return Err(format!("tool_isolation_unavailable: built-in tool {} conflicts with isolation policy", tool.name));
+            // Check if explicitly disabled - always block regardless of mode
+            if disabled.contains(bare_name) {
+                info!(event = "bridge.preflight.reject", tool = %tool.name, reason = "builtin_explicitly_disabled");
+                return Err(format!("tool_isolation_unavailable: built-in tool {} is explicitly disabled", tool.name));
+            }
+
+            match isolation.mode.as_str() {
+                "off" => {
+                    // Off mode: allow all builtins
+                    continue;
+                }
+                "strict" => {
+                    // Strict mode: block all builtins
+                    if all_builtins.contains(&bare_name) {
+                        info!(event = "bridge.preflight.reject", tool = %tool.name, reason = "builtin_blocked_in_strict_mode");
+                        return Err(format!("tool_isolation_unavailable: built-in tool {} conflicts with isolation policy", tool.name));
+                    }
+                }
+                _ => {
+                    // Selective mode (default): block conflicting builtins unless allowed
+                    if conflicting_tools.contains(&bare_name) && !allowed.contains(bare_name) {
+                        info!(event = "bridge.preflight.reject", tool = %tool.name, reason = "builtin_conflict_detected", allowed = ?isolation.allowed_builtins);
+                        return Err(format!("tool_isolation_unavailable: built-in tool {} conflicts with isolation policy", tool.name));
+                    }
+                }
             }
         }
 

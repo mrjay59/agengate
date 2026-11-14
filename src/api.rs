@@ -949,6 +949,24 @@ async fn bridge_mcp(
                     })),
                 ).into_response();
             }
+
+            // Preflight active probe (L3): validate against isolation config allowed_builtins
+            let isolation = registry.bridge_config.isolation.clone();
+            if let Err(e) = registry.bridge.preflight_active_probe(&session.tools, &isolation) {
+                info!(event = "guard.violation", session = %session.session_id, observed_tool = %name, normalized = %normalized_name, reason = %e);
+                crate::metrics::METRICS.record_guard_violation();
+                return (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "error": {
+                            "message": format!("tool_isolation_unavailable: {}", e),
+                            "type": "invalid_request_error",
+                            "code": "tool_isolation_unavailable",
+                        }
+                    })),
+                ).into_response();
+            }
+
             let mcp_id = id.as_ref().map(|v| v.to_string()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             info!(event = "bridge.call_held", mcp_req_id = %mcp_id, session = %session.session_id, tool = %normalized_name);
             let hold_start = Instant::now();
