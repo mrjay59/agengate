@@ -132,6 +132,7 @@ impl BridgeClient {
 
     pub async fn handle_tool_call(&self, _id: &str, _name: &str, _arguments: serde_json::Value) -> Result<()> {
         // TODO: Implement tool call handling
+        tracing::debug!("Tool call received: id={}, name={}", _id, _name);
         Ok(())
     }
 

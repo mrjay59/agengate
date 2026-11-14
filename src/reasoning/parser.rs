@@ -75,17 +75,18 @@ impl ReasoningParser {
         // - no client tool defs provided (tool_by_lower is None), OR
         // - client provided identity mapping (e.g., "shell" → "shell"), OR
         // - client provided no mapping for this tool.
-        // This handles AionUI registering "Shell" but sending "shell" in request.tools.
+        // For tools AionUI actually registers (read, write, edit, glob, grep, execute),
+        // keep lowercase. For opencode-specific tools (shell, bash, list, cat), use TitleCase.
         const TITLE_CASE_BUILTINS: &[(&str, &str)] = &[
             ("shell", "Shell"),
-            ("read", "Read"),
-            ("write", "Write"),
-            ("glob", "Glob"),
-            ("grep", "Grep"),
-            ("edit", "Edit"),
+            ("read", "read"),
+            ("write", "write"),
+            ("glob", "glob"),
+            ("grep", "grep"),
+            ("edit", "edit"),
             ("list", "List"),
             ("patch", "Patch"),
-            ("execute", "Execute"),
+            ("execute", "execute"),
             ("create", "Create"),
             ("bash", "Bash"),
             ("ls", "Ls"),
