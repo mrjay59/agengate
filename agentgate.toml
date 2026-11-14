@@ -12,6 +12,7 @@ cors = true
 workdir = "."
 max_concurrency_per_provider = 10
 model_cache_ttl_secs = 300
+first_token_timeout_secs = 30
 
 # Provider configurations
 [[provider]]
@@ -60,7 +61,7 @@ allowed_builtins = ["bash", "execute", "shell", "read", "write", "edit", "glob",
 # Override: explicitly disable these built-in tools
 disabled_builtins = []
 # FIX-PROMPT-01: When true, client system prompt is forwarded via CLI --system flag (default false: strip)
-preserve_client_system_prompt = false
+preserve_client_system_prompt = true
 # FIX-FREELIMIT-01: When true (default), skip verbose permission block in opencode.json
 # to avoid triggering provider.free-limit on free models (beam-free etc.)
 minimal_free_model = true
@@ -68,4 +69,4 @@ minimal_free_model = true
 [routing]
 # Model alias mapping: Copilot model names -> AgentGate model names
 # Format: "copilot_model_name" = "agentgate_model_name"
-model_aliases = { gpt4o = "agg/opencode/beam-free", gpt4o_mini = "agg/opencode/flint-40b-free", o1_mini = "agg/opencode/deepseek-v4.1-flash-free", o1_preview = "agg/opencode/beam", claude_sonnet = "agg/opencode/codestral" }
+model_aliases = { "gpt-4o" = "agg/opencode/beam-free", "gpt-4o-mini" = "agg/opencode/flint-40b-free", "o1-mini" = "agg/opencode/deepseek-v4.1-flash-free", "o1-preview" = "agg/opencode/beam", "claude-3.5-sonnet" = "agg/opencode/codestral" }
