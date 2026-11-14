@@ -1,0 +1,184 @@
+{
+  "results": [
+    {
+      "label": "shell/bash",
+      "tool_requested": "shell",
+      "expected_name": "Shell",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Shell",
+      "status": "PASS"
+    },
+    {
+      "label": "read/cat/view",
+      "tool_requested": "read",
+      "expected_name": "Read",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Read",
+      "status": "PASS"
+    },
+    {
+      "label": "write/create",
+      "tool_requested": "write",
+      "expected_name": "Write",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Write",
+      "status": "PASS"
+    },
+    {
+      "label": "glob/find",
+      "tool_requested": "glob",
+      "expected_name": "Glob",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Glob",
+      "status": "PASS"
+    },
+    {
+      "label": "grep",
+      "tool_requested": "grep",
+      "expected_name": "Grep",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Grep",
+      "status": "PASS"
+    },
+    {
+      "label": "edit/patch",
+      "tool_requested": "edit",
+      "expected_name": "Edit",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": null,
+      "status": "NO_TOOL"
+    },
+    {
+      "label": "list/ls",
+      "tool_requested": "list",
+      "expected_name": "List",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "List",
+      "status": "PASS"
+    },
+    {
+      "label": "execute/run/cmd",
+      "tool_requested": "execute",
+      "expected_name": "Execute",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": null,
+      "status": "NO_TOOL"
+    },
+    {
+      "label": "bash",
+      "tool_requested": "bash",
+      "expected_name": "Bash",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "question",
+      "status": "FAIL"
+    },
+    {
+      "label": "cat",
+      "tool_requested": "cat",
+      "expected_name": "Cat",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Cat",
+      "status": "PASS"
+    },
+    {
+      "label": "shell/bash",
+      "tool_requested": "shell",
+      "expected_name": "Shell",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Shell",
+      "status": "PASS"
+    },
+    {
+      "label": "read/cat/view",
+      "tool_requested": "read",
+      "expected_name": "Read",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Read",
+      "status": "PASS"
+    },
+    {
+      "label": "write/create",
+      "tool_requested": "write",
+      "expected_name": "Write",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Write",
+      "status": "PASS"
+    },
+    {
+      "label": "glob/find",
+      "tool_requested": "glob",
+      "expected_name": "Glob",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Glob",
+      "status": "PASS"
+    },
+    {
+      "label": "grep",
+      "tool_requested": "grep",
+      "expected_name": "Grep",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "question",
+      "status": "FAIL"
+    },
+    {
+      "label": "edit/patch",
+      "tool_requested": "edit",
+      "expected_name": "Edit",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Read",
+      "status": "FAIL"
+    },
+    {
+      "label": "list/ls",
+      "tool_requested": "list",
+      "expected_name": "List",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "Shell",
+      "status": "FAIL"
+    },
+    {
+      "label": "execute/run/cmd",
+      "tool_requested": "execute",
+      "expected_name": "Execute",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": null,
+      "status": "NO_TOOL"
+    },
+    {
+      "label": "bash",
+      "tool_requested": "bash",
+      "expected_name": "Bash",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": "question",
+      "status": "FAIL"
+    },
+    {
+      "label": "cat",
+      "tool_requested": "cat",
+      "expected_name": "Cat",
+      "http_status": 200,
+      "mode_header": "bridge",
+      "emitted_name": null,
+      "status": "NO_TOOL"
+    }
+  ]
+}

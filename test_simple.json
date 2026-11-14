@@ -1,0 +1,9 @@
+{
+  "model": "agg/opencode/nemotron-3.5-lightning-free",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Halo, apa kabar?"
+    }
+  ]
+}

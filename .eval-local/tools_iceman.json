@@ -1,0 +1,1 @@
+{"choices":[{"finish_reason":"stop","index":0,"message":{"content":"Halo! Ada yang bisa saya bantu?","role":"assistant"}}],"created":1794364112,"id":"chatcmpl-3e6432c4-3cb8-413a-a94b-38d07a51ed8f","model":"opencode/iceman-free","object":"chat.completion","session_id":"a889c548-2ae8-4baa-a129-9fc594216c0d","usage":{"completion_tokens":0,"prompt_tokens":0,"total_tokens":0}}

@@ -528,23 +528,22 @@ pub fn unalias_tool_calls(
             .or_insert_with(|| t.function.name.clone());
     }
 
-    // Title-case fallback for known opencode built-ins when client sent lowercase
-    // but registered title-case (e.g., client sent "shell" but registered "Shell").
+    // Lowercase fallback for known opencode built-ins to match AionUI registry (lowercase).
     const TITLE_CASE_BUILTINS: &[(&str, &str)] = &[
-        ("shell", "Shell"),
-        ("read", "Read"),
-        ("write", "Write"),
-        ("glob", "Glob"),
-        ("grep", "Grep"),
-        ("edit", "Edit"),
-        ("list", "List"),
-        ("patch", "Patch"),
-        ("execute", "Execute"),
-        ("create", "Create"),
-        ("bash", "Bash"),
-        ("ls", "Ls"),
-        ("cat", "Cat"),
-        ("find", "Find"),
+        ("shell", "shell"),
+        ("read", "read"),
+        ("write", "write"),
+        ("glob", "glob"),
+        ("grep", "grep"),
+        ("edit", "edit"),
+        ("list", "list"),
+        ("patch", "patch"),
+        ("execute", "execute"),
+        ("create", "create"),
+        ("bash", "bash"),
+        ("ls", "ls"),
+        ("cat", "cat"),
+        ("find", "find"),
     ];
 
     for call in calls.iter_mut() {

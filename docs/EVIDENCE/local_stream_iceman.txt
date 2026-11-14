@@ -1,0 +1,10 @@
+data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null,"index":0}],"created":1794364134,"id":"chatcmpl-65c5d190-cc26-45d5-9ed7-a73d43e30bfb","model":"agg/opencode/iceman-free","object":"chat.completion.chunk"}
+
+: ping
+
+data: {"choices":[{"delta":{"content":"Merah."},"finish_reason":null,"index":0}],"created":1794364134,"id":"chatcmpl-65c5d190-cc26-45d5-9ed7-a73d43e30bfb","model":"agg/opencode/iceman-free","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":1794364134,"id":"chatcmpl-65c5d190-cc26-45d5-9ed7-a73d43e30bfb","model":"agg/opencode/iceman-free","object":"chat.completion.chunk"}
+
+data: [DONE]
+

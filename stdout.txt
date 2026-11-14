@@ -1,0 +1,10 @@
+[2m2026-11-06T07:30:08.741246Z[0m [32m INFO[0m [2magentgate[0m[2m:[0m Loading provider config [3mid[0m[2m=[0mopencode [3mtransport[0m[2m=[0mSome("stdio_shim")
+[2m2026-11-06T07:30:08.741726Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Registering provider: opencode
+[2m2026-11-06T07:30:08.747395Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Provider opencode is available
+[2m2026-11-06T07:30:08.753164Z[0m [32m INFO[0m [2magentgate[0m[2m:[0m Loading provider config [3mid[0m[2m=[0mgemini [3mtransport[0m[2m=[0mNone
+[2m2026-11-06T07:30:08.753414Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Registering provider: gemini
+[2m2026-11-06T07:30:08.758795Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Provider gemini is available
+[2m2026-11-06T07:30:08.764266Z[0m [32m INFO[0m [2magentgate[0m[2m:[0m Loading provider config [3mid[0m[2m=[0mollama [3mtransport[0m[2m=[0mNone
+[2m2026-11-06T07:30:08.764601Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Registering provider: ollama
+[2m2026-11-06T07:30:08.769390Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Provider ollama is available
+[2m2026-11-06T07:30:08.774232Z[0m [32m INFO[0m [2magentgate[0m[2m:[0m Starting server on 0.0.0.0:8787

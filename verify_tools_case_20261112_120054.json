@@ -1,0 +1,74 @@
+[
+  {
+    "tool": "shell",
+    "http_status": 200,
+    "mode_header": "bridge",
+    "emitted_tools": [
+      "shell"
+    ],
+    "finish_reason": "tool_calls",
+    "error": null,
+    "casing_match": true,
+    "status": "PASS"
+  },
+  {
+    "tool": "read",
+    "http_status": 200,
+    "mode_header": "bridge",
+    "emitted_tools": [
+      "read"
+    ],
+    "finish_reason": "tool_calls",
+    "error": null,
+    "casing_match": true,
+    "status": "PASS"
+  },
+  {
+    "tool": "glob",
+    "http_status": 200,
+    "mode_header": "bridge",
+    "emitted_tools": [
+      "glob"
+    ],
+    "finish_reason": "tool_calls",
+    "error": null,
+    "casing_match": true,
+    "status": "PASS"
+  },
+  {
+    "tool": "grep",
+    "http_status": 200,
+    "mode_header": "bridge",
+    "emitted_tools": [
+      "grep"
+    ],
+    "finish_reason": "tool_calls",
+    "error": null,
+    "casing_match": true,
+    "status": "PASS"
+  },
+  {
+    "tool": "write",
+    "http_status": 200,
+    "mode_header": "bridge",
+    "emitted_tools": [
+      "write"
+    ],
+    "finish_reason": "tool_calls",
+    "error": null,
+    "casing_match": true,
+    "status": "PASS"
+  },
+  {
+    "tool": "edit",
+    "http_status": 200,
+    "mode_header": "bridge",
+    "emitted_tools": [
+      "read"
+    ],
+    "finish_reason": "tool_calls",
+    "error": null,
+    "casing_match": false,
+    "status": "FAIL"
+  }
+]

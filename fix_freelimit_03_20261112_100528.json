@@ -1,0 +1,65 @@
+[
+  {
+    "env": "local",
+    "stream": false,
+    "error": "('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))",
+    "timestamp": "2026-11-12T10:05:13.038339"
+  },
+  {
+    "env": "local",
+    "stream": true,
+    "error": "HTTPConnectionPool(host='127.0.0.1', port=8780): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', port=8780): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it\"))",
+    "timestamp": "2026-11-12T10:05:17.066073"
+  },
+  {
+    "env": "vps",
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "accfb7c0-baf4-4033-b516-72e0c5f08025",
+      "x-agentgate-mode": "bridge",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "532",
+      "date": "Thu, 12 Nov 2026 02:05:23 GMT"
+    },
+    "elapsed_sec": 3.879,
+    "timestamp": "2026-11-12T10:05:22.945999",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"reasoning_content\":\"\u26a1 run shell \u2192 ls -la\",\"role\":\"assistant\",\"tool_calls\":[{\"function\":{\"arguments\":\"{\\\"command\\\":\\\"ls -la\\\"}\",\"name\":\"shell\"},\"id\":\"call-e8989e1e-7278-4ca6-a409-cbbe83d55cbb\",\"type\":\"function\"}]}}],\"created\":1794449123,\"id\":\"chatcmpl-29b69295-11fd-428f-aa3d-713873bcb588\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"session_id\":\"33951727-3b00-4991-b240-f7ce40a2ee94\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "env": "vps",
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "a712a53d-a4f3-4a23-b226-f4b7c383fd25",
+      "x-agentgate-mode": "bridge",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 02:05:25 GMT"
+    },
+    "elapsed_sec": 0.014,
+    "timestamp": "2026-11-12T10:05:24.962189",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794449125,\"id\":\"chatcmpl-9df62869-8b34-4927-a464-bf477137b72c\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\u26a1 run shell \u2192 ls -la\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794449125,\"id\":\"chatcmpl-9df62869-8b34-4927-a464-bf477137b72c\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\",\"name\":\"shell\"},\"id\":\"call-01ddbd44-18b7-4c27-967c-4bbaf2b92b99\",\"index\":0,\"type\":\"function\"}]},\"finish_reason\":null,\"index\":0}],\"created\":1794449125,\"id\":\"chatcmpl-9df62869-8b34-4927-a464-bf477137b72c\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"{\\\"command\\\":\\\"ls -la\\\"}\"},\"index\":0}]},\"finish_reason\":null,\"index\":0}],\"created\":1794449125,\"id\":\"chatcmpl-9df62869-8b34-4927-a464-bf477137b72c\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\",\"index\":0}],\"created\":1794449125,\"id\":\"chatcmpl-9df62869-8b34-4927-a464-bf477137b72c\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 7
+  }
+]

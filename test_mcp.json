@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "agentgate-tools": {
+      "command": "agentgate",
+      "args": [
+        "mcp-shim",
+        "--session",
+        "test-session",
+        "--token",
+        "test-token",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8786"
+      ],
+      "env": {}
+    }
+  }
+}

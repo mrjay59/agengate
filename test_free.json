@@ -1,0 +1,1 @@
+{"model": "opencode/crouton-alpha-free", "messages": [{"role": "user", "content": "Write a short hello world function in Python"}], "stream": true, "tools": [{"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]}}}]}

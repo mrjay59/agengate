@@ -1,0 +1,1 @@
+{"model": "opencode/beam-free", "messages": [{"role": "user", "content": "Write a short hello world function in Python"}], "stream": false}

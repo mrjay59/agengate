@@ -1,0 +1,82 @@
+[2m2026-11-09T10:43:21.173991Z[0m [32m INFO[0m [2magentgate[0m[2m:[0m Augmented PATH for CLI discovery [3mpath[0m[2m=[0mC:\Users\EDN\Documents\AION\project\agentgate\target\debug\build\ring-23b4e2522c8ae85d\out;C:\Users\EDN\Documents\AION\project\agentgate\target\debug;C:\Users\EDN\Documents\AION\project\agentgate\target\debug\deps;C:\Users\EDN\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib\rustlib\x86_64-pc-windows-msvc\lib;C:\Program Files (x86)\Common Files\Oracle\Java\javapath;C:\Program Files\Eclipse Adoptium\jre-17.0.8.101-hotspot\bin;C:\Program Files\Python312\Scripts\;C:\Program Files\Python312\;C:\Program Files\Common Files\Oracle\Java\javapath;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\Microsoft SQL Server\120\Tools\Binn\;C:\Program Files\PuTTY\;C:\Program Files\Elixir\bin;C:\Users\zaenul\AppData\Local\Programs\Git\bin;C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit\;C:\Program Files\dotnet\;C:\Users\zaenul.EDNINDO\AppData\Local\Programs\Python\Python313;C:\Program Files\Git\cmd;C:\ProgramData\chocolatey\bin;C:\Program Files\Tailscale\;C:\Program Files\Go\bin;C:\Program Files (x86)\Bitvise SSH Client;C:\Program Files\nodejs\;C:\Program Files\Microsoft SQL Server\150\Tools\Binn\;C:\Users\EDN\Documents\tester\scrcpy-win64-v3.3.3\;C:\Users\EDN\.qoder\entry;C:\Users\EDN\.cargo\bin;C:\Users\EDN\.local\bin;C:\Users\EDN\AppData\Local\Microsoft\WindowsApps;C:\Users\EDN\AppData\Local\Programs\Microsoft VS Code\bin;C:\Program Files (x86)\Nmap;C:\Users\EDN\AppData\Local\Programs\Ollama;C:\Users\EDN\AppData\Local\TEDI;C:\Users\EDN\go\bin;C:\Users\EDN\AppData\Roaming\npm;C:\Users\EDN\AppData\Local\OfficeCLI;C:\Users\EDN\.qoder\bin\qodercli;C:\Users\EDN\AppData\Local\pnpm;C:\Program Files\Git\bin;C:\Users\EDN\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin
+[2m2026-11-09T10:43:21.174728Z[0m [32m INFO[0m [2magentgate[0m[2m:[0m Loading provider config [3mid[0m[2m=[0mopencode [3mtransport[0m[2m=[0mSome("stdio_shim")
+[2m2026-11-09T10:43:21.175051Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Registering provider: opencode
+[2m2026-11-09T10:43:21.176297Z[0m [33m WARN[0m [2magentgate::provider[0m[2m:[0m check_available: NOT found on PATH [3mprovider[0m[2m=[0mopencode [3mbin[0m[2m=[0mopencode
+[2m2026-11-09T10:43:21.176607Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Provider opencode is NOT available
+[2m2026-11-09T10:43:21.311791Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m check_available: resolved [3mprovider[0m[2m=[0mopencode [3mbin[0m[2m=[0mopencode [3mresolved[0m[2m=[0mopencode.cmd [3mstatus[0m[2m=[0mexit code: 0
+[2m2026-11-09T10:43:21.312130Z[0m [32m INFO[0m [2magentgate[0m[2m:[0m Loading provider config [3mid[0m[2m=[0mgemini [3mtransport[0m[2m=[0mNone
+[2m2026-11-09T10:43:21.312371Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Registering provider: gemini
+[2m2026-11-09T10:43:21.313411Z[0m [33m WARN[0m [2magentgate::provider[0m[2m:[0m check_available: NOT found on PATH [3mprovider[0m[2m=[0mgemini [3mbin[0m[2m=[0mgemini
+[2m2026-11-09T10:43:21.313640Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Provider gemini is NOT available
+[2m2026-11-09T10:43:22.991040Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m check_available: resolved [3mprovider[0m[2m=[0mgemini [3mbin[0m[2m=[0mgemini [3mresolved[0m[2m=[0mgemini.cmd [3mstatus[0m[2m=[0mexit code: 0
+[2m2026-11-09T10:43:22.992112Z[0m [32m INFO[0m [2magentgate[0m[2m:[0m Loading provider config [3mid[0m[2m=[0mollama [3mtransport[0m[2m=[0mNone
+[2m2026-11-09T10:43:22.992371Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Registering provider: ollama
+[2m2026-11-09T10:43:23.028495Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m check_available: resolved [3mprovider[0m[2m=[0mollama [3mbin[0m[2m=[0mollama [3mstatus[0m[2m=[0mexit code: 0
+[2m2026-11-09T10:43:23.028801Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m Provider ollama is available
+[2m2026-11-09T10:43:23.074290Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m check_available: resolved [3mprovider[0m[2m=[0mollama [3mbin[0m[2m=[0mollama [3mresolved[0m[2m=[0mollama.exe [3mstatus[0m[2m=[0mexit code: 0
+[2m2026-11-09T10:43:23.076645Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m scan_models: starting [3mprovider[0m[2m=[0mopencode
+[2m2026-11-09T10:43:23.076768Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m scan_models: starting [3mprovider[0m[2m=[0mgemini
+[2m2026-11-09T10:43:23.076840Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m scan_models: starting [3mprovider[0m[2m=[0mollama
+[2m2026-11-09T10:43:23.076902Z[0m [34mDEBUG[0m [2magentgate::provider[0m[2m:[0m scan_models: executing command [3mprovider[0m[2m=[0mopencode [3mbin[0m[2m=[0mopencode [3mcmd[0m[2m=[0m["models"]
+[2m2026-11-09T10:43:23.076977Z[0m [32m INFO[0m [2magentgate[0m[2m:[0m Starting server on 0.0.0.0:8787
+[2m2026-11-09T10:43:23.077050Z[0m [34mDEBUG[0m [2magentgate::provider[0m[2m:[0m scan_models: executing command [3mprovider[0m[2m=[0mgemini [3mbin[0m[2m=[0mgemini [3mcmd[0m[2m=[0m["list", "--format", "json"]
+[2m2026-11-09T10:43:23.077208Z[0m [34mDEBUG[0m [2magentgate::provider[0m[2m:[0m scan_models: executing command [3mprovider[0m[2m=[0mollama [3mbin[0m[2m=[0mollama [3mcmd[0m[2m=[0m["list"]
+[2m2026-11-09T10:43:23.078639Z[0m [34mDEBUG[0m [2magentgate::provider[0m[2m:[0m Executing via PATH with ext: opencode.cmd
+[2m2026-11-09T10:43:23.078732Z[0m [34mDEBUG[0m [2magentgate::provider[0m[2m:[0m Executing via PATH with ext: gemini.cmd
+[2m2026-11-09T10:43:23.080556Z[0m [34mDEBUG[0m [2magentgate::provider[0m[2m:[0m Executing via PATH with ext: ollama.exe
+[2m2026-11-09T10:43:23.161687Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m scan_models: completed [3mprovider[0m[2m=[0mollama [3mmodels_found[0m[2m=[0m1 [3melapsed_ms[0m[2m=[0m84
+[2m2026-11-09T10:43:23.162156Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m scan_models completed [3mprovider[0m[2m=[0mollama [3melapsed_ms[0m[2m=[0m85
+[2m2026-11-09T10:43:23.248280Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m scan_models: completed [3mprovider[0m[2m=[0mopencode [3mmodels_found[0m[2m=[0m82 [3melapsed_ms[0m[2m=[0m171
+[2m2026-11-09T10:43:23.248777Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m scan_models completed [3mprovider[0m[2m=[0mopencode [3melapsed_ms[0m[2m=[0m172
+[2m2026-11-09T10:43:24.830205Z[0m [34mDEBUG[0m [2magentgate::provider[0m[2m:[0m scan_models: command stderr [3mprovider[0m[2m=[0mgemini [3mstderr[0m[2m=[0mUnknown argument: format
+Usage: gemini [options] [command]
+
+Gemini CLI - Defaults to interactive mode. Use -p/--prompt for non-interactive (headless) mode.
+
+Commands:
+  gemini mcp                   Manage MCP servers
+  gemini extensions <command>  Manage Gemini CLI extensions.  [aliases: extension]
+  gemini skills <command>      Manage agent skills.  [aliases: skill]
+  gemini hooks <command>       Manage Gemini CLI hooks.  [aliases: hook]
+  gemini gemma                 Manage local Gemma model routing
+  gemini [query..]             Launch Gemini CLI  [default]
+
+Positionals:
+  query  Initial prompt. Runs in interactive mode by default; use -p/--prompt for non-interactive.
+
+Options:
+  -d, --debug                     Run in debug mode (open debug console with F12)  [boolean] [default: false]
+  -m, --model                     Model  [string]
+  -p, --prompt                    Run in non-interactive (headless) mode with the given prompt. Appended to input on stdin (if any).  [string]
+  -i, --prompt-interactive        Execute the provided prompt and continue in interactive mode  [string]
+      --skip-trust                Trust the current workspace for this session.  [boolean] [default: false]
+  -w, --worktree                  Start Gemini in a new git worktree. If no name is provided, one is generated automatically.  [string]
+  -s, --sandbox                   Run in sandbox?  [boolean]
+  -y, --yolo                      Automatically accept all actions (aka YOLO mode, see https://www.youtube.com/watch?v=xvFZjo5PgG0 for more details)?  [boolean] [default: false]
+      --approval-mode             Set the approval mode: default (prompt for approval), auto_edit (auto-approve edit tools), yolo (auto-approve all tools), plan (read-only mode)  [string] [choices: "default", "auto_edit", "yolo", "plan"]
+      --policy                    Additional policy files or directories to load (comma-separated or multiple --policy)  [array]
+      --admin-policy              Additional admin policy files or directories to load (comma-separated or multiple --admin-policy)  [array]
+      --acp                       Starts the agent in ACP mode  [boolean]
+      --experimental-acp          Starts the agent in ACP mode (deprecated, use --acp instead)  [boolean]
+      --allowed-mcp-server-names  Allowed MCP server names  [array]
+      --allowed-tools             [DEPRECATED: Use Policy Engine instead See https://geminicli.com/docs/core/policy-engine] Tools that are allowed to run without confirmation  [array]
+  -e, --extensions                A list of extensions to use. If not provided, all extensions are used.  [array]
+  -l, --list-extensions           List all available extensions and exit.  [boolean]
+  -r, --resume                    Resume a previous session. Use "latest" for most recent or index number (e.g. --resume 5)  [string]
+      --session-file              Load a session from a JSON file  [string]
+      --session-id                Start a new session with a manually provided UUID.  [string]
+      --list-sessions             List available sessions for the current project and exit.  [boolean]
+      --delete-session            Delete a session by index number (use --list-sessions to see available sessions).  [string]
+      --include-directories       Additional directories to include in the workspace (comma-separated or multiple --include-directories)  [array]
+      --screen-reader             Enable screen reader mode for accessibility.  [boolean]
+  -o, --output-format             The format of the CLI output.  [string] [choices: "text", "json", "stream-json"]
+      --raw-output                Disable sanitization of model output (e.g. allow ANSI escape sequences). WARNING: This can be a security risk if the model output is untrusted.  [boolean]
+      --accept-raw-output-risk    Suppress the security warning when using --raw-output.  [boolean]
+  -v, --version                   Show version number  [boolean]
+  -h, --help                      Show help  [boolean]
+
+[2m2026-11-09T10:43:24.832480Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m scan_models: completed [3mprovider[0m[2m=[0mgemini [3mmodels_found[0m[2m=[0m0 [3melapsed_ms[0m[2m=[0m1755
+[2m2026-11-09T10:43:24.832759Z[0m [32m INFO[0m [2magentgate::provider[0m[2m:[0m scan_models: no models found, falling back to config [3mprovider[0m[2m=[0mgemini
+[2m2026-11-09T10:43:24.833126Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m scan_models completed [3mprovider[0m[2m=[0mgemini [3melapsed_ms[0m[2m=[0m1756
+[2m2026-11-09T10:43:24.833680Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m list_models completed [3mtotal_providers[0m[2m=[0m3 [3mcached[0m[2m=[0m3 [3mtotal_models[0m[2m=[0m84 [3melapsed_ms[0m[2m=[0m1757
+[2m2026-11-09T10:43:24.833953Z[0m [32m INFO[0m [2magentgate::service[0m[2m:[0m model cache warmed [3mmodels[0m[2m=[0m84 [3melapsed_ms[0m[2m=[0m1757

@@ -1,0 +1,95 @@
+{
+  "model": "agg/opencode/beam-free",
+  "results": [
+    {
+      "label": "shell/bash",
+      "tool_requested": "shell",
+      "expected_name": "Shell",
+      "http_status": 500,
+      "mode_header": null,
+      "emitted_name": null,
+      "status": "ERROR"
+    },
+    {
+      "label": "read/cat/view",
+      "tool_requested": "read",
+      "expected_name": "Read",
+      "http_status": 500,
+      "mode_header": null,
+      "emitted_name": null,
+      "status": "ERROR"
+    },
+    {
+      "label": "write/create",
+      "tool_requested": "write",
+      "expected_name": "Write",
+      "http_status": 500,
+      "mode_header": null,
+      "emitted_name": null,
+      "status": "ERROR"
+    },
+    {
+      "label": "glob/find",
+      "tool_requested": "glob",
+      "expected_name": "Glob",
+      "http_status": 500,
+      "mode_header": null,
+      "emitted_name": null,
+      "status": "ERROR"
+    },
+    {
+      "label": "grep",
+      "tool_requested": "grep",
+      "expected_name": "Grep",
+      "http_status": 500,
+      "mode_header": null,
+      "emitted_name": null,
+      "status": "ERROR"
+    },
+    {
+      "label": "edit/patch",
+      "tool_requested": "edit",
+      "expected_name": "Edit",
+      "http_status": 500,
+      "mode_header": null,
+      "emitted_name": null,
+      "status": "ERROR"
+    },
+    {
+      "label": "list/ls",
+      "tool_requested": "list",
+      "expected_name": "List",
+      "http_status": 500,
+      "mode_header": null,
+      "emitted_name": null,
+      "status": "ERROR"
+    },
+    {
+      "label": "execute/run/cmd",
+      "tool_requested": "execute",
+      "expected_name": "Execute",
+      "http_status": 500,
+      "mode_header": null,
+      "emitted_name": null,
+      "status": "ERROR"
+    },
+    {
+      "label": "bash",
+      "tool_requested": "bash",
+      "expected_name": "Bash",
+      "http_status": 500,
+      "mode_header": null,
+      "emitted_name": null,
+      "status": "ERROR"
+    },
+    {
+      "label": "cat",
+      "tool_requested": "cat",
+      "expected_name": "Cat",
+      "http_status": 500,
+      "mode_header": null,
+      "emitted_name": null,
+      "status": "ERROR"
+    }
+  ]
+}

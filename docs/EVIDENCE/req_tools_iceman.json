@@ -1,0 +1,1 @@
+{"model":"agg/opencode/iceman-free","messages":[{"role":"user","content":"jam berapa sekarang? panggil get_time"}],"stream":false,"tools":[{"type":"function","function":{"name":"get_time","description":"Get current time","parameters":{"type":"object","properties":{}}}}]}

@@ -1,0 +1,105 @@
+[
+  {
+    "env": "local",
+    "stream": false,
+    "http_status": 500,
+    "headers": {
+      "content-type": "application/json",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "209",
+      "date": "Thu, 12 Nov 2026 02:03:57 GMT"
+    },
+    "elapsed_sec": 2.629,
+    "timestamp": "2026-11-12T10:03:57.233277",
+    "raw_body": "{\"error\":{\"code\":\"internal_error\",\"message\":\"Internal error: provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.\",\"type\":\"provider_error\"}}",
+    "json_error": {
+      "code": "internal_error",
+      "message": "Internal error: provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.",
+      "type": "provider_error"
+    }
+  },
+  {
+    "env": "local",
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "b44d9646-3d8d-4ab7-ada4-bc92ccf85a4f",
+      "x-agentgate-mode": "bridge",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 02:03:59 GMT"
+    },
+    "elapsed_sec": 0.014,
+    "timestamp": "2026-11-12T10:03:59.248650",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794449039,\"id\":\"chatcmpl-c85c0a1f-de17-498c-90d9-a526486a0a92\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"error\",\"index\":0}],\"created\":1794449039,\"error\":{\"code\":\"provider.free-limit\",\"message\":\"provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.\"},\"id\":\"chatcmpl-c85c0a1f-de17-498c-90d9-a526486a0a92\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 4,
+    "stream_error": {
+      "code": "provider.free-limit",
+      "message": "provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models."
+    }
+  },
+  {
+    "env": "vps",
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "bc470a9d-0aa8-441b-b868-d5c7643e3ecb",
+      "x-agentgate-mode": "bridge",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "532",
+      "date": "Thu, 12 Nov 2026 02:04:06 GMT"
+    },
+    "elapsed_sec": 3.942,
+    "timestamp": "2026-11-12T10:04:06.550253",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"reasoning_content\":\"\u26a1 run shell \u2192 ls -la\",\"role\":\"assistant\",\"tool_calls\":[{\"function\":{\"arguments\":\"{\\\"command\\\":\\\"ls -la\\\"}\",\"name\":\"shell\"},\"id\":\"call-a3571476-fe61-4afd-843f-6cf64cf71719\",\"type\":\"function\"}]}}],\"created\":1794449046,\"id\":\"chatcmpl-1368d680-f910-489a-993b-11f5581d499f\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"session_id\":\"72a03d31-0d44-4b87-b1d1-0e33215a55f1\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "env": "vps",
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "6b9762a5-a215-40c4-b856-91c907961349",
+      "x-agentgate-mode": "bridge",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 02:04:08 GMT"
+    },
+    "elapsed_sec": 0.002,
+    "timestamp": "2026-11-12T10:04:08.553108",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794449048,\"id\":\"chatcmpl-d5bfe65d-2362-4c82-8911-4286692bcc24\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\u26a1 run shell \u2192 ls -la\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794449048,\"id\":\"chatcmpl-d5bfe65d-2362-4c82-8911-4286692bcc24\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\",\"name\":\"shell\"},\"id\":\"call-d9b1112d-6c2d-4c3b-b706-53fa52ce4086\",\"index\":0,\"type\":\"function\"}]},\"finish_reason\":null,\"index\":0}],\"created\":1794449048,\"id\":\"chatcmpl-d5bfe65d-2362-4c82-8911-4286692bcc24\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"{\\\"command\\\":\\\"ls -la\\\"}\"},\"index\":0}]},\"finish_reason\":null,\"index\":0}],\"created\":1794449048,\"id\":\"chatcmpl-d5bfe65d-2362-4c82-8911-4286692bcc24\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\",\"index\":0}],\"created\":1794449048,\"id\":\"chatcmpl-d5bfe65d-2362-4c82-8911-4286692bcc24\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 7
+  }
+]

@@ -1,0 +1,502 @@
+[
+  {
+    "attempt": 1,
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "d2f5c7b9-5a9c-4f2d-8f25-305761304f51",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "404",
+      "date": "Thu, 12 Nov 2026 01:04:46 GMT"
+    },
+    "elapsed_sec": 2.154,
+    "timestamp": "2026-11-12T09:04:46.911829",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hello! How can I help you today?\",\"reasoning_content\":\"The user wants me to say hello in one sentence. Simple task.\",\"role\":\"assistant\"}}],\"created\":1794445486,\"id\":\"chatcmpl-b3699539-b858-45bc-b808-3a523e9d3dde\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "attempt": 2,
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "a17f43e9-bc8c-4a75-823b-db0b368b0419",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "397",
+      "date": "Thu, 12 Nov 2026 01:04:49 GMT"
+    },
+    "elapsed_sec": 1.334,
+    "timestamp": "2026-11-12T09:04:49.248176",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hello there! How can I help you today?\",\"reasoning_content\":\"The user wants a one-sentence greeting. Simple.\",\"role\":\"assistant\"}}],\"created\":1794445489,\"id\":\"chatcmpl-bd10ed33-5ae7-4b53-995c-3704f8752fa4\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "attempt": 3,
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "97af0ea4-dc23-4485-95cc-87a97822f598",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "395",
+      "date": "Thu, 12 Nov 2026 01:04:51 GMT"
+    },
+    "elapsed_sec": 1.312,
+    "timestamp": "2026-11-12T09:04:51.570438",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hello, nice to meet you!\",\"reasoning_content\":\"Simple request: say hello in one sentence. No tools needed.\",\"role\":\"assistant\"}}],\"created\":1794445491,\"id\":\"chatcmpl-8f61ae31-ce95-4e5e-933a-a72aaf501ac5\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "attempt": 4,
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "c164d4e3-c94c-43a1-a070-4b7efb818efc",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "407",
+      "date": "Thu, 12 Nov 2026 01:04:53 GMT"
+    },
+    "elapsed_sec": 1.241,
+    "timestamp": "2026-11-12T09:04:53.812138",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hello! How can I help you today?\",\"reasoning_content\":\"The user wants me to say hello in one sentence. Simple request.\",\"role\":\"assistant\"}}],\"created\":1794445493,\"id\":\"chatcmpl-95f7dab7-ac53-4bbd-8628-11e58ec259e1\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "attempt": 5,
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "8d40b01e-3653-4bc5-b12b-6b1292d0a153",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "406",
+      "date": "Thu, 12 Nov 2026 01:04:56 GMT"
+    },
+    "elapsed_sec": 1.238,
+    "timestamp": "2026-11-12T09:04:56.057243",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hello! How can I help you today?\",\"reasoning_content\":\"The user wants me to say hello in one sentence. That's simple.\",\"role\":\"assistant\"}}],\"created\":1794445496,\"id\":\"chatcmpl-41d2324a-2352-4b11-9743-c095495f3732\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "attempt": 6,
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "004bc53d-9573-4740-9d27-d9aef80686de",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "429",
+      "date": "Thu, 12 Nov 2026 01:04:58 GMT"
+    },
+    "elapsed_sec": 1.815,
+    "timestamp": "2026-11-12T09:04:58.881086",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hello! I'm here and ready to help you with your tasks.\",\"reasoning_content\":\"The user wants me to say hello in one sentence. Simple request.\",\"role\":\"assistant\"}}],\"created\":1794445498,\"id\":\"chatcmpl-b854e1aa-feee-441e-b4d5-e3417f2411bf\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "attempt": 7,
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "71d2a96f-8be9-481d-afbb-2d08c40f8886",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "409",
+      "date": "Thu, 12 Nov 2026 01:05:01 GMT"
+    },
+    "elapsed_sec": 1.297,
+    "timestamp": "2026-11-12T09:05:01.180843",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hello! I'm here and ready to help.\",\"reasoning_content\":\"The user wants me to say hello in one sentence. Simple request.\",\"role\":\"assistant\"}}],\"created\":1794445501,\"id\":\"chatcmpl-c6a0df54-5af3-4650-b83d-cdade3f7b131\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "attempt": 8,
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "5426ce55-8a83-40d4-8fcd-807c53be2ef6",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "406",
+      "date": "Thu, 12 Nov 2026 01:05:18 GMT"
+    },
+    "elapsed_sec": 16.754,
+    "timestamp": "2026-11-12T09:05:18.938585",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hello! How can I help you today?\",\"reasoning_content\":\"The user wants me to say hello in one sentence. That's simple.\",\"role\":\"assistant\"}}],\"created\":1794445518,\"id\":\"chatcmpl-01792800-4a1a-4da2-b6de-f040a44a6698\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "attempt": 9,
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "9c9b857a-cf3e-4836-bb65-6bfdede7b428",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "407",
+      "date": "Thu, 12 Nov 2026 01:05:21 GMT"
+    },
+    "elapsed_sec": 1.266,
+    "timestamp": "2026-11-12T09:05:21.205553",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hello! How can I help you today?\",\"reasoning_content\":\"The user wants me to say hello in one sentence. Simple request.\",\"role\":\"assistant\"}}],\"created\":1794445521,\"id\":\"chatcmpl-564b8d4b-02cd-4a39-a39a-73b735bea234\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "attempt": 10,
+    "stream": false,
+    "http_status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-agentgate-run": "0844c1ba-a490-4da9-8bc9-bd2af67191ce",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "final",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "396",
+      "date": "Thu, 12 Nov 2026 01:05:23 GMT"
+    },
+    "elapsed_sec": 1.532,
+    "timestamp": "2026-11-12T09:05:23.741196",
+    "raw_body": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"Hello! How can I help you today?\",\"reasoning_content\":\"The user just wants a one-sentence greeting. Simple.\",\"role\":\"assistant\"}}],\"created\":1794445523,\"id\":\"chatcmpl-cc9307cc-4974-4381-8a23-15f03e18979f\",\"model\":\"opencode/beam-free\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":0,\"prompt_tokens\":0,\"total_tokens\":0}}"
+  },
+  {
+    "attempt": 1,
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "f0b94012-92c5-4ebe-b63f-923e90f6305b",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:05:24 GMT"
+    },
+    "elapsed_sec": 0.027,
+    "timestamp": "2026-11-12T09:05:24.774112",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445524,\"id\":\"chatcmpl-49674878-0db8-4a0d-b912-64bd4beb2f91\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to say hello in one sentence. This is simple.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445524,\"id\":\"chatcmpl-49674878-0db8-4a0d-b912-64bd4beb2f91\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello! I'm here and ready to help.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445524,\"id\":\"chatcmpl-49674878-0db8-4a0d-b912-64bd4beb2f91\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1794445524,\"id\":\"chatcmpl-49674878-0db8-4a0d-b912-64bd4beb2f91\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 6
+  },
+  {
+    "attempt": 2,
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "7aabf0e2-e3af-4c65-995f-074cb3078945",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:05:27 GMT"
+    },
+    "elapsed_sec": 0.014,
+    "timestamp": "2026-11-12T09:05:27.205770",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445527,\"id\":\"chatcmpl-35911d83-8d2f-4b85-8c97-57016ac94b93\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to say hello in one sentence. Simple request.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445527,\"id\":\"chatcmpl-35911d83-8d2f-4b85-8c97-57016ac94b93\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello there! I'm here to help you with whatever you need.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445527,\"id\":\"chatcmpl-35911d83-8d2f-4b85-8c97-57016ac94b93\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1794445527,\"id\":\"chatcmpl-35911d83-8d2f-4b85-8c97-57016ac94b93\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 6
+  },
+  {
+    "attempt": 3,
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "35760cc0-dcca-4945-a05b-c2cdb3639d79",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:05:29 GMT"
+    },
+    "elapsed_sec": 0.022,
+    "timestamp": "2026-11-12T09:05:29.493685",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445529,\"id\":\"chatcmpl-a878658e-3b1f-481a-b6ae-dfe3c9ad8b8b\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user just wants a greeting in one sentence. Simple.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445529,\"id\":\"chatcmpl-a878658e-3b1f-481a-b6ae-dfe3c9ad8b8b\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello! How can I help you today?\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445529,\"id\":\"chatcmpl-a878658e-3b1f-481a-b6ae-dfe3c9ad8b8b\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1794445529,\"id\":\"chatcmpl-a878658e-3b1f-481a-b6ae-dfe3c9ad8b8b\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 6
+  },
+  {
+    "attempt": 4,
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "518d11a9-cfc7-4782-a22a-849955836e42",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:05:31 GMT"
+    },
+    "elapsed_sec": 0.024,
+    "timestamp": "2026-11-12T09:05:31.753852",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445531,\"id\":\"chatcmpl-5eab1888-61d4-487a-b120-450ced7c80a5\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user just wants a simple greeting. I'll respond with a single sentence.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445531,\"id\":\"chatcmpl-5eab1888-61d4-487a-b120-450ced7c80a5\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello! How can I help you today?\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445531,\"id\":\"chatcmpl-5eab1888-61d4-487a-b120-450ced7c80a5\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1794445531,\"id\":\"chatcmpl-5eab1888-61d4-487a-b120-450ced7c80a5\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 6
+  },
+  {
+    "attempt": 5,
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "ff71ef5a-8b10-48ac-9824-5e69fcd13c24",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:05:34 GMT"
+    },
+    "elapsed_sec": 0.018,
+    "timestamp": "2026-11-12T09:05:34.145579",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445534,\"id\":\"chatcmpl-a3503606-0150-4941-a738-bec76fee51e1\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to say hello in one sentence. Simple.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445534,\"id\":\"chatcmpl-a3503606-0150-4941-a738-bec76fee51e1\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello! How can I help you today?\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445534,\"id\":\"chatcmpl-a3503606-0150-4941-a738-bec76fee51e1\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1794445534,\"id\":\"chatcmpl-a3503606-0150-4941-a738-bec76fee51e1\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 6
+  },
+  {
+    "attempt": 6,
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "fee94053-1046-4a59-8c86-3b0366e6127e",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:05:36 GMT"
+    },
+    "elapsed_sec": 0.024,
+    "timestamp": "2026-11-12T09:05:36.604249",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445536,\"id\":\"chatcmpl-88c7f6d8-1cd9-47f3-b2ba-caa63ba6e143\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user just wants me to say hello in one sentence. Simple request.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445536,\"id\":\"chatcmpl-88c7f6d8-1cd9-47f3-b2ba-caa63ba6e143\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello there! It's nice to meet you.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445536,\"id\":\"chatcmpl-88c7f6d8-1cd9-47f3-b2ba-caa63ba6e143\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1794445536,\"id\":\"chatcmpl-88c7f6d8-1cd9-47f3-b2ba-caa63ba6e143\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 6
+  },
+  {
+    "attempt": 7,
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "37ed5774-bc41-4dd8-95b8-0991bbbf97f2",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:05:39 GMT"
+    },
+    "elapsed_sec": 0.023,
+    "timestamp": "2026-11-12T09:05:39.163833",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445539,\"id\":\"chatcmpl-b42a6fff-aaae-4f90-8257-3872fc13b2cf\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to say hello in one sentence. Simple request.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445539,\"id\":\"chatcmpl-b42a6fff-aaae-4f90-8257-3872fc13b2cf\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello! How can I help you today?\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445539,\"id\":\"chatcmpl-b42a6fff-aaae-4f90-8257-3872fc13b2cf\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1794445539,\"id\":\"chatcmpl-b42a6fff-aaae-4f90-8257-3872fc13b2cf\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 6
+  },
+  {
+    "attempt": 8,
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "416e153a-2bb1-4eb3-a7bc-a46c7e2986ed",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:05:41 GMT"
+    },
+    "elapsed_sec": 0.025,
+    "timestamp": "2026-11-12T09:05:41.490253",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445541,\"id\":\"chatcmpl-54270de1-3e38-4518-bb96-1730fa79c70a\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to say hello in one sentence. Simple request.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445541,\"id\":\"chatcmpl-54270de1-3e38-4518-bb96-1730fa79c70a\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello! How can I help you today?\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445541,\"id\":\"chatcmpl-54270de1-3e38-4518-bb96-1730fa79c70a\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1794445541,\"id\":\"chatcmpl-54270de1-3e38-4518-bb96-1730fa79c70a\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 6
+  },
+  {
+    "attempt": 9,
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "4bd0e405-ff53-4de3-9fbf-529dbeaae69b",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:05:43 GMT"
+    },
+    "elapsed_sec": 0.023,
+    "timestamp": "2026-11-12T09:05:43.747621",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445543,\"id\":\"chatcmpl-840af074-8873-4039-b376-634456a755b8\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to say hello in one sentence. Simple.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445543,\"id\":\"chatcmpl-840af074-8873-4039-b376-634456a755b8\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello! How can I help you today?\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445543,\"id\":\"chatcmpl-840af074-8873-4039-b376-634456a755b8\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1794445543,\"id\":\"chatcmpl-840af074-8873-4039-b376-634456a755b8\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 6
+  },
+  {
+    "attempt": 10,
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "28c0784e-3446-4150-b608-d52c915758e9",
+      "x-agentgate-mode": "chat_only",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:05:46 GMT"
+    },
+    "elapsed_sec": 0.02,
+    "timestamp": "2026-11-12T09:05:46.122106",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445546,\"id\":\"chatcmpl-f0352860-252b-4c8f-9751-00d7119f9d96\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to say hello in one sentence. Simple request.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445546,\"id\":\"chatcmpl-f0352860-252b-4c8f-9751-00d7119f9d96\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{\"content\":\"Hello! I'm here and ready to help you with any tasks you have.\"},\"finish_reason\":null,\"index\":0}],\"created\":1794445546,\"id\":\"chatcmpl-f0352860-252b-4c8f-9751-00d7119f9d96\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\",\"index\":0}],\"created\":1794445546,\"id\":\"chatcmpl-f0352860-252b-4c8f-9751-00d7119f9d96\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 6
+  }
+]

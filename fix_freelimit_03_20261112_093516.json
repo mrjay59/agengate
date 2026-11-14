@@ -1,0 +1,106 @@
+[
+  {
+    "env": "local",
+    "stream": false,
+    "http_status": 500,
+    "headers": {
+      "content-type": "application/json",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "209",
+      "date": "Thu, 12 Nov 2026 01:35:04 GMT"
+    },
+    "elapsed_sec": 1.75,
+    "timestamp": "2026-11-12T09:35:04.425083",
+    "raw_body": "{\"error\":{\"code\":\"internal_error\",\"message\":\"Internal error: provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.\",\"type\":\"provider_error\"}}",
+    "json_error": {
+      "code": "internal_error",
+      "message": "Internal error: provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.",
+      "type": "provider_error"
+    }
+  },
+  {
+    "env": "local",
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "0a0af682-6b22-40d8-b733-a73ec4cc8a87",
+      "x-agentgate-mode": "bridge",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:35:06 GMT"
+    },
+    "elapsed_sec": 0.028,
+    "timestamp": "2026-11-12T09:35:06.454277",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794447306,\"id\":\"chatcmpl-6864d181-1047-4602-8af7-77615378fccc\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"error\",\"index\":0}],\"created\":1794447306,\"error\":{\"code\":\"provider.free-limit\",\"message\":\"provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.\"},\"id\":\"chatcmpl-6864d181-1047-4602-8af7-77615378fccc\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 4,
+    "stream_error": {
+      "code": "provider.free-limit",
+      "message": "provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models."
+    }
+  },
+  {
+    "env": "vps",
+    "stream": false,
+    "http_status": 500,
+    "headers": {
+      "content-type": "application/json",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "content-length": "209",
+      "date": "Thu, 12 Nov 2026 01:35:11 GMT"
+    },
+    "elapsed_sec": 1.335,
+    "timestamp": "2026-11-12T09:35:11.279848",
+    "raw_body": "{\"error\":{\"code\":\"internal_error\",\"message\":\"Internal error: provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.\",\"type\":\"provider_error\"}}",
+    "json_error": {
+      "code": "internal_error",
+      "message": "Internal error: provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.",
+      "type": "provider_error"
+    }
+  },
+  {
+    "env": "vps",
+    "stream": true,
+    "http_status": 200,
+    "headers": {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+      "x-agentgate-run": "6dfc71f2-0722-448a-b360-ad2a8d7fd695",
+      "x-agentgate-mode": "bridge",
+      "x-agentgate-reasoning-format": "reasoning_content",
+      "x-agentgate-reasoning-kind": "activity",
+      "x-agentgate-reasoning-granularity": "block",
+      "vary": "origin, access-control-request-method, access-control-request-headers",
+      "access-control-allow-origin": "*",
+      "transfer-encoding": "chunked",
+      "date": "Thu, 12 Nov 2026 01:35:13 GMT"
+    },
+    "elapsed_sec": 0.003,
+    "timestamp": "2026-11-12T09:35:13.286299",
+    "raw_chunks": [
+      "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794447313,\"id\":\"chatcmpl-162c01ca-6498-4eca-b93f-d6b029a9bf24\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      ": ping",
+      "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"error\",\"index\":0}],\"created\":1794447313,\"error\":{\"code\":\"provider.free-limit\",\"message\":\"provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.\"},\"id\":\"chatcmpl-162c01ca-6498-4eca-b93f-d6b029a9bf24\",\"model\":\"agg/opencode/beam-free\",\"object\":\"chat.completion.chunk\"}",
+      "data: [DONE]"
+    ],
+    "chunk_count": 4,
+    "stream_error": {
+      "code": "provider.free-limit",
+      "message": "provider_error: Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models."
+    }
+  }
+]

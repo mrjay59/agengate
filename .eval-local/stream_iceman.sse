@@ -1,0 +1,12 @@
+data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null,"index":0}],"created":1794364091,"id":"chatcmpl-4ab58ef3-0e31-46c0-9f5d-ca164c26a2e8","model":"agg/opencode/iceman-free","object":"chat.completion.chunk"}
+
+: ping
+
+data: {"choices":[{"delta":{"reasoning_content":"**Formulating a response**\n\nOkay, the user wants me to mention three colors in one sentence in Indonesian. I can do that! I’ll say something like, “Tiga warna tersebut adalah merah, biru, dan hijau.” That’s a simple and clear response. I’m just making sure I’m following the request properly, and I think this works!"},"finish_reason":null,"index":0}],"created":1794364091,"id":"chatcmpl-4ab58ef3-0e31-46c0-9f5d-ca164c26a2e8","model":"agg/opencode/iceman-free","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":"Tiga warna tersebut adalah merah, biru, dan hijau."},"finish_reason":null,"index":0}],"created":1794364091,"id":"chatcmpl-4ab58ef3-0e31-46c0-9f5d-ca164c26a2e8","model":"agg/opencode/iceman-free","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":1794364091,"id":"chatcmpl-4ab58ef3-0e31-46c0-9f5d-ca164c26a2e8","model":"agg/opencode/iceman-free","object":"chat.completion.chunk"}
+
+data: [DONE]
+

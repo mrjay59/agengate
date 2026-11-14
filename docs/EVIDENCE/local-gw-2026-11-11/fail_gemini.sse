@@ -1,0 +1,8 @@
+data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null,"index":0}],"created":1794364306,"id":"chatcmpl-59f63d50-dd22-4300-bb85-8b1fa9c2db6e","model":"agg/gemini/gemini-2.5-flash","object":"chat.completion.chunk"}
+
+: ping
+
+data: {"choices":[{"delta":{},"finish_reason":"error","index":0}],"created":1794364306,"error":{"code":"provider_error","message":"\u001b[31mGemini CLI is not running in a trusted directory. To proceed, either use `--skip-trust`, set the `GEMINI_CLI_TRUST_WORKSPACE=true` environment variable, or trust this directory in interactive mode. For more details, see https://geminicli.com/docs/cli/trusted-folders/#headless-and-automated-environments\u001b[0m"},"id":"chatcmpl-59f63d50-dd22-4300-bb85-8b1fa9c2db6e","model":"agg/gemini/gemini-2.5-flash","object":"chat.completion.chunk"}
+
+data: [DONE]
+

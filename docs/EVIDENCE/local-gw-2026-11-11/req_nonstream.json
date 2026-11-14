@@ -1,0 +1,1 @@
+{"model":"agg/ollama/nemotron-3-nano:4b","stream":false,"messages":[{"role":"user","content":"Say hi in one word."}]}

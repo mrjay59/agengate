@@ -1,0 +1,315 @@
+
+running 57 tests
+test doctor::tests::none_probe_has_no_reasoning_fields ... ok
+test doctor::tests::reasoning_content_probe_uses_reasoning_field ... ok
+test doctor::tests::embedded_matrix_is_valid_json ... ok
+test provider::bridge::claude::tests::factory_name ... ok
+test doctor::tests::think_tags_probe_opens_and_closes_once ... ok
+test provider::bridge::gemini::tests::factory_name ... ok
+test provider::bridge::ollama_cli::tests::factory_name ... ok
+test provider::bridge::claude::tests::mcp_config_serialization ... ok
+test provider::bridge::ollama_cli::tests::parses_bare_tool_call_object ... ok
+test provider::bridge::gemini::tests::mcp_config_serialization ... ok
+test provider::bridge::ollama_cli::tests::parses_compact_and_fenced_tool_calls ... ok
+test provider::bridge::ollama_cli::tests::parses_openai_style_tool_calls ... ok
+test doctor::tests::each_format_has_a_probe_stream ... ok
+test provider::bridge::ollama_cli::tests::plain_text_is_not_a_tool_call ... ok
+test provider::bridge::ollama_cli::tests::run_args_inject_keepalive_before_model ... ok
+test provider::bridge::ollama_cli::tests::run_args_without_keepalive ... ok
+test provider::bridge::ollama_cli::tests::session_reuses_configured_session_id ... ok
+test provider::bridge::ollama_cli::tests::strips_ansi_sequences ... ok
+test provider::bridge::opencode::tests::factory_name ... ok
+test provider::bridge::opencode::tests::mcp_config_serialization ... ok
+test provider::bridge::opencode::tests::test_selective_disable_config_includes_opencode_utils ... ok
+test provider::bridge::opencode::tests::test_strict_disable_config_includes_opencode_utils ... ok
+test provider::bridge::shim::tests::test_json_rpc_response ... ok
+test provider::bridge::shim::tests::test_json_rpc_serialization ... ok
+test reasoning::coalesce::tests::force_flush_closes_reasoning ... ok
+test reasoning::coalesce::tests::reasoning_is_flushed_before_first_text ... ok
+test reasoning::format::tests::literal_close_tag_is_escaped ... ok
+test reasoning::format::tests::non_stream_think_tags_wraps_once ... ok
+test reasoning::format::tests::parses_all_formats ... ok
+test reasoning::format::tests::reasoning_content_can_send_null_content ... ok
+test reasoning::format::tests::think_tags_open_once_and_close_before_text ... ok
+test reasoning::limit::tests::block_limit_drops_later_blocks ... ok
+test reasoning::limit::tests::escape_close_tag_is_zero_width_safe ... ok
+test reasoning::limit::tests::normalizes_crlf ... ok
+test reasoning::limit::tests::truncates_on_character_boundary ... ok
+test reasoning::parser::tests::claude_thinking_delta_sequence ... ok
+test reasoning::parser::tests::crlf_and_malformed_lines ... ok
+test reasoning::parser::tests::multi_tool_calls_grouped_in_single_reasoning_block ... ok
+test reasoning::parser::tests::ollama_thinking_block_is_split_from_answer ... ok
+test reasoning::parser::tests::opencode_error_object_is_surfaced ... ok
+test reasoning::parser::tests::opencode_text_part_is_forwarded ... ok
+test reasoning::parser::tests::redacted_thinking_is_omitted_without_content ... ok
+test reasoning::parser::tests::repeated_tool_call_batches_share_reasoning_block ... ok
+test reasoning::redact::tests::disabled_redactor_is_noop ... ok
+test reasoning::tool_view::tests::edit_operations_are_flagged ... ok
+test reasoning::parser::tests::oversized_line_is_dropped ... ok
+test reasoning::tool_view::tests::opencode_camel_case_filepath_is_target ... ok
+test reasoning::tool_view::tests::empty_arguments_still_render ... ok
+test reasoning::tool_view::tests::known_tools_render_with_icon_and_target ... ok
+test reasoning::tool_view::tests::unknown_tool_falls_back_to_generic ... ok
+test reasoning::redact::tests::leaves_clean_text_untouched ... ok
+test provider::bridge::ollama_cli::tests::health_check_when_not_installed ... ok
+test reasoning::redact::tests::invalid_patterns_are_ignored ... ok
+test reasoning::pipeline::tests::omitted_block_emits_nothing_synthetic ... ok
+test reasoning::pipeline::tests::redacts_reasoning_and_text ... ok
+test reasoning::redact::tests::redacts_api_keys_and_sk_tokens ... ok
+test reasoning::pipeline::tests::tool_calls_pass_through_no_synthetic_activity ... ok
+
+test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test test_aionui ... ignored, requires a running agentgate server on localhost:8787; run with --ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test test_health_check ... ok
+test test_chat_missing_model ... ok
+test test_models_endpoint ... ok
+test test_streaming_none_format_suppresses_reasoning ... ok
+test test_streaming_emits_reasoning_then_text_then_done ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 1 test
+test bridge_mcp_hold_and_resolve ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+running 2 tests
+test delete_session_wakes_held_calls ... ok
+test resolve_requires_the_owning_session_token ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+
+running 8 tests
+test build_cli_provider_keeps_ollama_native_by_default ... ok
+test build_cli_provider_selects_bridge_for_ollama_cli_mode ... ok
+test build_cli_provider_honours_bridge_false ... ok
+test build_cli_provider_falls_back_for_unknown_agent ... ok
+test build_cli_provider_selects_bridge_for_opencode ... ok
+test render_conversation_keeps_roles_tool_calls_and_results ... ok
+test bridge_cli_provider_without_bridge_returns_none ... ok
+test bridge_cli_provider_registers_reachable_session ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test test_chat_completion ... ignored, requires a running agentgate server (AGENTGATE_URL); run with --ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+test config_default_has_spec_values ... ok
+test env_overrides_take_priority_over_file_values ... ok
+test parallel_tool_calls_is_accepted_in_request ... ok
+test max_tools_limit_is_enforced ... ok
+test max_schema_bytes_limit_is_enforced ... ok
+test full_spec_template_parses ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test unknown_probe_format_is_rejected ... ok
+test matrix_endpoint_returns_client_and_intermediary_data ... ok
+test probe_stream_is_sse_and_incremental_for_every_format ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.44s
+
+
+running 5 tests
+test client_tools_reject_policy_returns_501_tool_bridge_unsupported ... ok
+test client_tools_without_bridge_provider_returns_501 ... ok
+test unknown_mcp_tool_returns_503_tool_isolation_unavailable ... ok
+test client_tools_reject_wins_even_with_bridge_provider ... ok
+test known_mcp_tool_still_accepted_when_listed ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+
+running 6 tests
+test test_render_conversation_strips_system ... ok
+test test_render_conversation_preserves_non_system ... ok
+test test_preflight_active_probe_passes_allowed ... ok
+test test_preflight_active_probe_rejects_conflicting ... ok
+test test_preflight_active_probe_rejects_opencode_utils ... ok
+test test_isolation_config_default ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 15 tests
+test live_resume_bridge_turn_timeout_positive ... ok
+test live_resume_run_state_enum_structure ... ok
+test live_resume_run_resume_method ... ok
+test live_resume_run_park_method ... ok
+test live_resume_continuation_register_cleanup_cycle ... ok
+test live_resume_provider_session_key_field_exists ... ok
+test live_resume_pending_tool_call_ids_field_exists ... ok
+test live_resume_created_at_field_exists ... ok
+test live_resume_continuation_capable_field_exists ... ok
+test live_resume_parked_at_field_exists ... ok
+test live_resume_mcp_session_id_field_exists ... ok
+test live_resume_stale_continuation_cleanup ... ok
+test live_resume_step_count_field_exists ... ok
+test live_resume_ttl_fields_exist ... ok
+test live_resume_cancel_run_cleans_continuation_and_provider ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test metrics_endpoint_returns_prometheus_text ... ok
+test chat_response_carries_x_agentgate_headers ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test test_session_id_from_request_used_for_persistence ... ok
+test test_non_persistent_session_has_no_keep_alive ... ok
+test test_persistent_session_cache_exists ... ok
+test test_persistent_sessions_keyed_by_session_id ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 8 tests
+test test_parse_models_output_with_ansi ... ok
+test test_parse_models_output_json_object ... ok
+test test_parse_models_output_json_array ... ok
+test test_strip_ansi_codes ... ok
+test test_parse_models_output_plain ... ok
+test test_config_loads_all_providers ... ok
+test test_check_available_ollama ... ok
+test test_check_available_opencode ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+
+running 4 tests
+test test_provider_set_available ... ok
+test test_provider_scan_models ... ok
+test test_provider_not_available ... ok
+test test_parse_models_output_ansi ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+
+running 7 tests
+test windows_crlf_is_normalized_by_parser ... ok
+test think_tags_are_never_split_and_close_before_text ... ok
+test secrets_are_redacted_before_clients_see_them ... ok
+test max_chars_truncates_and_marker_emitted_once ... ok
+test multibyte_truncation_is_utf8_safe ... ok
+test coalescer_keeps_reasoning_before_text_under_load ... ok
+test fifty_parallel_pipelines_do_not_leak_state ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+
+running 13 tests
+test limiter_block_limit ... ok
+test coalescer_flushes_reasoning_before_text ... ok
+test parser_usage_event ... ok
+test parser_handles_gemini_thought_and_message ... ok
+test parser_skips_malformed_json ... ok
+test parser_normalizes_crlf_plain_text ... ok
+test redactor_disabled_noop ... ok
+test sse_writer_all_formats_parse ... ok
+test parser_handles_done_and_finish ... ok
+test sse_writer_think_tags_close_before_text ... ok
+test no_synthetic_activity_emitted ... ok
+test pipeline_omitted_emits_nothing_synthetic ... ok
+test pipeline_disabled_drops_reasoning ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 7 tests
+test openai_name_validation_and_aliasing ... ok
+test normalize_schema_openai_profile ... ok
+test inline_refs_resolves_defs_and_definitions ... ok
+test inline_refs_ignores_non_local_refs ... ok
+test bridge_registration_applies_alias_ref_and_normalize ... ok
+test aliases_are_deterministic_and_unaliasable ... ok
+test tools_list_advertises_aliased_names_over_mcp ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 8 tests
+test t5_parallel_tool_calls_false_keeps_first_call ... ok
+test t20_serial_truncates_tool_call_list ... ok
+test t12_oneof_and_ref_normalized ... ok
+test t16_tool_choice_none_is_chat_only ... ok
+test t17_no_tools_default_chat_only ... ok
+test t3_parallel_tool_calls_in_one_response ... ok
+test t4_multi_turn_resume ... ok
+test t2_stream_emits_done_terminator ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 6 tests
+test coalescer_preserves_reasoning_across_tool_calls ... ok
+test sse_tool_calls_two_chunk_contract ... ok
+test reasoning_grouping_multi_tool_calls_single_block ... ok
+test tool_activity_event_sse_format ... ok
+test reasoning_grouping_repeated_batches_share_block ... ok
+test tool_call_buffer_streaming_accumulation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test continuation_registry_register_take_remove ... ok
+test resolve_tool_result_by_id_finds_associated_tool_call ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 3 tests
+test provider_error_is_terminal_even_if_process_stays_alive ... ok
+test client_disconnect_stops_the_provider_task ... ok
+test silent_provider_emits_first_token_timeout_and_done ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.02s
+
+
+running 1 test
+test rs0_first_reasoning_arrives_before_completion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

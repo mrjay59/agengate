@@ -1,0 +1,14 @@
+data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null,"index":0}],"created":1794364204,"id":"chatcmpl-9e08bdc0-5972-43be-9d68-b08c1c903571","model":"agg/opencode/iceman-free","object":"chat.completion.chunk"}
+
+: ping
+
+: keep-alive
+
+data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"","name":"question"},"id":"35131e7b-6671-4648-ba39-faffd542064b","index":0,"type":"function"}]},"finish_reason":null,"index":0}],"created":1794364204,"id":"chatcmpl-9e08bdc0-5972-43be-9d68-b08c1c903571","model":"agg/opencode/iceman-free","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{\"questions\":[{\"header\":\"Format waktu\",\"options\":[{\"description\":\"Tampilkan waktu sesuai zona waktu lokal/server seperti dikembalikan oleh get_time.\",\"label\":\"Waktu lokal sistem\"},{\"description\":\"Tampilkan waktu dalam zona waktu Indonesia Barat.\",\"label\":\"WIB (UTC+7)\"}],\"question\":\"Waktu yang Anda inginkan dalam zona waktu/format apa?\"}]}"},"index":0}]},"finish_reason":null,"index":0}],"created":1794364204,"id":"chatcmpl-9e08bdc0-5972-43be-9d68-b08c1c903571","model":"agg/opencode/iceman-free","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls","index":0}],"created":1794364204,"id":"chatcmpl-9e08bdc0-5972-43be-9d68-b08c1c903571","model":"agg/opencode/iceman-free","object":"chat.completion.chunk"}
+
+data: [DONE]
+

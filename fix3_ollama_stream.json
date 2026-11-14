@@ -1,0 +1,1 @@
+{"model":"agg/ollama/nemotron-3-nano:4b","messages":[{"role":"user","content":"Hitung dari 1 sampai 5"}],"stream":true}

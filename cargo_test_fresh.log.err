@@ -1,0 +1,252 @@
+warning: unused imports: `BridgeToolResult` and `SessionOutput`
+  --> src\provider\bridge\spike.rs:17:52
+   |
+17 |     BridgeConfig, BridgeProviderV2, BridgeSession, BridgeToolResult, SessionOutput,
+   |                                                    ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `BridgeServer`
+  --> src\provider\bridge\shim.rs:12:35
+   |
+12 | use crate::bridge::{BridgeClient, BridgeServer};
+   |                                   ^^^^^^^^^^^^
+
+warning: unused import: `crate::provider::bridge::BridgeConfig`
+  --> src\provider\bridge\shim.rs:13:5
+   |
+13 | use crate::provider::bridge::BridgeConfig;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src\provider\bridge\spike.rs:149:9
+    |
+149 |     let mut session = provider.start_bridge(bridge_config.clone(), client.clone()).await?;
+    |         ----^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `BridgeSession`
+  --> src\provider\bridge\spike.rs:17:37
+   |
+17 |     BridgeConfig, BridgeProviderV2, BridgeSession, BridgeToolResult, SessionOutput,
+   |                                     ^^^^^^^^^^^^^
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\opencode.rs:259:21
+    |
+259 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\gemini.rs:214:21
+    |
+214 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\claude.rs:214:21
+    |
+214 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+
+warning: unused variable: `cli_type`
+   --> src\provider\bridge\spike.rs:139:5
+    |
+139 |     cli_type: &str,
+    |     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cli_type`
+
+warning: unused variable: `initialized`
+   --> src\provider\bridge\shim.rs:168:5
+    |
+168 |     initialized: &mut bool,
+    |     ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_initialized`
+
+warning: unused variable: `config`
+   --> src\provider\bridge\shim.rs:220:49
+    |
+220 | async fn handle_initialize(req: JsonRpcRequest, config: &ShimConfig) -> JsonRpcResponse {
+    |                                                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+
+warning: unused variable: `bridge_client`
+   --> src\provider\bridge\shim.rs:267:5
+    |
+267 |     bridge_client: &Arc<BridgeClient>,
+    |     ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_bridge_client`
+
+warning: unused variable: `mcp_id`
+    --> src\provider.rs:1453:25
+     |
+1453 |             if let Some(ref mcp_id) = mcp_session_id_for_cleanup {
+     |                         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_mcp_id`
+
+warning: unreachable pattern
+   --> src\reasoning\parser.rs:286:26
+    |
+221 |             "reasoning" => {
+    |             ----------- matches all the relevant values
+...
+286 |             "thinking" | "reasoning" => {
+    |                          ^^^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable pattern
+   --> src\reasoning\parser.rs:318:13
+    |
+202 |             "text" => {
+    |             ------ matches all the relevant values
+...
+318 |             "text" | "content" => {
+    |             ^^^^^^ no value can reach this
+
+warning: unused variable: `config`
+   --> src\cli.rs:103:9
+    |
+103 |     let config = crate::config::load_config().await?.apply_env_overrides();
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+
+warning: unused variable: `report`
+   --> src\cli.rs:104:9
+    |
+104 |     let report = rt.block_on(run_spike_bridge(SpikeConfig {
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_report`
+
+warning: fields `client`, `mcp_token`, and `mcp_port` are never read
+   --> src\provider\bridge\opencode.rs:123:5
+    |
+122 | struct OpenCodeSession {
+    |        --------------- fields in this struct
+123 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+130 |     mcp_token: String,
+    |     ^^^^^^^^^
+131 |     mcp_port: u16,
+    |     ^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\opencode.rs:498:14
+    |
+136 | impl OpenCodeSession {
+    | -------------------- methods in this implementation
+...
+498 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+550 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: fields `client`, `mcp_token`, and `mcp_port` are never read
+   --> src\provider\bridge\gemini.rs:121:5
+    |
+120 | struct GeminiSession {
+    |        ------------- fields in this struct
+121 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+128 |     mcp_token: String,
+    |     ^^^^^^^^^
+129 |     mcp_port: u16,
+    |     ^^^^^^^^
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\gemini.rs:417:14
+    |
+134 | impl GeminiSession {
+    | ------------------ methods in this implementation
+...
+417 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+454 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: fields `client`, `mcp_token`, and `mcp_port` are never read
+   --> src\provider\bridge\claude.rs:121:5
+    |
+120 | struct ClaudeSession {
+    |        ------------- fields in this struct
+121 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+128 |     mcp_token: String,
+    |     ^^^^^^^^^
+129 |     mcp_port: u16,
+    |     ^^^^^^^^
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\claude.rs:412:14
+    |
+134 | impl ClaudeSession {
+    | ------------------ methods in this implementation
+...
+412 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+449 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: `agentgate` (lib) generated 23 warnings (run `cargo fix --lib -p agentgate` to apply 14 suggestions)
+warning: unused variable: `config`
+   --> src\main.rs:304:17
+    |
+304 |             let config = match &args.config {
+    |                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `report`
+   --> src\main.rs:311:17
+    |
+311 |             let report = rt.block_on(run_spike_bridge(SpikeConfig {
+    |                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_report`
+
+warning: `agentgate` (bin "agentgate") generated 2 warnings (run `cargo fix --bin "agentgate" -p agentgate` to apply 2 suggestions)
+warning: unused import: `agentgate::bridge::BridgeServer`
+ --> tests\bridge_mcp_hold_test.rs:2:5
+  |
+2 | use agentgate::bridge::BridgeServer;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `sid`
+  --> tests\bridge_mcp_hold_test.rs:26:9
+   |
+26 |     let sid = session_id.clone();
+   |         ^^^ help: if this is intentional, prefix it with an underscore: `_sid`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `agentgate` (test "bridge_mcp_hold_test") generated 2 warnings (run `cargo fix --test "bridge_mcp_hold_test" -p agentgate` to apply 2 suggestions)
+warning: `agentgate` (bin "agentgate" test) generated 2 warnings (2 duplicates)
+warning: `agentgate` (lib test) generated 23 warnings (23 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.28s
+     Running unittests src\lib.rs (target\debug\deps\agentgate-74b9cd5dd221b841.exe)
+     Running unittests src\main.rs (target\debug\deps\agentgate-9ea04b0fb4eaeea5.exe)
+     Running unittests src\bin\fake_cli_persistent.rs (target\debug\deps\fake_cli_persistent-58f3e59479bd2737.exe)
+     Running unittests src\bin\fake_cli_thinking.rs (target\debug\deps\fake_cli_thinking-4fb705fe2d6d68eb.exe)
+     Running tests\aionui_test.rs (target\debug\deps\aionui_test-ea0d52b366dd8bad.exe)
+     Running tests\api_integration_test.rs (target\debug\deps\api_integration_test-aaa8acf975a83e13.exe)
+     Running tests\bridge_mcp_hold_test.rs (target\debug\deps\bridge_mcp_hold_test-ca4af0d55ecb29e6.exe)
+     Running tests\bridge_resolve_auth_test.rs (target\debug\deps\bridge_resolve_auth_test-fd33b6001a9231db.exe)
+     Running tests\bridge_session_registration_test.rs (target\debug\deps\bridge_session_registration_test-df7d8ba4a77d22d2.exe)
+     Running tests\chat_integration_test.rs (target\debug\deps\chat_integration_test-03d41a1c851721a1.exe)
+     Running tests\config_bridge_test.rs (target\debug\deps\config_bridge_test-953b41f27d6d4b84.exe)
+     Running tests\doctor_probe_test.rs (target\debug\deps\doctor_probe_test-4a079ca639284976.exe)
+     Running tests\fail_closed_test.rs (target\debug\deps\fail_closed_test-8dc6281ab9862404.exe)
+     Running tests\observability_test.rs (target\debug\deps\observability_test-e9f179bb85a4c325.exe)
+     Running tests\persistent_resume_test.rs (target\debug\deps\persistent_resume_test-5b60e6631194ce6b.exe)
+     Running tests\provider_detection.rs (target\debug\deps\provider_detection-45171efb00254ef3.exe)
+     Running tests\provider_test.rs (target\debug\deps\provider_test-4645efb110b1b2be.exe)
+     Running tests\reasoning_hardening.rs (target\debug\deps\reasoning_hardening-d88d6d1977cd3314.exe)
+     Running tests\reasoning_review.rs (target\debug\deps\reasoning_review-fb73e0410d38c716.exe)
+     Running tests\schema_normalization_test.rs (target\debug\deps\schema_normalization_test-ca12110705228220.exe)
+     Running tests\spec_scenarios_test.rs (target\debug\deps\spec_scenarios_test-032e933d066d5dc8.exe)

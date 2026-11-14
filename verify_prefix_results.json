@@ -1,0 +1,266 @@
+[
+  {
+    "env": "local",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "glob",
+    "tool_calls_emitted": [
+      "glob"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390798,\"id\":\"chatcmpl-772a895d-13dd-4ec1-9150-b6e42067226b\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to list all .rs files in the src directory using a glob pattern. I'll use the glob tool for this.\ud83d\udcc1 list glob \u2192 src/**/*.rs\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390798,\"id\":\"chatcmpl-772a895d-13"
+  },
+  {
+    "env": "local",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "read",
+    "tool_calls_emitted": [
+      "read"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390803,\"id\":\"chatcmpl-aa7f7f75-b9eb-4a7a-837f-2589b9de4968\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\",\"name\":\"read\"},\"id\":\"HbptDZVRW\",\"index\":0,\"type\":\"function\"}]},\"finish_reason\":null,\"index\":0}],\"created\":1794390803,\"id\":\"chatcmpl-aa7f7f75-b9eb-4a7a-837f-2589b9de4968\",\"model\":\"agg/9router/ag-poli\",\"obj"
+  },
+  {
+    "env": "local",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "shell",
+    "tool_calls_emitted": [
+      "shell"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390806,\"id\":\"chatcmpl-431cd662-3879-424b-b0bf-20b3b5059df8\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"User wants to run a shell command. Using the shell tool directly.\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390806,\"id\":\"chatcmpl-431cd662-3879-424b-b0bf-20b3b5059df8\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.com"
+  },
+  {
+    "env": "local",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "execute",
+    "tool_calls_emitted": [
+      "shell"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390812,\"id\":\"chatcmpl-49a3c555-7de9-4f80-b436-8149e3fa348c\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to execute a simple echo command.\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390812,\"id\":\"chatcmpl-49a3c555-7de9-4f80-b436-8149e3fa348c\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\""
+  },
+  {
+    "env": "local",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "create",
+    "tool_calls_emitted": [
+      "write"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390818,\"id\":\"chatcmpl-11ceba02-f092-4fa0-9124-5ad137731b01\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Simple file write task. The user wants to create a file at /tmp/test_verify_prefix.txt with content 'test'. I'll use the write tool directly.\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390818,\"id\":\"chatcmpl-11ceba02-f"
+  },
+  {
+    "env": "local",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "grep",
+    "tool_calls_emitted": [
+      "grep"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390822,\"id\":\"chatcmpl-0467be1a-a39f-4076-a956-b5e76f0842a3\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\",\"name\":\"grep\"},\"id\":\"call_b255333c9ca8433da3a2ee01\",\"index\":0,\"type\":\"function\"}]},\"finish_reason\":null,\"index\":0}],\"created\":1794390822,\"id\":\"chatcmpl-0467be1a-a39f-4076-a956-b5e76f0842a3\",\"model\":\"agg/9"
+  },
+  {
+    "env": "local",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "glob",
+    "tool_calls_emitted": [
+      "glob"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390824,\"id\":\"chatcmpl-e4e347d6-0380-4762-98a1-3433e139934c\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\",\"name\":\"glob\"},\"id\":\"call_80c2e047b2f84a6db5c71f2f\",\"index\":0,\"type\":\"function\"}]},\"finish_reason\":null,\"index\":0}],\"created\":1794390824,\"id\":\"chatcmpl-e4e347d6-0380-4762-98a1-3433e139934c\",\"model\":\""
+  },
+  {
+    "env": "local",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "read",
+    "tool_calls_emitted": [
+      "read"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390827,\"id\":\"chatcmpl-30bf4056-ca8e-4a94-b174-f3ac02ec892b\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\",\"name\":\"read\"},\"id\":\"call_86ca0ad8876143d28efd0e2a\",\"index\":0,\"type\":\"function\"}]},\"finish_reason\":null,\"index\":0}],\"created\":1794390827,\"id\":\"chatcmpl-30bf4056-ca8e-4a94-b174-f3ac02ec892b\",\"model\":\""
+  },
+  {
+    "env": "local",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "shell",
+    "tool_calls_emitted": [
+      "shell"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390830,\"id\":\"chatcmpl-a2aa0ece-4ffa-4054-bc36-c02814370313\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to run a shell command. I'll use the shell tool.\u26a1 run shell \u2192 echo 'hello from shell'\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390830,\"id\":\"chatcmpl-a2aa0ece-4ffa-4054-bc36-c02814370313\",\"mode"
+  },
+  {
+    "env": "local",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "execute",
+    "tool_calls_emitted": [
+      "shell"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390837,\"id\":\"chatcmpl-27306f45-84ee-41ee-9f27-8027f9b15812\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to execute a shell command. I'll use the shell tool for this.\u26a1 run shell \u2192 echo 'hello from execute'\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390837,\"id\":\"chatcmpl-27306f45-84ee-41ee-9f27-8027"
+  },
+  {
+    "env": "local",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "create",
+    "tool_calls_emitted": [
+      "write"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390844,\"id\":\"chatcmpl-c20dda09-1bff-4437-8eef-4d1632046eed\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\",\"name\":\"write\"},\"id\":\"call-5d68a7c5-9b9e-47e8-9830-4febb8fd97f6\",\"index\":0,\"type\":\"function\"}]},\"finish_reason\":null,\"index\":0}],\"created\":1794390844,\"id\":\"chatcmpl-c20dda09-1bff-4437-8eef-4d1632046e"
+  },
+  {
+    "env": "local",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "grep",
+    "tool_calls_emitted": [
+      "grep"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390854,\"id\":\"chatcmpl-07876008-9e1e-4e54-b199-85c6e5f7a74a\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\n: keep-alive\ndata: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\",\"name\":\"grep\"},\"id\":\"call-0f76e5e1-39e4-4f00-aedf-74c8e9e7a954\",\"index\":0,\"type\":\"function\"}]},\"finish_reason\":null,\"index\":0}],\"created\":1794390854,\"id\":\"chatcmpl-07876008-9e1e-4e54-b19"
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "glob",
+    "tool_calls_emitted": [
+      "glob"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390868,\"id\":\"chatcmpl-55af668f-13ed-4d53-8810-4c55f989110e\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\n: keep-alive\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants to list .rs files using glob.\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390868,\"id\":\"chatcmpl-55af668f-13ed-4d53-8810-4c55f989110e\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion."
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "read",
+    "tool_calls_emitted": [
+      "read"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390881,\"id\":\"chatcmpl-cc68c162-b442-45f8-a35a-a60337ad3fd9\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to read the file src/main.rs and show its contents. Let me use the read tool to do this.\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390881,\"id\":\"chatcmpl-cc68c162-b442-45f8-a35a-a60337ad3fd9\",\"model\""
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "shell",
+    "tool_calls_emitted": [
+      "shell"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390884,\"id\":\"chatcmpl-1a91221a-fa98-4b49-9a41-8af4d4393521\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\u26a1 run shell \u2192 echo 'hello from shell'\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390884,\"id\":\"chatcmpl-1a91221a-fa98-4b49-9a41-8af4d4393521\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\ndata: {\"choi"
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "execute",
+    "tool_calls_emitted": [
+      "shell"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390888,\"id\":\"chatcmpl-4c626b13-bbb6-4d28-a986-39a914c4d7e0\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\u26a1 run shell \u2192 echo 'hello from execute'\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390888,\"id\":\"chatcmpl-4c626b13-bbb6-4d28-a986-39a914c4d7e0\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\ndata: {\"ch"
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "create",
+    "tool_calls_emitted": [
+      "write"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390891,\"id\":\"chatcmpl-74090272-d199-4f3d-88e4-fc24418f7ab0\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\n: keep-alive\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to create a file at /tmp/test_verify_prefix.txt with the content 'test'. This is a simple file creation task.\ud83d\udcdd write \u2192 /tmp/test_verify_prefix.txt (+1 lines)\\n\"},\"finish_reason\":null,\"index\":0}]"
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/ag-poli",
+    "tool_requested": "grep",
+    "tool_calls_emitted": [
+      "grep"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390907,\"id\":\"chatcmpl-dabf7170-9bcf-46f6-bc57-a4c4b2be5708\",\"model\":\"agg/9router/ag-poli\",\"object\":\"chat.completion.chunk\"}\n: ping\n: keep-alive\n: keep-alive\n: keep-alive\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to search for 'fn main' in the src directory using grep. Let me do that.\ud83d\udd0d search grep \u2192 src\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390907,\"id\":\"chatcmpl-dab"
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "glob",
+    "tool_calls_emitted": [
+      "glob"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390942,\"id\":\"chatcmpl-6c4f4a6f-cccc-4695-b132-b95a794a7cd6\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to list all .rs files in the src directory using glob pattern src/**/*.rs.\ud83d\udcc1 list glob \u2192 src/**/*.rs\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390942,\"id\":\"chatcmpl-6c4f4a6f-cccc-4695-b132-b95a7"
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "read",
+    "tool_calls_emitted": [
+      "read"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390949,\"id\":\"chatcmpl-2588b3a6-688e-4920-904d-8d437a3f9ef4\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to read src/main.rs and show its contents. Let me check if this file exists first.\ud83d\udcc4 read \u2192 src/main.rs\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390949,\"id\":\"chatcmpl-2588b3a6-688e-4920-904d-8d"
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "shell",
+    "tool_calls_emitted": [
+      "shell"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390954,\"id\":\"chatcmpl-68ac6504-311f-4b18-97fd-6c749b08ef62\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to run a simple shell command.\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390954,\"id\":\"chatcmpl-68ac6504-311f-4b18-97fd-6c749b08ef62\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion"
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "execute",
+    "tool_calls_emitted": [
+      "shell"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390961,\"id\":\"chatcmpl-146ad1ae-5cbc-41d8-ab7e-84d9a95b99fd\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Simple echo command requested.\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390961,\"id\":\"chatcmpl-146ad1ae-5cbc-41d8-ab7e-84d9a95b99fd\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\ndata: {\"c"
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "create",
+    "tool_calls_emitted": [
+      "write"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390964,\"id\":\"chatcmpl-cb8e8989-c8b8-4648-bb17-fe04e97374c7\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to create a file at /tmp/test_verify_prefix.txt with content 'test'. This is a simple file creation task.\ud83d\udcdd write \u2192 /tmp/test_verify_prefix.txt (+1 lines)\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1"
+  },
+  {
+    "env": "vps",
+    "model": "agg/9router/free-forever",
+    "tool_requested": "grep",
+    "tool_calls_emitted": [
+      "grep"
+    ],
+    "prefix_violations": [],
+    "status": "PASS",
+    "raw_snippet": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390968,\"id\":\"chatcmpl-46aa0b82-b1aa-480b-a594-6d679a02f5a6\",\"model\":\"agg/9router/free-forever\",\"object\":\"chat.completion.chunk\"}\n: ping\ndata: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The user wants me to search for 'fn main' in the src directory using grep. Let me do that.\ud83d\udd0d search grep \u2192 src\\n\"},\"finish_reason\":null,\"index\":0}],\"created\":1794390968,\"id\":\"chatcmpl-46aa0b82-b1aa-480b-a594-6d679a02f5a6\""
+  }
+]

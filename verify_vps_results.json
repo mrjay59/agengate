@@ -1,0 +1,122 @@
+[
+  {
+    "model": "agg/9router/ag-poli",
+    "test_type": "reasoning",
+    "scenario": "reasoning_chat",
+    "tool_calls": [],
+    "prefix_violations": [],
+    "reasoning_content_count": 0,
+    "reasoning_content_chars": 0,
+    "reasoning_count": 0,
+    "reasoning_chars": 0,
+    "finish_reason": "stop",
+    "has_reasoning": false,
+    "raw_snippet": ""
+  },
+  {
+    "model": "agg/9router/ag-poli",
+    "test_type": "reasoning",
+    "scenario": "reasoning_complex",
+    "tool_calls": [],
+    "prefix_violations": [],
+    "reasoning_content_count": 0,
+    "reasoning_content_chars": 0,
+    "reasoning_count": 0,
+    "reasoning_chars": 0,
+    "finish_reason": "stop",
+    "has_reasoning": false,
+    "raw_snippet": ""
+  },
+  {
+    "model": "agg/9router/ag-poli",
+    "test_type": "tool",
+    "scenario": "read",
+    "tool_calls": [],
+    "prefix_violations": [
+      "ERROR: 'name'"
+    ],
+    "reasoning_content_count": 0,
+    "reasoning_content_chars": 0,
+    "reasoning_count": 0,
+    "reasoning_chars": 0,
+    "finish_reason": null,
+    "has_reasoning": false,
+    "raw_snippet": "'name'"
+  },
+  {
+    "model": "agg/9router/ag-poli",
+    "test_type": "tool",
+    "scenario": "glob",
+    "tool_calls": [],
+    "prefix_violations": [
+      "ERROR: 'name'"
+    ],
+    "reasoning_content_count": 0,
+    "reasoning_content_chars": 0,
+    "reasoning_count": 0,
+    "reasoning_chars": 0,
+    "finish_reason": null,
+    "has_reasoning": false,
+    "raw_snippet": "'name'"
+  },
+  {
+    "model": "agg/9router/free-forever",
+    "test_type": "reasoning",
+    "scenario": "reasoning_chat",
+    "tool_calls": [],
+    "prefix_violations": [],
+    "reasoning_content_count": 1,
+    "reasoning_content_chars": 109,
+    "reasoning_count": 0,
+    "reasoning_chars": 0,
+    "finish_reason": "stop",
+    "has_reasoning": true,
+    "raw_snippet": ""
+  },
+  {
+    "model": "agg/9router/free-forever",
+    "test_type": "reasoning",
+    "scenario": "reasoning_complex",
+    "tool_calls": [],
+    "prefix_violations": [],
+    "reasoning_content_count": 1,
+    "reasoning_content_chars": 849,
+    "reasoning_count": 0,
+    "reasoning_chars": 0,
+    "finish_reason": "stop",
+    "has_reasoning": true,
+    "raw_snippet": ""
+  },
+  {
+    "model": "agg/9router/free-forever",
+    "test_type": "tool",
+    "scenario": "read",
+    "tool_calls": [],
+    "prefix_violations": [
+      "ERROR: 'name'"
+    ],
+    "reasoning_content_count": 0,
+    "reasoning_content_chars": 0,
+    "reasoning_count": 0,
+    "reasoning_chars": 0,
+    "finish_reason": null,
+    "has_reasoning": false,
+    "raw_snippet": "'name'"
+  },
+  {
+    "model": "agg/9router/free-forever",
+    "test_type": "tool",
+    "scenario": "glob",
+    "tool_calls": [],
+    "prefix_violations": [
+      "ERROR: 'name'"
+    ],
+    "reasoning_content_count": 0,
+    "reasoning_content_chars": 0,
+    "reasoning_count": 0,
+    "reasoning_chars": 0,
+    "finish_reason": null,
+    "has_reasoning": false,
+    "raw_snippet": "'name'"
+  }
+]

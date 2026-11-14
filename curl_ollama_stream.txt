@@ -1,0 +1,66 @@
+data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+: ping
+
+data: {"choices":[{"delta":{"reasoning_content":"⏳ Menyiapkan agen…"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"User:"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" \""},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"Say"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" hello"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" in"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" one"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" short"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" sentence"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":".\""},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" Simple"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"."},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" Need"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" to"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" respond"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" with"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" a"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" short"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" sentence"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" greeting"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":":"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" \""},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"Hello"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"!\""},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" That"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"'s"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":" fine"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"."},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":"Hello!"},"finish_reason":null,"index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":1793926692,"id":"chatcmpl-037e0ba2-c990-4774-a40f-aff5c11d8f7f","model":"ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: [DONE]
+

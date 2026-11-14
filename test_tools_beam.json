@@ -1,0 +1,1 @@
+{"model":"agg/opencode/beam-free","messages":[{"role":"user","content":"sekarang jam berapa?"}],"stream":false,"tools":[{"type":"function","function":{"name":"get_time","description":"Get current time","parameters":{"type":"object","properties":{}}}}]}

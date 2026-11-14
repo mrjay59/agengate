@@ -1,0 +1,99 @@
+PASS/FAIL MATRIX
+--------------------------------------------------------------------------------------------------------------
+Tool           | Env    | Model                               | Expected   | Emitted      | Status
+--------------------------------------------------------------------------------------------------------------
+shell          | VPS    | agg/9router/ag-poli                 | Shell      | Shell        | PASS
+shell          | VPS    | agg/9router/free-forever            | Shell      | Shell        | PASS
+shell          | LOCAL  | agg/9router/ag-poli                 | Shell      | Shell        | PASS
+shell          | LOCAL  | agg/9router/free-forever            | Shell      | Shell        | PASS
+shell          | VPS    | agg/opencode/deepseek-v4.1-flash-free | Shell      | none         | ERROR
+read           | VPS    | agg/9router/ag-poli                 | Read       | Read         | PASS
+read           | VPS    | agg/9router/free-forever            | Read       | Read         | PASS
+read           | LOCAL  | agg/9router/ag-poli                 | Read       | Read         | PASS
+read           | LOCAL  | agg/9router/free-forever            | Read       | Read         | PASS
+read           | VPS    | agg/opencode/deepseek-v4.1-flash-free | Read       | none         | ERROR
+write          | VPS    | agg/9router/ag-poli                 | Write      | Write        | PASS
+write          | VPS    | agg/9router/free-forever            | Write      | Write        | PASS
+write          | LOCAL  | agg/9router/ag-poli                 | Write      | Write        | PASS
+write          | LOCAL  | agg/9router/free-forever            | Write      | Write        | PASS
+write          | VPS    | agg/opencode/deepseek-v4.1-flash-free | Write      | none         | ERROR
+glob           | VPS    | agg/9router/ag-poli                 | Glob       | Glob         | PASS
+glob           | VPS    | agg/9router/free-forever            | Glob       | Glob         | PASS
+glob           | LOCAL  | agg/9router/ag-poli                 | Glob       | Glob         | PASS
+glob           | LOCAL  | agg/9router/free-forever            | Glob       | Glob         | PASS
+glob           | VPS    | agg/opencode/deepseek-v4.1-flash-free | Glob       | none         | ERROR
+grep           | VPS    | agg/9router/ag-poli                 | Grep       | Grep         | PASS
+grep           | VPS    | agg/9router/free-forever            | Grep       | question     | FAIL
+grep           | LOCAL  | agg/9router/ag-poli                 | Grep       | question     | FAIL
+grep           | LOCAL  | agg/9router/free-forever            | Grep       | question     | FAIL
+grep           | VPS    | agg/opencode/deepseek-v4.1-flash-free | Grep       | none         | ERROR
+edit           | VPS    | agg/9router/ag-poli                 | Edit       | Edit         | PASS
+edit           | VPS    | agg/9router/free-forever            | Edit       | none         | NO_TOOL
+edit           | LOCAL  | agg/9router/ag-poli                 | Edit       | Edit         | PASS
+edit           | LOCAL  | agg/9router/free-forever            | Edit       | question     | FAIL
+edit           | VPS    | agg/opencode/deepseek-v4.1-flash-free | Edit       | none         | ERROR
+list           | VPS    | agg/9router/ag-poli                 | List       | Execute      | FAIL
+list           | VPS    | agg/9router/free-forever            | List       | Read         | FAIL
+list           | LOCAL  | agg/9router/ag-poli                 | List       | List         | PASS
+list           | LOCAL  | agg/9router/free-forever            | List       | Read         | FAIL
+list           | VPS    | agg/opencode/deepseek-v4.1-flash-free | List       | none         | ERROR
+execute        | VPS    | agg/9router/ag-poli                 | Execute    | Execute      | PASS
+execute        | VPS    | agg/9router/free-forever            | Execute    | none         | NO_TOOL
+execute        | LOCAL  | agg/9router/ag-poli                 | Execute    | none         | NO_TOOL
+execute        | LOCAL  | agg/9router/free-forever            | Execute    | none         | NO_TOOL
+execute        | VPS    | agg/opencode/deepseek-v4.1-flash-free | Execute    | none         | ERROR
+bash           | VPS    | agg/9router/ag-poli                 | Bash       | Bash         | PASS
+bash           | VPS    | agg/9router/free-forever            | Bash       | none         | NO_TOOL
+bash           | LOCAL  | agg/9router/ag-poli                 | Bash       | none         | NO_TOOL
+bash           | LOCAL  | agg/9router/free-forever            | Bash       | question     | FAIL
+bash           | VPS    | agg/opencode/deepseek-v4.1-flash-free | Bash       | none         | ERROR
+cat            | VPS    | agg/9router/ag-poli                 | Cat        | none         | NO_TOOL
+cat            | VPS    | agg/9router/free-forever            | Cat        | none         | NO_TOOL
+cat            | LOCAL  | agg/9router/ag-poli                 | Cat        | none         | NO_TOOL
+cat            | LOCAL  | agg/9router/free-forever            | Cat        | Shell        | FAIL
+cat            | VPS    | agg/opencode/deepseek-v4.1-flash-free | Cat        | none         | ERROR
+patch          | VPS    | agg/9router/ag-poli                 | Patch      | Patch        | PASS
+patch          | VPS    | agg/9router/free-forever            | Patch      | question     | FAIL
+patch          | LOCAL  | agg/9router/ag-poli                 | Patch      | question     | FAIL
+patch          | LOCAL  | agg/9router/free-forever            | Patch      | question     | FAIL
+patch          | VPS    | agg/opencode/deepseek-v4.1-flash-free | Patch      | none         | ERROR
+task           | VPS    | agg/9router/ag-poli                 | Task       | question     | FAIL
+task           | VPS    | agg/9router/free-forever            | Task       | Read         | FAIL
+task           | LOCAL  | agg/9router/ag-poli                 | Task       | none         | EXCEPTION: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+task           | LOCAL  | agg/9router/free-forever            | Task       | none         | NO_TOOL
+task           | VPS    | agg/opencode/deepseek-v4.1-flash-free | Task       | none         | ERROR
+todowrite      | VPS    | agg/9router/ag-poli                 | TodoWrite  | question     | FAIL
+todowrite      | VPS    | agg/9router/free-forever            | TodoWrite  | Write        | FAIL
+todowrite      | LOCAL  | agg/9router/ag-poli                 | TodoWrite  | none         | EXCEPTION: HTTPConnectionPool(host='127.0.0.1', port=8780): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=8780): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it"))
+todowrite      | LOCAL  | agg/9router/free-forever            | TodoWrite  | none         | NO_TOOL
+todowrite      | VPS    | agg/opencode/deepseek-v4.1-flash-free | TodoWrite  | none         | ERROR
+todoread       | VPS    | agg/9router/ag-poli                 | TodoRead   | todoread     | FAIL
+todoread       | VPS    | agg/9router/free-forever            | TodoRead   | Glob         | FAIL
+todoread       | LOCAL  | agg/9router/ag-poli                 | TodoRead   | none         | EXCEPTION: HTTPConnectionPool(host='127.0.0.1', port=8780): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=8780): Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it"))
+todoread       | LOCAL  | agg/9router/free-forever            | TodoRead   | Glob         | FAIL
+todoread       | VPS    | agg/opencode/deepseek-v4.1-flash-free | TodoRead   | none         | ERROR
+
+SUMMARY PER ENV + MODEL
+================================================================================
+VPS    | agg/9router/ag-poli                 | PASS=9 FAIL=4 NO_TOOL=1 ERROR=0 | 9/14 (64.3%)
+VPS    | agg/9router/free-forever            | PASS=4 FAIL=6 NO_TOOL=4 ERROR=0 | 4/14 (28.6%)
+LOCAL  | agg/9router/ag-poli                 | PASS=6 FAIL=2 NO_TOOL=3 ERROR=3 | 6/14 (42.9%)
+LOCAL  | agg/9router/free-forever            | PASS=4 FAIL=7 NO_TOOL=3 ERROR=0 | 4/14 (28.6%)
+VPS    | agg/opencode/deepseek-v4.1-flash-free | PASS=0 FAIL=0 NO_TOOL=0 ERROR=14 | 0/14 (0.0%)
+
+SUMMARY PER TOOL
+================================================================================
+shell          | PASS=4 FAIL=0 NO_TOOL=0 ERROR=1 | 4/5 (80%)
+read           | PASS=4 FAIL=0 NO_TOOL=0 ERROR=1 | 4/5 (80%)
+write          | PASS=4 FAIL=0 NO_TOOL=0 ERROR=1 | 4/5 (80%)
+glob           | PASS=4 FAIL=0 NO_TOOL=0 ERROR=1 | 4/5 (80%)
+grep           | PASS=1 FAIL=3 NO_TOOL=0 ERROR=1 | 1/5 (20%)
+edit           | PASS=2 FAIL=1 NO_TOOL=1 ERROR=1 | 2/5 (40%)
+list           | PASS=1 FAIL=3 NO_TOOL=0 ERROR=1 | 1/5 (20%)
+execute        | PASS=1 FAIL=0 NO_TOOL=3 ERROR=1 | 1/5 (20%)
+bash           | PASS=1 FAIL=1 NO_TOOL=2 ERROR=1 | 1/5 (20%)
+cat            | PASS=0 FAIL=1 NO_TOOL=3 ERROR=1 | 0/5 (0%)
+patch          | PASS=1 FAIL=3 NO_TOOL=0 ERROR=1 | 1/5 (20%)
+task           | PASS=0 FAIL=2 NO_TOOL=1 ERROR=2 | 0/5 (0%)
+todowrite      | PASS=0 FAIL=2 NO_TOOL=1 ERROR=2 | 0/5 (0%)
+todoread       | PASS=0 FAIL=3 NO_TOOL=0 ERROR=2 | 0/5 (0%)

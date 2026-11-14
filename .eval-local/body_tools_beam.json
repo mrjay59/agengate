@@ -1,0 +1,28 @@
+{
+    "tools":  [
+                  {
+                      "function":  {
+                                       "description":  "Get current server time",
+                                       "name":  "get_time",
+                                       "parameters":  {
+                                                          "properties":  {
+
+                                                                         },
+                                                          "type":  "object",
+                                                          "required":  [
+
+                                                                       ]
+                                                      }
+                                   },
+                      "type":  "function"
+                  }
+              ],
+    "messages":  [
+                     {
+                         "content":  "halo",
+                         "role":  "user"
+                     }
+                 ],
+    "model":  "agg/opencode/beam-free",
+    "stream":  false
+}

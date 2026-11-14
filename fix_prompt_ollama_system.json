@@ -1,0 +1,1 @@
+{"model":"agg/ollama/nemotron-3-nano:4b","messages":[{"role":"system","content":"You must ONLY respond in English. Never use any other language."},{"role":"user","content":"Hello, who are you?"}],"stream":false}

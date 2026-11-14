@@ -1,0 +1,8 @@
+data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null,"index":0}],"created":1794037828,"id":"chatcmpl-f21ec759-b4d6-4e26-a94a-79cdf6b3eeba","model":"agg/opencode/deepseek-v4.1-flash-free","object":"chat.completion.chunk"}
+
+: ping
+
+data: {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":1794037828,"id":"chatcmpl-f21ec759-b4d6-4e26-a94a-79cdf6b3eeba","model":"agg/opencode/deepseek-v4.1-flash-free","object":"chat.completion.chunk"}
+
+data: [DONE]
+

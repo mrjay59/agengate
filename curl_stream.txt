@@ -1,0 +1,12 @@
+data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null,"index":0}],"created":1793926955,"id":"chatcmpl-42a46d34-6407-48f1-bffc-ebff1b9bd5fb","model":"opencode/beam-free","object":"chat.completion.chunk"}
+
+: ping
+
+data: {"choices":[{"delta":{"reasoning_content":"⏳ Menyiapkan agen…"},"finish_reason":null,"index":0}],"created":1793926955,"id":"chatcmpl-42a46d34-6407-48f1-bffc-ebff1b9bd5fb","model":"opencode/beam-free","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{},"finish_reason":"error","index":0}],"created":1793926955,"error":{"code":"provider.free-limit","message":"Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models."},"id":"chatcmpl-42a46d34-6407-48f1-bffc-ebff1b9bd5fb","model":"opencode/beam-free","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":1793926955,"id":"chatcmpl-42a46d34-6407-48f1-bffc-ebff1b9bd5fb","model":"opencode/beam-free","object":"chat.completion.chunk"}
+
+data: [DONE]
+

@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "agentgate": {
+      "type": "command",
+      "command": "agentgate",
+      "args": [
+        "mcp-shim",
+        "--session", "test-session",
+        "--token", "test-token",
+        "--host", "127.0.0.1",
+        "--port", "8787"
+      ],
+      "env": {
+        "AGENTGATE_SHIM_TOOLS": "[{\"name\":\"get_weather\",\"description\":\"Get weather\",\"parameters\":{\"type\":\"object\",\"properties\":{\"location\":{\"type\":\"string\"}},\"required\":[\"location\"]},\"provider\":\"opencode\",\"workspace\":\"default\"}]"
+      }
+    }
+  },
+  "tools": {},
+  "permission": {}
+}

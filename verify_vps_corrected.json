@@ -1,0 +1,150 @@
+[
+  {
+    "model": "agg/9router/ag-poli",
+    "scenario": "reasoning_simple",
+    "tools": [],
+    "tool_status": "NO_TOOL",
+    "reasoning_content": false,
+    "reasoning": false,
+    "reasoning_content_chars": 0,
+    "reasoning_chars": 0,
+    "finish_reason": "stop"
+  },
+  {
+    "model": "agg/9router/ag-poli",
+    "scenario": "reasoning_complex",
+    "tools": [],
+    "tool_status": "NO_TOOL",
+    "reasoning_content": true,
+    "reasoning": false,
+    "reasoning_content_chars": 385,
+    "reasoning_chars": 0,
+    "finish_reason": "stop"
+  },
+  {
+    "model": "agg/9router/ag-poli",
+    "scenario": "tool_read",
+    "tools": [
+      "read"
+    ],
+    "tool_status": "PASS (tools=['read'])",
+    "reasoning_content": true,
+    "reasoning": false,
+    "reasoning_content_chars": 127,
+    "reasoning_chars": 0,
+    "finish_reason": "tool_calls"
+  },
+  {
+    "model": "agg/9router/ag-poli",
+    "scenario": "tool_glob",
+    "tools": [
+      "glob"
+    ],
+    "tool_status": "PASS (tools=['glob'])",
+    "reasoning_content": true,
+    "reasoning": false,
+    "reasoning_content_chars": 129,
+    "reasoning_chars": 0,
+    "finish_reason": "tool_calls"
+  },
+  {
+    "model": "agg/9router/ag-poli",
+    "scenario": "tool_grep",
+    "tools": [
+      "grep"
+    ],
+    "tool_status": "PASS (tools=['grep'])",
+    "reasoning_content": true,
+    "reasoning": false,
+    "reasoning_content_chars": 20,
+    "reasoning_chars": 0,
+    "finish_reason": "tool_calls"
+  },
+  {
+    "model": "agg/9router/ag-poli",
+    "scenario": "tool_shell",
+    "tools": [
+      "shell"
+    ],
+    "tool_status": "PASS (tools=['shell'])",
+    "reasoning_content": true,
+    "reasoning": false,
+    "reasoning_content_chars": 74,
+    "reasoning_chars": 0,
+    "finish_reason": "tool_calls"
+  },
+  {
+    "model": "agg/9router/free-forever",
+    "scenario": "reasoning_simple",
+    "tools": [],
+    "tool_status": "NO_TOOL",
+    "reasoning_content": true,
+    "reasoning": false,
+    "reasoning_content_chars": 151,
+    "reasoning_chars": 0,
+    "finish_reason": "stop"
+  },
+  {
+    "model": "agg/9router/free-forever",
+    "scenario": "reasoning_complex",
+    "tools": [],
+    "tool_status": "NO_TOOL",
+    "reasoning_content": true,
+    "reasoning": false,
+    "reasoning_content_chars": 386,
+    "reasoning_chars": 0,
+    "finish_reason": "stop"
+  },
+  {
+    "model": "agg/9router/free-forever",
+    "scenario": "tool_read",
+    "tools": [
+      "read"
+    ],
+    "tool_status": "PASS (tools=['read'])",
+    "reasoning_content": true,
+    "reasoning": false,
+    "reasoning_content_chars": 119,
+    "reasoning_chars": 0,
+    "finish_reason": "tool_calls"
+  },
+  {
+    "model": "agg/9router/free-forever",
+    "scenario": "tool_glob",
+    "tools": [
+      "glob"
+    ],
+    "tool_status": "PASS (tools=['glob'])",
+    "reasoning_content": true,
+    "reasoning": false,
+    "reasoning_content_chars": 127,
+    "reasoning_chars": 0,
+    "finish_reason": "tool_calls"
+  },
+  {
+    "model": "agg/9router/free-forever",
+    "scenario": "tool_grep",
+    "tools": [
+      "grep"
+    ],
+    "tool_status": "PASS (tools=['grep'])",
+    "reasoning_content": true,
+    "reasoning": false,
+    "reasoning_content_chars": 171,
+    "reasoning_chars": 0,
+    "finish_reason": "tool_calls"
+  },
+  {
+    "model": "agg/9router/free-forever",
+    "scenario": "tool_shell",
+    "tools": [
+      "shell"
+    ],
+    "tool_status": "PASS (tools=['shell'])",
+    "reasoning_content": true,
+    "reasoning": false,
+    "reasoning_content_chars": 122,
+    "reasoning_chars": 0,
+    "finish_reason": "tool_calls"
+  }
+]

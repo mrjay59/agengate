@@ -1,0 +1,28 @@
+data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null,"index":0}],"created":1794364172,"id":"chatcmpl-be990f9a-a899-4ed2-9c7a-e42f81ecf679","model":"agg/ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+: ping
+
+: keep-alive
+
+: keep-alive
+
+: keep-alive
+
+data: {"choices":[{"delta":{"reasoning_content":"Hmm, the user is asking me to say \"hi\" in one short sentence. It's straightforward—they just want a simple greeting.\n"},"finish_reason":null,"index":0}],"created":1794364172,"id":"chatcmpl-be990f9a-a899-4ed2-9c7a-e42f81ecf679","model":"agg/ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+: keep-alive
+
+data: {"choices":[{"delta":{"reasoning_content":"I should keep it minimal since they specified \"one short sentence.\" No need to overthink it. A classic \"Hi there!\" would work perfectly—it's friendly, short, and exactly one sentence.\n"},"finish_reason":null,"index":0}],"created":1794364172,"id":"chatcmpl-be990f9a-a899-4ed2-9c7a-e42f81ecf679","model":"agg/ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+: keep-alive
+
+data: {"choices":[{"delta":{"reasoning_content":"Also, the user seems to be testing basic functionality or maybe just wanting a quick interaction. No complex needs here.\n"},"finish_reason":null,"index":0}],"created":1794364172,"id":"chatcmpl-be990f9a-a899-4ed2-9c7a-e42f81ecf679","model":"agg/ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"I'll stick to the request: \"Hi there!\" That's it.\n"},"finish_reason":null,"index":0}],"created":1794364172,"id":"chatcmpl-be990f9a-a899-4ed2-9c7a-e42f81ecf679","model":"agg/ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":"Hi there!\n"},"finish_reason":null,"index":0}],"created":1794364172,"id":"chatcmpl-be990f9a-a899-4ed2-9c7a-e42f81ecf679","model":"agg/ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":1794364172,"id":"chatcmpl-be990f9a-a899-4ed2-9c7a-e42f81ecf679","model":"agg/ollama/nemotron-3-nano:4b","object":"chat.completion.chunk"}
+
+data: [DONE]
+

@@ -1,0 +1,235 @@
+﻿cargo : warning: unused import: `BridgeServer`
+At line:2 char:1
++ cargo check > C:\Users\EDN\Documents\AION\project\agentgate\check_out ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unused import: `BridgeServer`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  --> src\provider\bridge\shim.rs:12:35
+   |
+12 | use crate::bridge::{BridgeClient, BridgeServer};
+   |                                   ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::provider::bridge::BridgeConfig`
+  --> src\provider\bridge\shim.rs:13:5
+   |
+13 | use crate::provider::bridge::BridgeConfig;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `futures::future::join_all`
+  --> src\service.rs:11:5
+   |
+11 | use futures::future::join_all;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src\provider\bridge\spike.rs:149:9
+    |
+149 |     let mut session = provider.start_bridge(bridge_config.clone(), client.clone()).await?;
+    |         ----^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::provider::bridge::BridgeSession`
+ --> src\provider.rs:2:5
+  |
+2 | use crate::provider::bridge::BridgeSession as ProviderBridgeSession;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `AsyncReadExt`
+  --> src\provider\bridge\ollama_cli.rs:15:34
+   |
+15 | use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+   |                                  ^^^^^^^^^^^^
+
+warning: unused import: `BridgeSession`
+  --> src\provider\bridge\spike.rs:17:37
+   |
+17 |     BridgeConfig, BridgeProviderV2, BridgeSession,
+   |                                     ^^^^^^^^^^^^^
+
+warning: unused variable: `elapsed`
+   --> src\service.rs:287:37
+    |
+287 |                 Ok((id, Ok(models), elapsed)) => {
+    |                                     ^^^^^^^ help: if this is intentional, prefix it with an underscore: 
+`_elapsed`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\opencode.rs:287:21
+    |
+287 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\gemini.rs:224:21
+    |
+224 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\claude.rs:227:21
+    |
+227 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+
+warning: variable does not need to be mutable
+   --> src\provider\bridge\ollama_cli.rs:355:13
+    |
+355 |         let mut stderr_output = String::new();
+    |             ----^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `stderr_output`
+   --> src\provider\bridge\ollama_cli.rs:355:13
+    |
+355 |         let mut stderr_output = String::new();
+    |             ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_stderr_output`
+
+warning: unused variable: `cli_type`
+   --> src\provider\bridge\spike.rs:139:5
+    |
+139 |     cli_type: &str,
+    |     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cli_type`
+
+warning: unused variable: `initialized`
+   --> src\provider\bridge\shim.rs:168:5
+    |
+168 |     initialized: &mut bool,
+    |     ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_initialized`
+
+warning: unused variable: `config`
+   --> src\provider\bridge\shim.rs:220:49
+    |
+220 | async fn handle_initialize(req: JsonRpcRequest, config: &ShimConfig) -> JsonRpcResponse {
+    |                                                 ^^^^^^ help: if this is intentional, prefix it with an 
+underscore: `_config`
+
+warning: unused variable: `bridge_client`
+   --> src\provider\bridge\shim.rs:267:5
+    |
+267 |     bridge_client: &Arc<BridgeClient>,
+    |     ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_bridge_client`
+
+warning: unused variable: `stream`
+  --> src\provider\ollama_cli.rs:50:46
+   |
+50 |     fn build_run_command(&self, model: &str, stream: bool) -> Command {
+   |                                              ^^^^^^ help: if this is intentional, prefix it with an underscore: 
+`_stream`
+
+warning: field `tool_name` is never read
+   --> src\bridge.rs:143:5
+    |
+140 | struct PendingCall {
+    |        ----------- field in this struct
+...
+143 |     tool_name: String,
+    |     ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `execute_cmd_inner` is never used
+   --> src\provider.rs:796:8
+    |
+618 | impl CliProviderImpl {
+    | -------------------- method in this implementation
+...
+796 |     fn execute_cmd_inner(&self, bin: &str, args: &[String]) -> Result<std::process::Output, anyhow::Error> {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: fields `client`, `mcp_token`, and `mcp_port` are never read
+   --> src\provider\bridge\opencode.rs:127:5
+    |
+126 | struct OpenCodeSession {
+    |        --------------- fields in this struct
+127 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+134 |     mcp_token: String,
+    |     ^^^^^^^^^
+135 |     mcp_port: u16,
+    |     ^^^^^^^^
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\opencode.rs:569:14
+    |
+140 | impl OpenCodeSession {
+    | -------------------- methods in this implementation
+...
+569 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+621 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: fields `client`, `mcp_token`, and `mcp_port` are never read
+   --> src\provider\bridge\gemini.rs:121:5
+    |
+120 | struct GeminiSession {
+    |        ------------- fields in this struct
+121 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+128 |     mcp_token: String,
+    |     ^^^^^^^^^
+129 |     mcp_port: u16,
+    |     ^^^^^^^^
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\gemini.rs:429:14
+    |
+134 | impl GeminiSession {
+    | ------------------ methods in this implementation
+...
+429 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+466 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: fields `client`, `mcp_token`, and `mcp_port` are never read
+   --> src\provider\bridge\claude.rs:121:5
+    |
+120 | struct ClaudeSession {
+    |        ------------- fields in this struct
+121 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+128 |     mcp_token: String,
+    |     ^^^^^^^^^
+129 |     mcp_port: u16,
+    |     ^^^^^^^^
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\claude.rs:427:14
+    |
+134 | impl ClaudeSession {
+    | ------------------ methods in this implementation
+...
+427 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+464 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: `agentgate` (lib) generated 26 warnings (run `cargo fix --lib -p agentgate` to apply 15 suggestions)
+warning: unused variable: `config`
+   --> src\main.rs:361:17
+    |
+361 |             let config = match &args.config {
+    |                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `agentgate` (bin "agentgate") generated 1 warning (run `cargo fix --bin "agentgate" -p agentgate` to apply 1 
+suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.26s
+

@@ -1,0 +1,11 @@
+{
+  "model": "agg/opencode/deepseek-v4.1-flash-free",
+  "stream": true,
+  "messages": [
+    {"role": "user", "content": "Read the file README.md in the current workspace and then create a file named docs.md containing a short summary. Use the tools."}
+  ],
+  "tools": [
+    {"type": "function", "function": {"name": "Read", "description": "Read a file", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}}, "required": ["file_path"]}}},
+    {"type": "function", "function": {"name": "Write", "description": "Write a file", "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_path", "content"]}}}
+  ]
+}

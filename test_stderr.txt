@@ -1,0 +1,364 @@
+   Compiling agentgate v0.2.5 (C:\Users\EDN\Documents\AION\project\agentgate)
+warning: unused import: `BridgeServer`
+  --> src\provider\bridge\shim.rs:12:35
+   |
+12 | use crate::bridge::{BridgeClient, BridgeServer};
+   |                                   ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::provider::bridge::BridgeConfig`
+  --> src\provider\bridge\shim.rs:13:5
+   |
+13 | use crate::provider::bridge::BridgeConfig;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `futures::future::join_all`
+  --> src\service.rs:11:5
+   |
+11 | use futures::future::join_all;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `CliProviderImpl`
+ --> src\cli.rs:2:36
+  |
+2 | use crate::provider::{CliProvider, CliProviderImpl};
+  |                                    ^^^^^^^^^^^^^^^
+
+warning: unused imports: `Duration` and `Instant`
+ --> src\cli.rs:7:17
+  |
+7 | use std::time::{Duration, Instant};
+  |                 ^^^^^^^^  ^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src\bridge.rs:511:14
+    |
+511 |         let (mut tx, mut rx) = oneshot::channel();
+    |              ----^^
+    |              |
+    |              help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src\provider\bridge\spike.rs:149:9
+    |
+149 |     let mut session = provider.start_bridge(bridge_config.clone(), client.clone()).await?;
+    |         ----^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src\service.rs:921:84
+    |
+921 |             crate::provider::ProviderResponse::Success { content: text, reasoning, mut tool_calls, session_id, mcp_session_id } => {
+    |                                                                                    ----^^^^^^^^^^
+    |                                                                                    |
+    |                                                                                    help: remove this `mut`
+
+warning: unused import: `AsyncReadExt`
+  --> src\provider\bridge\ollama_cli.rs:15:34
+   |
+15 | use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+   |                                  ^^^^^^^^^^^^
+
+warning: unused import: `BridgeSession`
+  --> src\provider\bridge\spike.rs:17:37
+   |
+17 |     BridgeConfig, BridgeProviderV2, BridgeSession,
+   |                                     ^^^^^^^^^^^^^
+
+warning: unused import: `crate::provider::bridge::BridgeSession`
+ --> src\provider.rs:2:5
+  |
+2 | use crate::provider::bridge::BridgeSession as ProviderBridgeSession;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `elapsed`
+   --> src\service.rs:337:37
+    |
+337 |                 Ok((id, Ok(models), elapsed)) => {
+    |                                     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_elapsed`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `finish_reason`
+   --> src\service.rs:924:21
+    |
+924 |                 let finish_reason = if has_tool_calls { "tool_calls" } else { "stop" };
+    |                     ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_finish_reason`
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\opencode.rs:299:21
+    |
+299 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+
+warning: unused variable: `tool_disable_config`
+   --> src\provider\bridge\opencode.rs:602:9
+    |
+602 |         tool_disable_config: &Value,
+    |         ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tool_disable_config`
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\gemini.rs:254:21
+    |
+254 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\claude.rs:261:21
+    |
+261 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+
+warning: variable does not need to be mutable
+   --> src\provider\bridge\ollama_cli.rs:356:13
+    |
+356 |         let mut stderr_output = String::new();
+    |             ----^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `stderr_output`
+   --> src\provider\bridge\ollama_cli.rs:356:13
+    |
+356 |         let mut stderr_output = String::new();
+    |             ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_stderr_output`
+
+warning: unused variable: `cli_type`
+   --> src\provider\bridge\spike.rs:139:5
+    |
+139 |     cli_type: &str,
+    |     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cli_type`
+
+warning: unused variable: `initialized`
+   --> src\provider\bridge\shim.rs:168:5
+    |
+168 |     initialized: &mut bool,
+    |     ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_initialized`
+
+warning: unused variable: `config`
+   --> src\provider\bridge\shim.rs:220:49
+    |
+220 | async fn handle_initialize(req: JsonRpcRequest, config: &ShimConfig) -> JsonRpcResponse {
+    |                                                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+
+warning: unused variable: `bridge_client`
+   --> src\provider\bridge\shim.rs:267:5
+    |
+267 |     bridge_client: &Arc<BridgeClient>,
+    |     ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_bridge_client`
+
+warning: field `tool_name` is never read
+   --> src\bridge.rs:192:5
+    |
+189 | struct PendingCall {
+    |        ----------- field in this struct
+...
+192 |     tool_name: String,
+    |     ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `execute_cmd_inner` is never used
+   --> src\provider.rs:789:8
+    |
+623 | impl CliProviderImpl {
+    | -------------------- method in this implementation
+...
+789 |     fn execute_cmd_inner(&self, bin: &str, args: &[String]) -> Result<std::process::Output, anyhow::Error> {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: fields `client`, `mcp_token`, `mcp_port`, and `continuation_tx` are never read
+   --> src\provider\bridge\opencode.rs:109:5
+    |
+108 | struct OpenCodeSession {
+    |        --------------- fields in this struct
+109 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+116 |     mcp_token: String,
+    |     ^^^^^^^^^
+117 |     mcp_port: u16,
+    |     ^^^^^^^^
+...
+121 |     continuation_tx: Arc<Mutex<Option<oneshot::Sender<ContinuationOutput>>>>,
+    |     ^^^^^^^^^^^^^^^
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\opencode.rs:717:14
+    |
+124 | impl OpenCodeSession {
+    | -------------------- methods in this implementation
+...
+717 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+769 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: fields `client`, `mcp_token`, and `mcp_port` are never read
+   --> src\provider\bridge\gemini.rs:148:5
+    |
+147 | struct GeminiSession {
+    |        ------------- fields in this struct
+148 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+155 |     mcp_token: String,
+    |     ^^^^^^^^^
+156 |     mcp_port: u16,
+    |     ^^^^^^^^
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\gemini.rs:464:14
+    |
+161 | impl GeminiSession {
+    | ------------------ methods in this implementation
+...
+464 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+501 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: fields `client`, `mcp_token`, and `mcp_port` are never read
+   --> src\provider\bridge\claude.rs:148:5
+    |
+147 | struct ClaudeSession {
+    |        ------------- fields in this struct
+148 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+155 |     mcp_token: String,
+    |     ^^^^^^^^^
+156 |     mcp_port: u16,
+    |     ^^^^^^^^
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\claude.rs:467:14
+    |
+161 | impl ClaudeSession {
+    | ------------------ methods in this implementation
+...
+467 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+504 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: `agentgate` (lib) generated 31 warnings (18 duplicates) (run `cargo fix --lib -p agentgate` to apply 5 suggestions)
+warning: unused import: `agentgate::bridge::BridgeServer`
+ --> tests\bridge_mcp_hold_test.rs:2:5
+  |
+2 | use agentgate::bridge::BridgeServer;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+  --> tests\reasoning_review.rs:90:9
+   |
+90 |     let mut cfg = ReasoningConfig::default();
+   |         ----^^^
+   |         |
+   |         help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> tests\reasoning_review.rs:115:9
+    |
+115 |     let mut cfg = ReasoningConfig::default();
+    |         ----^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `sid`
+  --> tests\bridge_mcp_hold_test.rs:26:9
+   |
+26 |     let sid = session_id.clone();
+   |         ^^^ help: if this is intentional, prefix it with an underscore: `_sid`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `agentgate` (lib test) generated 31 warnings (13 duplicates) (run `cargo fix --lib -p agentgate --tests` to apply 15 suggestions)
+warning: unused variable: `config`
+   --> src\main.rs:354:17
+    |
+354 |             let config = match &args.config {
+    |                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `agentgate` (test "reasoning_review") generated 2 warnings (run `cargo fix --test "reasoning_review" -p agentgate` to apply 2 suggestions)
+warning: unused import: `BridgeServer`
+ --> tests\live_resume_e2e_test.rs:7:25
+  |
+7 | use agentgate::bridge::{BridgeServer, ToolResult, ToolSchema, RunState};
+  |                         ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> tests\live_resume_e2e_test.rs:317:9
+    |
+317 |     let mut body = serde_json::json!({
+    |         ----^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `tokio::task::yield_now`
+  --> tests\bridge_resolve_auth_test.rs:10:5
+   |
+10 | use tokio::task::yield_now;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `removed`
+  --> tests\live_resume_e2e_test.rs:46:9
+   |
+46 |     let removed = registry.bridge.remove_continuation(run_id).await;
+   |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_removed`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `agentgate` (test "bridge_mcp_hold_test") generated 2 warnings (run `cargo fix --test "bridge_mcp_hold_test" -p agentgate` to apply 2 suggestions)
+warning: `agentgate` (bin "agentgate" test) generated 1 warning (1 duplicate)
+warning: `agentgate` (test "bridge_resolve_auth_test") generated 1 warning (run `cargo fix --test "bridge_resolve_auth_test" -p agentgate` to apply 1 suggestion)
+warning: `agentgate` (bin "agentgate") generated 1 warning (run `cargo fix --bin "agentgate" -p agentgate` to apply 1 suggestion)
+warning: `agentgate` (test "live_resume_e2e_test") generated 3 warnings (run `cargo fix --test "live_resume_e2e_test" -p agentgate` to apply 3 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 06s
+     Running unittests src\lib.rs (target\debug\deps\agentgate-7b74a5d372550251.exe)
+     Running unittests src\main.rs (target\debug\deps\agentgate-be4b200cb1908467.exe)
+     Running unittests src\bin\fake_cli_persistent.rs (target\debug\deps\fake_cli_persistent-b432b76ed61eab86.exe)
+     Running unittests src\bin\fake_cli_thinking.rs (target\debug\deps\fake_cli_thinking-5e29f8c83f80de7d.exe)
+     Running tests\aionui_test.rs (target\debug\deps\aionui_test-bdb3d89b9d548a45.exe)
+     Running tests\api_integration_test.rs (target\debug\deps\api_integration_test-082441a1a3b3b8cf.exe)
+     Running tests\bridge_mcp_hold_test.rs (target\debug\deps\bridge_mcp_hold_test-46a4be863051a8fe.exe)
+     Running tests\bridge_resolve_auth_test.rs (target\debug\deps\bridge_resolve_auth_test-5eb266e6dd7a7845.exe)
+     Running tests\bridge_session_registration_test.rs (target\debug\deps\bridge_session_registration_test-e803e0fcabb866cc.exe)
+     Running tests\chat_integration_test.rs (target\debug\deps\chat_integration_test-17ab20d6a48cfa01.exe)
+     Running tests\config_bridge_test.rs (target\debug\deps\config_bridge_test-d76b7a3bb383a48b.exe)
+     Running tests\doctor_probe_test.rs (target\debug\deps\doctor_probe_test-8c05c81c518767aa.exe)
+     Running tests\fail_closed_test.rs (target\debug\deps\fail_closed_test-a4a746e9b62587f7.exe)
+     Running tests\isolation_selective_test.rs (target\debug\deps\isolation_selective_test-579e7b0cdbd263cc.exe)
+     Running tests\live_resume_e2e_test.rs (target\debug\deps\live_resume_e2e_test-1f1f5e32bb6037df.exe)
+     Running tests\observability_test.rs (target\debug\deps\observability_test-2c5981c5bb577d39.exe)
+     Running tests\persistent_resume_test.rs (target\debug\deps\persistent_resume_test-a7c3670d98c3b515.exe)
+     Running tests\provider_detection.rs (target\debug\deps\provider_detection-c1967947e1095f7d.exe)
+     Running tests\provider_test.rs (target\debug\deps\provider_test-91bf46078594d98e.exe)
+     Running tests\reasoning_hardening.rs (target\debug\deps\reasoning_hardening-b8f7093d970c05cc.exe)
+     Running tests\reasoning_review.rs (target\debug\deps\reasoning_review-614fdcecd0eebb1d.exe)
+     Running tests\schema_normalization_test.rs (target\debug\deps\schema_normalization_test-14020c20ad12cdba.exe)
+     Running tests\spec_scenarios_test.rs (target\debug\deps\spec_scenarios_test-6d2e0b1f6708e140.exe)
+     Running tests\sse_tool_calls_contract_test.rs (target\debug\deps\sse_tool_calls_contract_test-4dc8e11c85a299d3.exe)
+     Running tests\stage2_continuation_test.rs (target\debug\deps\stage2_continuation_test-109c577cf5b1f75b.exe)
+     Running tests\stream_timeout_test.rs (target\debug\deps\stream_timeout_test-0a2f616cc2301477.exe)
+     Running tests\streaming_rs0_test.rs (target\debug\deps\streaming_rs0_test-59cca4bb3663618c.exe)
+   Doc-tests agentgate

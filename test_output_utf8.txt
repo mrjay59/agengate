@@ -1,0 +1,288 @@
+﻿cargo :    Compiling agentgate v0.1.0 (C:\Users\EDN\Documents\AION\project\agentgate)
+At line:2 char:1
++ cargo test --lib 2>&1 > C:\Users\EDN\Documents\AION\project\agentgate ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling ag...ject\agentgate):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: unused import: `BridgeServer`
+  --> src\provider\bridge\shim.rs:12:35
+   |
+12 | use crate::bridge::{BridgeClient, BridgeServer};
+   |                                   ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::provider::bridge::BridgeConfig`
+  --> src\provider\bridge\shim.rs:13:5
+   |
+13 | use crate::provider::bridge::BridgeConfig;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `futures::future::join_all`
+  --> src\service.rs:11:5
+   |
+11 | use futures::future::join_all;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src\provider\bridge\spike.rs:149:9
+    |
+149 |     let mut session = provider.start_bridge(bridge_config.clone(), client.clone()).await?;
+    |         ----^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `AsyncReadExt`
+  --> src\provider\bridge\ollama_cli.rs:15:34
+   |
+15 | use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+   |                                  ^^^^^^^^^^^^
+
+warning: unused import: `BridgeSession`
+  --> src\provider\bridge\spike.rs:17:37
+   |
+17 |     BridgeConfig, BridgeProviderV2, BridgeSession,
+   |                                     ^^^^^^^^^^^^^
+
+warning: unused import: `crate::provider::bridge::BridgeSession`
+ --> src\provider.rs:2:5
+  |
+2 | use crate::provider::bridge::BridgeSession as ProviderBridgeSession;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `elapsed`
+   --> src\service.rs:287:37
+    |
+287 |                 Ok((id, Ok(models), elapsed)) => {
+    |                                     ^^^^^^^ help: if this is intentional, prefix it with an underscore: 
+`_elapsed`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\opencode.rs:287:21
+    |
+287 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\gemini.rs:224:21
+    |
+224 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+
+warning: unused variable: `pid`
+   --> src\provider\bridge\claude.rs:227:21
+    |
+227 |         if let Some(pid) = child.id() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_pid`
+
+warning: variable does not need to be mutable
+   --> src\provider\bridge\ollama_cli.rs:355:13
+    |
+355 |         let mut stderr_output = String::new();
+    |             ----^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `stderr_output`
+   --> src\provider\bridge\ollama_cli.rs:355:13
+    |
+355 |         let mut stderr_output = String::new();
+    |             ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_stderr_output`
+
+warning: unused variable: `cli_type`
+   --> src\provider\bridge\spike.rs:139:5
+    |
+139 |     cli_type: &str,
+    |     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cli_type`
+
+warning: unused variable: `initialized`
+   --> src\provider\bridge\shim.rs:168:5
+    |
+168 |     initialized: &mut bool,
+    |     ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_initialized`
+
+warning: unused variable: `config`
+   --> src\provider\bridge\shim.rs:220:49
+    |
+220 | async fn handle_initialize(req: JsonRpcRequest, config: &ShimConfig) -> JsonRpcResponse {
+    |                                                 ^^^^^^ help: if this is intentional, prefix it with an 
+underscore: `_config`
+
+warning: unused variable: `bridge_client`
+   --> src\provider\bridge\shim.rs:267:5
+    |
+267 |     bridge_client: &Arc<BridgeClient>,
+    |     ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_bridge_client`
+
+warning: unused variable: `stream`
+  --> src\provider\ollama_cli.rs:50:46
+   |
+50 |     fn build_run_command(&self, model: &str, stream: bool) -> Command {
+   |                                              ^^^^^^ help: if this is intentional, prefix it with an underscore: 
+`_stream`
+
+warning: field `tool_name` is never read
+   --> src\bridge.rs:143:5
+    |
+140 | struct PendingCall {
+    |        ----------- field in this struct
+...
+143 |     tool_name: String,
+    |     ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `execute_cmd_inner` is never used
+   --> src\provider.rs:796:8
+    |
+618 | impl CliProviderImpl {
+    | -------------------- method in this implementation
+...
+796 |     fn execute_cmd_inner(&self, bin: &str, args: &[String]) -> Result<std::process::Output, anyhow::Error> {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: fields `client`, `mcp_token`, and `mcp_port` are never read
+   --> src\provider\bridge\opencode.rs:127:5
+    |
+126 | struct OpenCodeSession {
+    |        --------------- fields in this struct
+127 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+134 |     mcp_token: String,
+    |     ^^^^^^^^^
+135 |     mcp_port: u16,
+    |     ^^^^^^^^
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\opencode.rs:569:14
+    |
+140 | impl OpenCodeSession {
+    | -------------------- methods in this implementation
+...
+569 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+621 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: fields `client`, `mcp_token`, and `mcp_port` are never read
+   --> src\provider\bridge\gemini.rs:121:5
+    |
+120 | struct GeminiSession {
+    |        ------------- fields in this struct
+121 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+128 |     mcp_token: String,
+    |     ^^^^^^^^^
+129 |     mcp_port: u16,
+    |     ^^^^^^^^
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\gemini.rs:429:14
+    |
+134 | impl GeminiSession {
+    | ------------------ methods in this implementation
+...
+429 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+466 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: fields `client`, `mcp_token`, and `mcp_port` are never read
+   --> src\provider\bridge\claude.rs:121:5
+    |
+120 | struct ClaudeSession {
+    |        ------------- fields in this struct
+121 |     client: Arc<BridgeClient>,
+    |     ^^^^^^
+...
+128 |     mcp_token: String,
+    |     ^^^^^^^^^
+129 |     mcp_port: u16,
+    |     ^^^^^^^^
+
+warning: methods `preflight_isolation_check` and `read_event` are never used
+   --> src\provider\bridge\claude.rs:427:14
+    |
+134 | impl ClaudeSession {
+    | ------------------ methods in this implementation
+...
+427 |     async fn preflight_isolation_check(&self) -> Result<bool> {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+464 |     async fn read_event(&self) -> Option<Value> {
+    |              ^^^^^^^^^^
+
+warning: `agentgate` (lib test) generated 26 warnings (run `cargo fix --lib -p agentgate --tests` to apply 15 
+suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.81s
+     Running unittests src\lib.rs (target\debug\deps\agentgate-74b9cd5dd221b841.exe)
+
+running 55 tests
+test provider::bridge::claude::tests::factory_name ... ok
+test doctor::tests::embedded_matrix_is_valid_json ... ok
+test doctor::tests::none_probe_has_no_reasoning_fields ... ok
+test doctor::tests::reasoning_content_probe_uses_reasoning_field ... ok
+test provider::bridge::ollama_cli::tests::factory_name ... ok
+test provider::bridge::gemini::tests::factory_name ... ok
+test doctor::tests::think_tags_probe_opens_and_closes_once ... ok
+test provider::bridge::gemini::tests::mcp_config_serialization ... ok
+test provider::bridge::claude::tests::mcp_config_serialization ... ok
+test provider::bridge::ollama_cli::tests::parses_bare_tool_call_object ... ok
+test provider::bridge::ollama_cli::tests::parses_compact_and_fenced_tool_calls ... ok
+test provider::bridge::ollama_cli::tests::parses_openai_style_tool_calls ... ok
+test provider::bridge::ollama_cli::tests::plain_text_is_not_a_tool_call ... ok
+test doctor::tests::each_format_has_a_probe_stream ... ok
+test provider::bridge::ollama_cli::tests::run_args_without_keepalive ... ok
+test provider::bridge::ollama_cli::tests::run_args_inject_keepalive_before_model ... ok
+test provider::bridge::ollama_cli::tests::session_reuses_configured_session_id ... ok
+test provider::bridge::ollama_cli::tests::strips_ansi_sequences ... ok
+test provider::bridge::opencode::tests::factory_name ... ok
+test provider::bridge::opencode::tests::mcp_config_serialization ... ok
+test provider::bridge::shim::tests::test_json_rpc_response ... ok
+test provider::bridge::shim::tests::test_json_rpc_serialization ... ok
+test reasoning::coalesce::tests::force_flush_closes_reasoning ... ok
+test reasoning::coalesce::tests::reasoning_is_flushed_before_first_text ... ok
+test reasoning::format::tests::literal_close_tag_is_escaped ... ok
+test reasoning::format::tests::non_stream_think_tags_wraps_once ... ok
+test reasoning::format::tests::parses_all_formats ... ok
+test reasoning::format::tests::reasoning_content_can_send_null_content ... ok
+test reasoning::format::tests::think_tags_open_once_and_close_before_text ... ok
+test reasoning::limit::tests::block_limit_drops_later_blocks ... ok
+test reasoning::limit::tests::escape_close_tag_is_zero_width_safe ... ok
+test reasoning::limit::tests::normalizes_crlf ... ok
+test reasoning::limit::tests::truncates_on_character_boundary ... ok
+test reasoning::parser::tests::claude_thinking_delta_sequence ... ok
+test reasoning::parser::tests::crlf_and_malformed_lines ... ok
+test reasoning::parser::tests::multi_tool_calls_grouped_in_single_reasoning_block ... ok
+test reasoning::parser::tests::ollama_thinking_block_is_split_from_answer ... ok
+test reasoning::parser::tests::opencode_error_object_is_surfaced ... ok
+test reasoning::parser::tests::opencode_text_part_is_forwarded ... ok
+test reasoning::parser::tests::redacted_thinking_is_omitted_without_content ... ok
+test reasoning::parser::tests::repeated_tool_call_batches_share_reasoning_block ... ok
+test reasoning::redact::tests::disabled_redactor_is_noop ... ok
+test reasoning::tool_view::tests::edit_operations_are_flagged ... ok
+test reasoning::tool_view::tests::empty_arguments_still_render ... ok
+test reasoning::tool_view::tests::known_tools_render_with_icon_and_target ... ok
+test reasoning::parser::tests::oversized_line_is_dropped ... ok
+test reasoning::tool_view::tests::opencode_camel_case_filepath_is_target ... ok
+test reasoning::tool_view::tests::unknown_tool_falls_back_to_generic ... ok
+test reasoning::redact::tests::leaves_clean_text_untouched ... ok
+test reasoning::redact::tests::invalid_patterns_are_ignored ... ok
+test provider::bridge::ollama_cli::tests::health_check_when_not_installed ... ok
+test reasoning::pipeline::tests::redacts_reasoning_and_text ... ok
+test reasoning::pipeline::tests::omitted_block_emits_nothing_synthetic ... ok
+test reasoning::redact::tests::redacts_api_keys_and_sk_tokens ... ok
+test reasoning::pipeline::tests::tool_calls_pass_through_no_synthetic_activity ... ok
+
+test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
