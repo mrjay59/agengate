@@ -1322,7 +1322,14 @@ impl BridgeCliProvider {
                     .iter()
                     .enumerate()
                     .map(|(index, t)| {
-                        let name = openai_name_alias(&t.function.name, index);
+                        let raw_name = openai_name_alias(&t.function.name, index);
+                        // Normalize client tool names to opencode canonical names
+                        let name = match raw_name.to_lowercase().as_str() {
+                            "shell" | "sh" => "bash".to_string(),
+                            "cat" => "read".to_string(),
+                            "execute" => "bash".to_string(),
+                            _ => raw_name,
+                        };
                         let description = t.function.description.clone().unwrap_or_default();
                         let parameters = t
                             .function

@@ -56,7 +56,7 @@ early_role_chunk = true
 # off: no tool disabling
 mode = "selective"
 # Additional built-in tools to allow beyond the mode defaults
-allowed_builtins = []
+allowed_builtins = ["bash", "execute", "shell", "read", "write", "edit", "glob", "list", "patch", "cat"]
 # Override: explicitly disable these built-in tools
 disabled_builtins = []
 # FIX-PROMPT-01: When true, client system prompt is forwarded via CLI --system flag (default false: strip)
