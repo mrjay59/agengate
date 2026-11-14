@@ -252,10 +252,16 @@ async fn chat_completions(
         request.tools = None;
     }
 
+    // Resolve model alias (e.g., "gpt-4o" → "agg/opencode/beam-free")
+    let resolved_model = registry.resolve_model_alias(&request.model);
+    if resolved_model != request.model {
+        info!("Model alias resolved: {} -> {}", request.model, resolved_model);
+    }
+
     let provider_id = match request.provider.clone() {
         Some(provider) => provider,
         None => registry
-            .resolve_provider(&request.model)
+            .resolve_provider(&resolved_model)
             .await
             .ok_or_else(|| AppError::ModelNotFound(request.model.clone()))?,
     };
@@ -293,7 +299,8 @@ async fn chat_completions(
         event = "run.start",
         run_id = %run_id,
         provider = %provider_id,
-        model = %request.model,
+        model = %resolved_model,
+        original_model = %request.model,
         mode = %mode,
         tools = request.tools.as_ref().map(|t| t.len()).unwrap_or(0)
     );
@@ -305,7 +312,7 @@ async fn chat_completions(
 
     if is_stream {
         let (tx, rx) = mpsc::channel::<Result<axum::response::sse::Event, axum::Error>>(128);
-        let ctx = ChunkContext::new(&request.model);
+        let ctx = ChunkContext::new(&resolved_model);
         let registry_clone = registry.clone();
         let activity_via_reasoning = reasoning_cfg.activity_via_reasoning;
         let response_cfg = reasoning_cfg.clone();

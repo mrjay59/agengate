@@ -64,3 +64,8 @@ preserve_client_system_prompt = false
 # FIX-FREELIMIT-01: When true (default), skip verbose permission block in opencode.json
 # to avoid triggering provider.free-limit on free models (beam-free etc.)
 minimal_free_model = true
+
+[routing]
+# Model alias mapping: Copilot model names -> AgentGate model names
+# Format: "copilot_model_name" = "agentgate_model_name"
+model_aliases = { gpt4o = "agg/opencode/beam-free", gpt4o_mini = "agg/opencode/flint-40b-free", o1_mini = "agg/opencode/deepseek-v4.1-flash-free", o1_preview = "agg/opencode/beam", claude_sonnet = "agg/opencode/codestral" }

@@ -157,10 +157,29 @@ impl ServiceRegistry {
         self
     }
 
+    /// Resolve model alias (e.g., "gpt-4o" → "agg/opencode/beam-free")
+    pub fn resolve_model_alias(&self, model: &str) -> String {
+        // Check config first (config keys use simplified names without hyphens/dots)
+        let config_key = model.replace('-', "_").replace('.', "_");
+        if let Some(mapped) = self.routing.model_aliases.get(&config_key) {
+            return mapped.clone();
+        }
+        // Built-in defaults for GitHub Copilot Chat
+        match model {
+            "gpt-4o" | "gpt-4o-mini" => "agg/opencode/beam-free".to_string(),
+            "gpt-4-turbo" => "agg/opencode/flint-40b-free".to_string(),
+            "gpt-3.5-turbo" => "agg/opencode/iceman-free".to_string(),
+            "o1-mini" | "o1-preview" => "agg/opencode/deepseek-v4.1-flash-free".to_string(),
+            _ => model.to_string(),
+        }
+    }
+
     /// Resolve the provider for a model without spawning model-discovery commands.
     pub async fn provider_for_model(&self, model: &str) -> Option<String> {
+        // Resolve model alias first (e.g., "gpt-4o" -> "agg/opencode/beam-free")
+        let model = self.resolve_model_alias(model);
         // Strip "agg/" gateway namespace prefix if present
-        let model = model.strip_prefix("agg/").unwrap_or(model);
+        let model = model.strip_prefix("agg/").unwrap_or(&model);
         if model.starts_with("ollama/") {
             return Some("ollama".to_string());
         }

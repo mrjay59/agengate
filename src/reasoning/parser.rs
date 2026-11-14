@@ -56,11 +56,10 @@ impl ReasoningParser {
     fn resolve_tool_name(&self, name: &str) -> String {
         let stripped = crate::bridge::BridgeServer::strip_mcp_tool_prefix(name);
         let lower = stripped.to_lowercase();
-        // Check if client registered a DIFFERENT casing (non-identity mapping).
-        // If client sent "shell" but registered "Shell", map["shell"] == "Shell" (different) → use "Shell".
-        // If client sent "shell" and registered "shell", map["shell"] == "shell" (identity) → fall through to title-case.
+        // If client registered this tool (any casing), use their exact casing.
+        // Fallback to title-case only for opencode built-ins client didn't register.
         let use_client_casing = if let Some(ref map) = self.tool_by_lower {
-            map.get(&lower).map(|orig| orig != &stripped).unwrap_or(false)
+            map.contains_key(&lower)
         } else {
             false
         };
@@ -77,6 +76,7 @@ impl ReasoningParser {
         // - client provided no mapping for this tool.
         // For tools AionUI actually registers (read, write, edit, glob, grep, execute),
         // keep lowercase. For opencode-specific tools (shell, bash, list, cat), use TitleCase.
+        // For GitHub Copilot Chat: map Copilot tool names to AgentGate/opencode names.
         const TITLE_CASE_BUILTINS: &[(&str, &str)] = &[
             ("shell", "Shell"),
             ("read", "read"),
@@ -92,6 +92,12 @@ impl ReasoningParser {
             ("ls", "Ls"),
             ("cat", "Cat"),
             ("find", "Find"),
+            // GitHub Copilot Chat tool names
+            ("read_file", "read"),
+            ("write_file", "write"),
+            ("edit_file", "edit"),
+            ("list_dir", "list"),
+            ("terminal", "bash"),
         ];
         if let Some(orig) = TITLE_CASE_BUILTINS
             .iter()

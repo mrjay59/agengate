@@ -30,6 +30,9 @@ pub struct RoutingConfig {
     pub on_client_tools: ClientToolsPolicy,
     #[serde(default = "default_workspace")]
     pub default_workspace: String,
+    /// Model alias mapping: Copilot/OpenAI model names → AgentGate model IDs
+    #[serde(default)]
+    pub model_aliases: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -168,6 +171,7 @@ impl Default for RoutingConfig {
             no_tools_policy: NoToolsPolicy::default(),
             on_client_tools: ClientToolsPolicy::default(),
             default_workspace: default_workspace(),
+            model_aliases: std::collections::HashMap::new(),
         }
     }
 }
