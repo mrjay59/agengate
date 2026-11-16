@@ -533,6 +533,7 @@ pub fn unalias_tool_calls(
     // For tools AionUI actually registers (read, write, edit, glob, grep, execute),
     // keep lowercase. For opencode-specific tools (shell, bash, list, cat), use TitleCase.
     // For GitHub Copilot Chat: map Copilot tool names to AgentGate/opencode names.
+    // For AionUI: ExecCommand maps to bash (PowerShell)
     const TITLE_CASE_BUILTINS: &[(&str, &str)] = &[
         ("shell", "Shell"),
         ("read", "read"),
@@ -554,6 +555,8 @@ pub fn unalias_tool_calls(
         ("edit_file", "edit"),
         ("list_dir", "list"),
         ("terminal", "bash"),
+        // AionUI ExecCommand (PowerShell)
+        ("exec_command", "bash"),
     ];
 
     for call in calls.iter_mut() {

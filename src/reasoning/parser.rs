@@ -77,6 +77,7 @@ impl ReasoningParser {
         // For tools AionUI actually registers (read, write, edit, glob, grep, execute),
         // keep lowercase. For opencode-specific tools (shell, bash, list, cat), use TitleCase.
         // For GitHub Copilot Chat: map Copilot tool names to AgentGate/opencode names.
+        // For AionUI: ExecCommand maps to bash (PowerShell)
         const TITLE_CASE_BUILTINS: &[(&str, &str)] = &[
             ("shell", "Shell"),
             ("read", "read"),
@@ -98,6 +99,8 @@ impl ReasoningParser {
             ("edit_file", "edit"),
             ("list_dir", "list"),
             ("terminal", "bash"),
+            // AionUI ExecCommand (PowerShell)
+            ("exec_command", "bash"),
         ];
         if let Some(orig) = TITLE_CASE_BUILTINS
             .iter()
