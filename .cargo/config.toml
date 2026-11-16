@@ -4,9 +4,9 @@
 [target.x86_64-unknown-linux-gnu]
 linker = "x86_64-linux-gnu-gcc"
 
-# Linux aarch64 (from Windows host)
-[target.aarch64-unknown-linux-gnu]
-linker = "aarch64-linux-gnu-gcc"
+# Linux aarch64 cross-linker is configured by CI workflow when needed.
+# [target.aarch64-unknown-linux-gnu]
+# linker = "aarch64-linux-gnu-gcc"
 
 # Windows aarch64 (from Linux host)
 [target.aarch64-pc-windows-msvc]
