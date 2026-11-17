@@ -1,6 +1,8 @@
 # AgentGate
 
-Jembatan antara AionUi dan CLI agent. Menyediakan endpoint HTTP kompatibel OpenAI (`/v1/chat/completions`, `/v1/models`) yang meneruskan request ke CLI tool lokal.
+Jembatan antara AionUi / GitHub Copilot Chat dan CLI agent. Menyediakan endpoint HTTP kompatibel OpenAI (`/v1/chat/completions`, `/v1/models`) yang meneruskan request ke CLI tool lokal.
+
+**Versi: 0.2.10**
 
 ## Fitur
 
@@ -9,6 +11,11 @@ Jembatan antara AionUi dan CLI agent. Menyediakan endpoint HTTP kompatibel OpenA
 - Sanitasi pesan `tool` → `assistant` agar provider ketat tetap menerima.
 - Mendukung `reasoning_content` / thinking (OpenCode: `--thinking --format json`) untuk stream & non-stream.
 - Cross-platform: Windows, Linux x86_64, Linux ARM64.
+- **GitHub Copilot Chat support**: Model alias (`gpt-4o`, `o1-mini`, dll), tool normalization (`read_file`→`read`, `write_file`→`write`, `terminal`→`bash`, `list_dir`→`list`), system prompt forwarding, reduced timeout.
+- **AionUI tool support**: `ExecCommand` (PowerShell via `bash`), `read`, `write`, `edit`, `glob`, `grep`, `execute` (JS Code Mode).
+- **opencode CLI tools**: `Shell`, `Bash`, `List`, `Cat`, `Read`, `Write`, `Edit`, `Glob`, `Grep` (TitleCase).
+- **MCP Bridge**: Session management, tool isolation, parked runs, live continuation.
+- **Free model limit handling**: Skip opencode.json injection for free models.
 
 ## Build
 

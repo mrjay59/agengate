@@ -510,6 +510,112 @@ pub fn openai_name_aliases(
 ///
 /// Also normalizes MCP-namespaced names (e.g. `agentgate_glob`, `agentgate__Glob`)
 /// back to the registered client tool name so AionUI/clients can resolve them.
+/// Align tool-call argument keys with the client tool's declared JSON schema.
+///
+/// CLI agents (opencode) emit arguments using their own naming (`filePath`, or
+/// `path`), while clients register tools with snake_case parameters
+/// (`file_path`, `old_string`, ...). Without alignment the client-side executor
+/// rejects calls with "Missing required parameter: file_path".
+///
+/// Schema-driven: only renames when the registered tool actually declares the
+/// canonical key, so tools with genuinely different params are untouched.
+fn align_tool_arguments(
+    name: &str,
+    arguments: &str,
+    tools: &[crate::types::ToolDefinition],
+) -> String {
+    let Ok(mut args) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return arguments.to_string();
+    };
+    let Some(obj) = args.as_object_mut() else {
+        return arguments.to_string();
+    };
+    let Some(def) = tools
+        .iter()
+        .find(|t| t.function.name == name)
+        .or_else(|| tools.iter().find(|t| t.function.name.eq_ignore_ascii_case(name)))
+    else {
+        return arguments.to_string();
+    };
+    let Some(schema) = def.function.parameters.as_ref() else {
+        return arguments.to_string();
+    };
+    let Some(props) = schema.get("properties").and_then(|v| v.as_object()) else {
+        return arguments.to_string();
+    };
+    let has = |k: &str| props.contains_key(k);
+    let lower = name.trim().to_lowercase();
+
+    // File-target tools: pick the key the client declared, then move whatever
+    // the CLI provided (path / filePath / file ...) onto it.
+    let file_like = matches!(
+        lower.as_str(),
+        "read" | "write" | "create" | "edit" | "view" | "cat" | "multiedit"
+            | "multi_edit" | "patch" | "glob" | "grep"
+    );
+    if file_like {
+        let canon = if has("file_path") {
+            Some("file_path")
+        } else if has("path") {
+            Some("path")
+        } else {
+            None
+        };
+        if let Some(canon) = canon {
+            if !obj.contains_key(canon) {
+                let cands: &[&str] = if canon == "file_path" {
+                    &["file_path", "filePath", "filepath", "file", "path", "absolute_path", "filename"]
+                } else {
+                    &["path", "file_path", "filePath", "filepath", "file"]
+                };
+                let src_key = cands
+                    .iter()
+                    .find(|k| obj.contains_key(**k))
+                    .map(|k| k.to_string());
+                if let Some(k) = src_key {
+                    if let Some(v) = obj.remove(&k) {
+                        obj.insert(canon.to_string(), v);
+                    }
+                }
+            }
+        }
+    }
+
+    // edit-style old/new string keys (camelCase -> snake_case).
+    let is_edit = matches!(
+        lower.as_str(),
+        "edit" | "multiedit" | "multi_edit" | "patch" | "str_replace"
+    );
+    if is_edit {
+        let groups: [(&str, &[&str]); 2] = [
+            (
+                "old_string",
+                &["old_string", "oldString", "old", "find", "search", "original"],
+            ),
+            (
+                "new_string",
+                &["new_string", "newString", "new", "replace", "replacement"],
+            ),
+        ];
+        for (canon, cands) in groups {
+            if obj.contains_key(canon) {
+                continue;
+            }
+            let src_key = cands
+                .iter()
+                .find(|k| obj.contains_key(**k))
+                .map(|k| k.to_string());
+            if let Some(k) = src_key {
+                if let Some(v) = obj.remove(&k) {
+                    obj.insert(canon.to_string(), v);
+                }
+            }
+        }
+    }
+
+    serde_json::to_string(&args).unwrap_or(arguments.to_string())
+}
+
 pub fn unalias_tool_calls(
     calls: &mut [crate::reasoning::event::ToolCall],
     tools: &[crate::types::ToolDefinition],
@@ -591,6 +697,12 @@ pub fn unalias_tool_calls(
                 call.function.name = orig.to_string();
             }
         }
+        // 3) Align argument keys with the client tool schema so the
+        //    client-side executor (validating against the registered tool)
+        //    does not fail with "Missing required parameter: file_path" when
+        //    the CLI emits its own naming (opencode uses `filePath` / `path`).
+        call.function.arguments =
+            align_tool_arguments(&call.function.name, &call.function.arguments, tools);
     }
 }
 
@@ -655,5 +767,87 @@ fn resolve_refs(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod align_args_tests {
+    use super::align_tool_arguments;
+    use crate::types::{FunctionDefinition, ToolDefinition};
+
+    fn tool(name: &str, params: serde_json::Value) -> ToolDefinition {
+        ToolDefinition {
+            r#type: "function".to_string(),
+            function: FunctionDefinition {
+                name: name.to_string(),
+                description: None,
+                parameters: Some(params),
+            },
+        }
+    }
+
+    #[test]
+    fn write_path_becomes_file_path_when_client_declares_it() {
+        let tools = vec![tool(
+            "write",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string"},
+                    "content": {"type": "string"}
+                },
+                "required": ["file_path", "content"]
+            }),
+        )];
+        let out = align_tool_arguments(
+            "write",
+            r#"{"path":"a.txt","content":"hi"}"#,
+            &tools,
+        );
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["file_path"], "a.txt");
+        assert!(v.get("path").is_none(), "path should be renamed: {out}");
+    }
+
+    #[test]
+    fn camel_case_file_path_is_normalized() {
+        let tools = vec![tool(
+            "read",
+            serde_json::json!({
+                "type": "object",
+                "properties": {"file_path": {"type": "string"}},
+                "required": ["file_path"]
+            }),
+        )];
+        let out = align_tool_arguments("read", r#"{"filePath":"b.rs"}"#, &tools);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["file_path"], "b.rs");
+        assert!(v.get("filePath").is_none());
+    }
+
+    #[test]
+    fn path_kept_when_client_declares_path() {
+        let tools = vec![tool(
+            "glob",
+            serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "pattern": {"type": "string"}},
+                "required": ["pattern"]
+            }),
+        )];
+        let out = align_tool_arguments(
+            "glob",
+            r#"{"file_path":"src","pattern":"*.rs"}"#,
+            &tools,
+        );
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["path"], "src");
+        assert!(v.get("file_path").is_none());
+    }
+
+    #[test]
+    fn unknown_tool_is_untouched() {
+        let out = align_tool_arguments("custom", r#"{"path":"x"}"#, &[]);
+        assert_eq!(out, r#"{"path":"x"}"#);
     }
 }
