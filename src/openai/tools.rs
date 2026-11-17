@@ -616,6 +616,18 @@ fn align_tool_arguments(
     serde_json::to_string(&args).unwrap_or(arguments.to_string())
 }
 
+/// Normalize a client-registered tool name to the opencode canonical name used
+/// by the CLI/bridge. Mirror of the mapping applied in
+/// `Provider::tool_schemas_from_request`. Keep in sync.
+pub fn canonical_tool_name(name: &str) -> String {
+    match name.trim().to_lowercase().as_str() {
+        "shell" | "sh" | "terminal" => "bash".to_string(),
+        "cat" => "read".to_string(),
+        "execute" => "bash".to_string(),
+        other => other.to_string(),
+    }
+}
+
 pub fn unalias_tool_calls(
     calls: &mut [crate::reasoning::event::ToolCall],
     tools: &[crate::types::ToolDefinition],
@@ -631,6 +643,17 @@ pub fn unalias_tool_calls(
     for t in tools {
         by_lower
             .entry(t.function.name.to_lowercase())
+            .or_insert_with(|| t.function.name.clone());
+    }
+
+    // Reverse of the client→canonical normalization applied in
+    // `Provider::tool_schemas_from_request` (shell/sh→bash, cat→read,
+    // execute→bash): map a canonical name back to the client-registered name.
+    let mut canonical_to_client: HashMap<String, String> = HashMap::new();
+    for t in tools {
+        let canon = crate::openai::tools::canonical_tool_name(&t.function.name).to_lowercase();
+        canonical_to_client
+            .entry(canon)
             .or_insert_with(|| t.function.name.clone());
     }
 
@@ -678,24 +701,28 @@ pub fn unalias_tool_calls(
             call.function.name = stripped;
         }
         let lower = call.function.name.to_lowercase();
-        // Check if by_lower maps to a DIFFERENT casing (non-identity).
-        // If client sent "shell" but registered "Shell", by_lower["shell"] == "Shell" (different) → use "Shell".
-        // If client sent "shell" and registered "shell", by_lower["shell"] == "shell" (identity) → fall through.
-        let use_client_casing = by_lower.get(&lower).map(|orig| orig != &lower).unwrap_or(false);
-        if use_client_casing {
-            if let Some(orig) = by_lower.get(&lower) {
-                call.function.name = orig.clone();
-            }
-        } else {
-            // Fallback: title-case known opencode built-ins.
-            // Applied when: no tools provided, OR identity mapping, OR no mapping for this tool.
-            if let Some(orig) = TITLE_CASE_BUILTINS
-                .iter()
-                .find(|(k, _)| *k == lower)
-                .map(|(_, v)| *v)
-            {
-                call.function.name = orig.to_string();
-            }
+        let normalized_lower = match lower.as_str() {
+            "shell" | "sh" => "bash".to_string(),
+            "cat" => "read".to_string(),
+            other => other.to_string(),
+        };
+        // Resolve to the client's exact registered casing when known (by_lower is
+        // keyed case-insensitively, so a client that registered lowercase
+        // "read" / "write" / "edit" / "glob" / "grep" / "execute" gets that back).
+        // Only fall back to opencode built-in casing when the client did not
+        // register the tool (e.g. no client tools provided).
+        let resolved = by_lower
+            .get(&lower)
+            .cloned()
+            .or_else(|| canonical_to_client.get(&normalized_lower).cloned())
+            .or_else(|| {
+                TITLE_CASE_BUILTINS
+                    .iter()
+                    .find(|(k, _)| *k == lower)
+                    .map(|(_, v)| (*v).to_string())
+            });
+        if let Some(name) = resolved {
+            call.function.name = name;
         }
         // 3) Align argument keys with the client tool schema so the
         //    client-side executor (validating against the registered tool)
@@ -849,5 +876,71 @@ mod align_args_tests {
     fn unknown_tool_is_untouched() {
         let out = align_tool_arguments("custom", r#"{"path":"x"}"#, &[]);
         assert_eq!(out, r#"{"path":"x"}"#);
+    }
+}
+
+#[cfg(test)]
+mod unalias_tests {
+    use super::unalias_tool_calls;
+    use crate::reasoning::event::ToolCall;
+    use crate::types::{FunctionDefinition, ToolDefinition};
+
+    fn tool(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            r#type: "function".to_string(),
+            function: FunctionDefinition {
+                name: name.to_string(),
+                description: None,
+                parameters: Some(serde_json::json!({"type": "object", "properties": {}})),
+            },
+        }
+    }
+
+    fn call(name: &str) -> ToolCall {
+        ToolCall {
+            id: "c1".to_string(),
+            r#type: "function".to_string(),
+            function: crate::reasoning::event::FunctionCall {
+                name: name.to_string(),
+                arguments: "{}".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn keeps_client_lowercase_casing() {
+        // AionUI registers lowercase tools; emitted call must stay lowercase.
+        let tools = vec![tool("read"), tool("write"), tool("edit"), tool("glob")];
+        let mut calls = vec![call("Read"), call("Write"), call("Edit")];
+        unalias_tool_calls(&mut calls, &tools);
+        assert_eq!(calls[0].function.name, "read");
+        assert_eq!(calls[1].function.name, "write");
+        assert_eq!(calls[2].function.name, "edit");
+    }
+
+    #[test]
+    fn keeps_client_title_case_casing() {
+        let tools = vec![tool("Shell"), tool("List")];
+        let mut calls = vec![call("shell"), call("list")];
+        unalias_tool_calls(&mut calls, &tools);
+        assert_eq!(calls[0].function.name, "Shell");
+        assert_eq!(calls[1].function.name, "List");
+    }
+
+    #[test]
+    fn reverse_maps_execute_to_bash() {
+        // Client registered "execute" (AionUI); CLI emits canonical "bash".
+        let tools = vec![tool("execute"), tool("read")];
+        let mut calls = vec![call("bash")];
+        unalias_tool_calls(&mut calls, &tools);
+        assert_eq!(calls[0].function.name, "execute");
+    }
+
+    #[test]
+    fn fallback_title_cases_without_client_tools() {
+        let mut calls = vec![call("shell"), call("read")];
+        unalias_tool_calls(&mut calls, &[]);
+        assert_eq!(calls[0].function.name, "Shell");
+        assert_eq!(calls[1].function.name, "read");
     }
 }

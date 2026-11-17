@@ -58,15 +58,15 @@ impl ReasoningParser {
         let lower = stripped.to_lowercase();
         // If client registered this tool (any casing), use their exact casing.
         // Fallback to title-case only for opencode built-ins client didn't register.
-        let use_client_casing = if let Some(ref map) = self.tool_by_lower {
-            map.contains_key(&lower)
-        } else {
-            false
-        };
-        if use_client_casing {
-            if let Some(ref map) = self.tool_by_lower {
-                if let Some(orig) = map.get(&lower) {
-                    return orig.clone();
+        // Also reverse the client→canonical normalization (execute→bash) so a
+        // tool call emitted as "bash" maps back to the client's registered name.
+        if let Some(ref map) = self.tool_by_lower {
+            if let Some(orig) = map.get(&lower) {
+                return orig.clone();
+            }
+            for (k, v) in map.iter() {
+                if crate::openai::tools::canonical_tool_name(k).to_lowercase() == lower {
+                    return v.clone();
                 }
             }
         }

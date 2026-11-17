@@ -2,7 +2,7 @@
 
 Jembatan antara AionUi / GitHub Copilot Chat dan CLI agent. Menyediakan endpoint HTTP kompatibel OpenAI (`/v1/chat/completions`, `/v1/models`) yang meneruskan request ke CLI tool lokal.
 
-**Versi: 0.2.10**
+**Versi: 0.2.11**
 
 ## Fitur
 
