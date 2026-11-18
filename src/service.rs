@@ -941,6 +941,7 @@ impl ServiceRegistry {
         // Spawn bridge process and get the single response (carries tool_calls)
         let providers = self.providers.read().await;
         let provider = providers.get(provider_id).ok_or(AppError::ProviderNotFound(provider_id.to_string()))?;
+        tracing::info!(provider_id = %provider_id, provider_type = %std::any::type_name_of_val(&*provider), is_bridge = %provider.is_bridge(), "new_bridge_run: calling provider");
         let model = request.model.clone();
         let mut req_for_provider = request.clone();
         req_for_provider.agentgate_run_id = run.as_ref().map(|r| r.id.clone());

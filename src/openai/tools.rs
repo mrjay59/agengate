@@ -613,6 +613,26 @@ fn align_tool_arguments(
         }
     }
 
+    // bash/execute-style: map `command` -> `cmd` (opencode/bash uses `cmd`)
+    let is_bash = matches!(
+        lower.as_str(),
+        "bash" | "execute" | "shell" | "sh" | "terminal"
+    );
+    if is_bash {
+        if !obj.contains_key("cmd") {
+            let cands = &["command", "cmd", "command_line", "commandline"];
+            let src_key = cands
+                .iter()
+                .find(|k| obj.contains_key(**k))
+                .map(|k| k.to_string());
+            if let Some(k) = src_key {
+                if let Some(v) = obj.remove(&k) {
+                    obj.insert("cmd".to_string(), v);
+                }
+            }
+        }
+    }
+
     serde_json::to_string(&args).unwrap_or(arguments.to_string())
 }
 
@@ -621,7 +641,7 @@ fn align_tool_arguments(
 /// `Provider::tool_schemas_from_request`. Keep in sync.
 pub fn canonical_tool_name(name: &str) -> String {
     match name.trim().to_lowercase().as_str() {
-        "shell" | "sh" | "terminal" => "bash".to_string(),
+        "shell" | "sh" | "terminal" | "execcommand" => "bash".to_string(),
         "cat" => "read".to_string(),
         "execute" => "bash".to_string(),
         other => other.to_string(),
@@ -700,6 +720,15 @@ pub fn unalias_tool_calls(
         if stripped != call.function.name {
             call.function.name = stripped;
         }
+
+        // 3) Align argument keys with the client tool schema using the ORIGINAL
+        //    tool name (before canonical resolution). This ensures we find the
+        //    client's registered tool (e.g., "ExecCommand" with "command" param)
+        //    rather than the canonical opencode name ("bash" with "cmd" param).
+        let original_name_for_alignment = call.function.name.clone();
+        call.function.arguments =
+            align_tool_arguments(&original_name_for_alignment, &call.function.arguments, tools);
+
         let lower = call.function.name.to_lowercase();
         let normalized_lower = match lower.as_str() {
             "shell" | "sh" => "bash".to_string(),

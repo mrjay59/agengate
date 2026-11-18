@@ -18,6 +18,7 @@ first_token_timeout_secs = 30
 [[provider]]
 id = "opencode"
 bin = "opencode"
+keep_alive = "10m"
 models_cmd = ["models"]
 chat_cmd = ["run", "--model", "{model}", "--thinking", "--format", "json", "{prompt}"]
 strip_ansi = true
