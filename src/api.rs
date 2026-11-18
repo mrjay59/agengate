@@ -1090,7 +1090,8 @@ async fn bridge_resolve(
 
 
 /// How long an SSE stream may stay silent before it is terminated with an
-/// explicit error chunk (default 120 s). Override with
+/// explicit error chunk (default 30 s, reduced from 120s to fail faster on
+/// free-tier quota issues). Override with
 /// `AGENTGATE_STREAM_IDLE_TIMEOUT_SECS`.
 fn stream_idle_timeout() -> Duration {
     std::env::var("AGENTGATE_STREAM_IDLE_TIMEOUT_SECS")
@@ -1098,5 +1099,5 @@ fn stream_idle_timeout() -> Duration {
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
         .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(120))
+        .unwrap_or_else(|| Duration::from_secs(30))
 }

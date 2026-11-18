@@ -326,7 +326,7 @@ pub struct DefaultsConfig {
     pub first_token_timeout_secs: u64,
 }
 
-fn default_first_token_timeout() -> u64 { 120 }
+fn default_first_token_timeout() -> u64 { 30 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReasoningConfig {
@@ -501,7 +501,7 @@ fn default_concurrency() -> usize {
 }
 
 fn default_cache_ttl() -> u64 {
-    300
+    600
 }
 
 impl Default for Config {

@@ -1229,11 +1229,12 @@ impl ServiceRegistry {
 /// CLI agents can block indefinitely: a missing ollama model starts a multi-GB
 /// auto-pull, and some CLI versions do not exit after an upstream error. Without
 /// this bound the HTTP client sees no response at all. Override with
-/// `AGENTGATE_PROVIDER_TIMEOUT_SECS`.
+/// `AGENTGATE_PROVIDER_TIMEOUT_SECS`. Default: 30s (reduced from 120s to fail
+/// faster on free-tier quota issues).
 fn provider_call_timeout_secs() -> u64 {
     std::env::var("AGENTGATE_PROVIDER_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(120)
+        .unwrap_or(30)
 }

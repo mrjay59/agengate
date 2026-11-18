@@ -1082,11 +1082,13 @@ use crate::provider::bridge::{BridgeConfig, create_bridge_factory_v2};
 use crate::bridge::BridgeClient;
 
 /// Maximum time to wait for a CLI turn before killing the bridge session.
+/// Default: 300s (reduced from 600s to fail faster on free-tier quota issues).
+/// Override with `AGENTGATE_BRIDGE_TIMEOUT_SECS`.
 pub fn bridge_turn_timeout() -> std::time::Duration {
     let secs = std::env::var("AGENTGATE_BRIDGE_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(600u64);
+        .unwrap_or(300u64);
     std::time::Duration::from_secs(secs)
 }
 
