@@ -1,5 +1,5 @@
 use crate::bridge::BridgeServer;
-use crate::config::{BridgeConfig, ReasoningConfig, RoutingConfig, DefaultsConfig};
+use crate::config::{BridgeConfig, ReasoningConfig, RoutingConfig, DefaultsConfig, LimitsConfig};
 use crate::error::AppError;
 use crate::config::ProviderConfig;
 use crate::provider::{CliProvider};
@@ -73,6 +73,8 @@ pub struct ServiceRegistry {
     pub provider_semaphores: RwLock<HashMap<String, Arc<Semaphore>>>,
     /// Default max concurrency per provider from config.
     pub max_concurrency_per_provider: usize,
+    /// Tool injection limits (QUOTA-01)
+    pub limits: LimitsConfig,
     /// Deadline for the first provider event on a streaming request
     /// (`[defaults] first_token_timeout_secs`, default 120 s).
     pub first_token_timeout: Duration,
@@ -90,6 +92,7 @@ impl ServiceRegistry {
         reasoning: ReasoningConfig,
         defaults: DefaultsConfig,
         ollama_cli_mode: bool,
+        limits: LimitsConfig,
     ) -> Self {
         let bridge = Arc::new(BridgeServer::new(bridge_config.clone()));
         let run_registry = RunRegistry::new(bridge.clone(), bridge_config.clone(), crate::permission::ToolActivityPolicy::default());
@@ -105,6 +108,7 @@ impl ServiceRegistry {
             ollama_cli_mode,
             provider_semaphores: RwLock::new(HashMap::new()),
             max_concurrency_per_provider: defaults.max_concurrency_per_provider,
+            limits,
             first_token_timeout: Duration::from_secs(if defaults.first_token_timeout_secs == 0 {
                 120
             } else {
@@ -123,6 +127,7 @@ impl ServiceRegistry {
             ReasoningConfig::default(),
             DefaultsConfig::default(),
             false,
+            LimitsConfig::default(),
         )
     }
 
@@ -276,7 +281,7 @@ impl ServiceRegistry {
     pub async fn register_configured(&mut self, providers: &[ProviderConfig]) {
         for provider_cfg in providers {
             let provider =
-                crate::provider::build_cli_provider(provider_cfg, Some(self.bridge.clone()), Some(&self.bridge_config));
+                crate::provider::build_cli_provider(provider_cfg, Some(self.bridge.clone()), Some(&self.bridge_config), Some(&self.limits));
             self.register(provider).await;
             let native: Box<dyn CliProvider + Send + Sync> =
                 Box::new(crate::provider::CliProviderImpl::new(provider_cfg.clone()));

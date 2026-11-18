@@ -173,6 +173,7 @@ async fn main() -> Result<()> {
                 config.reasoning.clone(),
                 config.defaults.clone(),
                 ollama_cli_enabled(&config),
+                config.limits.clone(),
             );
             for provider_cfg in &config.provider {
                 // Bridge-capable agents use the MCP bridge adapter (spec_tooling.md §12);
@@ -182,6 +183,7 @@ async fn main() -> Result<()> {
                     provider_cfg,
                     Some(registry.bridge.clone()),
                     Some(&config.bridge),
+                    Some(&config.limits),
                 );
                 registry.register(provider).await;
 
@@ -261,6 +263,7 @@ async fn main() -> Result<()> {
                 config.reasoning.clone(),
                 config.defaults.clone(),
                 ollama_cli_enabled(&config),
+                config.limits.clone(),
             );
             registry.register_configured(&config.provider).await;
             let provider_filter = provider.as_deref();
@@ -337,6 +340,7 @@ async fn main() -> Result<()> {
                         config.reasoning.clone(),
                         config.defaults.clone(),
                         ollama_cli_enabled(&config),
+                        config.limits.clone(),
                     );
                 registry.register_configured(&config.provider).await;
                 agentgate::doctor::run_probe_chain(&registry, host, *port, *seconds).await?;
@@ -348,6 +352,7 @@ async fn main() -> Result<()> {
                         config.reasoning.clone(),
                         config.defaults.clone(),
                         ollama_cli_enabled(&config),
+                        config.limits.clone(),
                     );
                 registry.register_configured(&config.provider).await;
                 agentgate::doctor::run_report(&registry).await;

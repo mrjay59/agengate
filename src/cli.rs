@@ -14,6 +14,7 @@ pub async fn execute_providers(config: &Config) -> Result<()> {
         config.reasoning.clone(),
         config.defaults.clone(),
         false, // ollama_cli_mode - not used for providers command
+        config.limits.clone(),
     );
     for provider_cfg in &config.provider {
         // Bridge-capable agents use the MCP bridge adapter (spec_tooling.md §12).
@@ -23,6 +24,7 @@ pub async fn execute_providers(config: &Config) -> Result<()> {
             provider_cfg,
             Some(registry.bridge.clone()),
             Some(&config.bridge),
+            Some(&config.limits),
         );
         let available = provider.check_available().await;
         let native_available = crate::provider::CliProviderImpl::new(provider_cfg.clone())
@@ -58,6 +60,7 @@ pub async fn execute_models(config: &Config, provider_filter: Option<&str>) -> R
         config.reasoning.clone(),
         config.defaults.clone(),
         false,
+        config.limits.clone(),
     );
     registry.register_configured(&config.provider).await;
 
@@ -83,6 +86,7 @@ pub async fn execute_test(config: &Config, model: &str, prompt: &str) -> Result<
         config.reasoning.clone(),
         config.defaults.clone(),
         false,
+        config.limits.clone(),
     );
     registry.register_configured(&config.provider).await;
 

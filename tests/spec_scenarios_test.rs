@@ -251,6 +251,7 @@ fn t12_oneof_and_ref_normalized() {
         },
         None,
         None,
+        None,
     ).expect("gemini bridge provider");
 
     let req = ChatCompletionRequest {

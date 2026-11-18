@@ -1227,6 +1227,8 @@ pub struct BridgeCliProvider {
     transport: Option<String>,
     /// Isolation config for selective tool disabling (TB-TOOL-02)
     isolation_config: crate::config::IsolationConfig,
+    /// Tool injection limits (QUOTA-01)
+    limits: crate::config::LimitsConfig,
     /// Cache of persistent sessions (keyed by session_id) for keep_alive mode.
     /// When keep_alive is enabled, sessions are stored here instead of being closed.
     /// Using Arc to allow cloning and sharing sessions across requests.
@@ -1240,8 +1242,9 @@ impl BridgeCliProvider {
     pub fn new(
         config: crate::config::ProviderConfig,
         bridge_config: Option<&crate::config::BridgeConfig>,
+        limits: Option<&crate::config::LimitsConfig>,
     ) -> Option<Self> {
-        Self::with_bridge(config, None, bridge_config)
+        Self::with_bridge(config, None, bridge_config, limits)
     }
 
     /// Create a bridge provider bound to the shared `BridgeServer` so each run
@@ -1250,6 +1253,7 @@ impl BridgeCliProvider {
         config: crate::config::ProviderConfig,
         bridge: Option<Arc<crate::bridge::BridgeServer>>,
         bridge_config: Option<&crate::config::BridgeConfig>,
+        limits: Option<&crate::config::LimitsConfig>,
     ) -> Option<Self> {
         // Determine which bridge factory to use based on provider ID
         let factory = create_bridge_factory_v2(&config.id)?;
@@ -1258,6 +1262,9 @@ impl BridgeCliProvider {
         let isolation_config = bridge_config
             .map(|bc| bc.isolation.clone())
             .unwrap_or_default();
+
+        // Get limits config, defaulting to default LimitsConfig
+        let limits = limits.cloned().unwrap_or_default();
 
         Some(Self {
             id: config.id,
@@ -1270,6 +1277,7 @@ impl BridgeCliProvider {
             prompt_tools_fallback: config.prompt_tools_fallback,
             transport: config.transport.clone(),
             isolation_config,
+            limits,
             persistent_sessions: Arc::new(RwLock::new(HashMap::new())),
             max_prompt_chars: 400_000,
             max_result_bytes: 262_144,
@@ -1295,7 +1303,10 @@ impl BridgeCliProvider {
 
     /// Check if keep_alive (persistent session) is enabled for this provider.
     pub fn is_keep_alive(&self) -> bool {
-        self.keep_alive.is_some()
+        match &self.keep_alive {
+            Some(val) => val == "true" || val == "1",
+            None => false,
+        }
     }
 
     /// Build the MCP tool schemas for this request.
@@ -1360,6 +1371,7 @@ pub fn build_cli_provider(
     config: &crate::config::ProviderConfig,
     bridge: Option<Arc<crate::bridge::BridgeServer>>,
     bridge_config: Option<&crate::config::BridgeConfig>,
+    limits: Option<&crate::config::LimitsConfig>,
 ) -> Box<dyn CliProvider + Send + Sync> {
     // Ollama uses HTTP native by default; only `ollama_mode = "cli"` opts into
     // the bridge adapter (spec_ollama-cli.md) which uses `ollama run` via MCP bridge.
@@ -1374,7 +1386,7 @@ pub fn build_cli_provider(
         if cfg.id == "ollama" && cfg.bin.is_none() {
             cfg.bin = Some("ollama".to_string());
         }
-        if let Some(bp) = BridgeCliProvider::with_bridge(cfg, bridge, bridge_config) {
+        if let Some(bp) = BridgeCliProvider::with_bridge(cfg, bridge, bridge_config, limits) {
             return Box::new(bp);
         }
     }
@@ -1477,7 +1489,7 @@ impl CliProvider for BridgeCliProvider {
             let tool_schemas = self.tool_schemas_from_request(&request);
             // FIX-QUOTA-01: Use full tool set (128) instead of hardcoded 10 for free models
             // Free models need full tool access; limiting to 10 causes more CLI spawns and faster quota exhaustion.
-            let max_inject = 128;
+            let max_inject = self.limits.max_tools;
             let tool_schemas_for_bridge: Vec<_> = if tool_schemas.len() > max_inject {
                 tracing::warn!(model = %model, total = tool_schemas.len(), max = max_inject, "Truncating injected tools");
                 tool_schemas[..max_inject].to_vec()
@@ -1694,7 +1706,7 @@ impl CliProvider for BridgeCliProvider {
             let tool_schemas = self.tool_schemas_from_request(&request);
             // FIX-QUOTA-01: Use full tool set (128) instead of hardcoded 10 for free models
             // Free models need full tool access; limiting to 10 causes more CLI spawns and faster quota exhaustion.
-            let max_inject = 128;
+            let max_inject = self.limits.max_tools;
             let tool_schemas_for_bridge: Vec<_> = if tool_schemas.len() > max_inject {
                 tracing::warn!(model = %model, total = tool_schemas.len(), max = max_inject, "Truncating injected tools");
                 tool_schemas[..max_inject].to_vec()

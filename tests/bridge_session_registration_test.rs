@@ -60,7 +60,7 @@ async fn rpc(
 #[tokio::test]
 async fn bridge_cli_provider_registers_reachable_session() {
     let registry = Arc::new(ServiceRegistry::new());
-    let provider = BridgeCliProvider::with_bridge(provider_config(), Some(registry.bridge.clone()), None)
+    let provider = BridgeCliProvider::with_bridge(provider_config(), Some(registry.bridge.clone()), None, None)
         .expect("gemini bridge provider");
 
     let (session_id, token) = provider
@@ -99,7 +99,7 @@ async fn bridge_cli_provider_registers_reachable_session() {
 
 #[tokio::test]
 async fn bridge_cli_provider_without_bridge_returns_none() {
-    let provider = BridgeCliProvider::with_bridge(provider_config(), None, None).expect("factory");
+    let provider = BridgeCliProvider::with_bridge(provider_config(), None, None, None).expect("factory");
     assert!(provider.register_session(demo_tools()).await.is_none());
 }
 
@@ -111,7 +111,7 @@ fn build_cli_provider_selects_bridge_for_opencode() {
         bridge: true,
         ..Default::default()
     };
-    let provider = agentgate::provider::build_cli_provider(&cfg, None, None);
+    let provider = agentgate::provider::build_cli_provider(&cfg, None, None, None);
     assert_eq!(provider.id(), "opencode");
     assert!(provider.is_bridge());
 }
@@ -124,7 +124,7 @@ fn build_cli_provider_honours_bridge_false() {
         bridge: false,
         ..Default::default()
     };
-    let provider = agentgate::provider::build_cli_provider(&cfg, None, None);
+    let provider = agentgate::provider::build_cli_provider(&cfg, None, None, None);
     assert_eq!(provider.id(), "opencode");
     assert!(!provider.is_bridge());
 }
@@ -137,7 +137,7 @@ fn build_cli_provider_falls_back_for_unknown_agent() {
         bridge: true,
         ..Default::default()
     };
-    let provider = agentgate::provider::build_cli_provider(&cfg, None, None);
+    let provider = agentgate::provider::build_cli_provider(&cfg, None, None, None);
     assert!(!provider.is_bridge());
 }
 
@@ -186,7 +186,7 @@ fn build_cli_provider_selects_bridge_for_ollama_cli_mode() {
         ollama_mode: Some("cli".to_string()),
         ..Default::default()
     };
-    let provider = agentgate::provider::build_cli_provider(&cfg, None, None);
+    let provider = agentgate::provider::build_cli_provider(&cfg, None, None, None);
     assert_eq!(provider.id(), "ollama");
     assert!(provider.is_bridge());
 }
@@ -199,7 +199,7 @@ fn build_cli_provider_keeps_ollama_native_by_default() {
         ollama_mode: None,
         ..Default::default()
     };
-    let provider = agentgate::provider::build_cli_provider(&cfg, None, None);
+    let provider = agentgate::provider::build_cli_provider(&cfg, None, None, None);
     assert_eq!(provider.id(), "ollama");
     assert!(!provider.is_bridge());
 }
