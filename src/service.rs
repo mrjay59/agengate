@@ -336,7 +336,7 @@ impl ServiceRegistry {
         // Scan missing/expired providers in parallel. Each scan is bounded so a
         // hung CLI (`opencode models`, `gemini list`, …) cannot stall the whole
         // request past the client's gateway timeout.
-        let scan_timeout = Duration::from_secs(10);
+        let scan_timeout = Duration::from_secs(5);
         let scan_futures: Vec<_> = providers_to_scan.into_iter().map(|(id, provider)| {
             let id_clone = id.clone();
             tokio::spawn(async move {
@@ -568,7 +568,10 @@ impl ServiceRegistry {
         if let Some(tools) = &request.tools {
             // Fail-closed limits (spec §14, [bridge.limits]).
             let limits = &self.bridge_config.limits;
-            if tools.len() > limits.max_tools {
+            // FIX-QUOTA-04: Skip max_tools check for free models to avoid rejecting requests
+            // before they reach the provider. Free models have their own quota limits.
+            let is_free_model = request.model.to_lowercase().contains("-free") || request.model.to_lowercase() == "free";
+            if !is_free_model && tools.len() > limits.max_tools {
                 return Err(AppError::ToolError(format!(
                     "too_many_tools ({} > {})",
                     tools.len(),

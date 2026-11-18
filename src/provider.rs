@@ -1475,9 +1475,9 @@ impl CliProvider for BridgeCliProvider {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
             let tool_schemas = self.tool_schemas_from_request(&request);
-            // INVEST-TOOL-FILTER: Limit injected tools to avoid cold-start timeout on free models
-            let is_free_model = model.to_lowercase().contains("-free") || model.to_lowercase() == "free";
-            let max_inject = if is_free_model { 10 } else { 128 };
+            // FIX-QUOTA-01: Use full tool set (128) instead of hardcoded 10 for free models
+            // Free models need full tool access; limiting to 10 causes more CLI spawns and faster quota exhaustion.
+            let max_inject = 128;
             let tool_schemas_for_bridge: Vec<_> = if tool_schemas.len() > max_inject {
                 tracing::warn!(model = %model, total = tool_schemas.len(), max = max_inject, "Truncating injected tools");
                 tool_schemas[..max_inject].to_vec()
@@ -1692,9 +1692,9 @@ impl CliProvider for BridgeCliProvider {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
             let tool_schemas = self.tool_schemas_from_request(&request);
-            // INVEST-TOOL-FILTER: Limit injected tools to avoid cold-start timeout on free models
-            let is_free_model = model.to_lowercase().contains("-free") || model.to_lowercase() == "free";
-            let max_inject = if is_free_model { 10 } else { 128 };
+            // FIX-QUOTA-01: Use full tool set (128) instead of hardcoded 10 for free models
+            // Free models need full tool access; limiting to 10 causes more CLI spawns and faster quota exhaustion.
+            let max_inject = 128;
             let tool_schemas_for_bridge: Vec<_> = if tool_schemas.len() > max_inject {
                 tracing::warn!(model = %model, total = tool_schemas.len(), max = max_inject, "Truncating injected tools");
                 tool_schemas[..max_inject].to_vec()

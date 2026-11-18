@@ -20,6 +20,9 @@ pub struct Config {
     /// `[workspace.<name>]` sections (spec §14).
     #[serde(default)]
     pub workspace: std::collections::HashMap<String, WorkspaceConfig>,
+    /// Tool injection limits.
+    #[serde(default)]
+    pub limits: LimitsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -253,7 +256,7 @@ impl Default for IsolationConfig {
             mode: default_isolation_mode(),
             allowed_builtins: Vec::new(),
             disabled_builtins: Vec::new(),
-            minimal_free_model: true,
+            minimal_free_model: false,
         }
     }
 }
@@ -269,8 +272,8 @@ impl Default for BridgeConfig {
             park_ttl_secs: default_600(),
             call_ttl_secs: default_600(),
             keepalive_interval_secs: default_15(),
-            max_parked_runs: default_8(),
-            max_runs_per_key: default_4(),
+            max_parked_runs: default_2(),
+            max_runs_per_key: default_1(),
             max_run_lifetime_secs: default_3600(),
             max_steps: default_64(),
             parked_holds_permit: default_true(),
@@ -291,6 +294,8 @@ fn default_600() -> u64 { 600 }
 fn default_15() -> u64 { 15 }
 fn default_8() -> usize { 8 }
 fn default_4() -> usize { 4 }
+fn default_2() -> usize { 2 }
+fn default_1() -> usize { 1 }
 fn default_3600() -> u64 { 3600 }
 fn default_64() -> usize { 64 }
 fn default_server_name() -> String { "agentgate".to_string() }
@@ -509,6 +514,7 @@ impl Default for Config {
             reasoning: ReasoningConfig::default(),
             provider: Vec::new(),
             workspace: std::collections::HashMap::new(),
+            limits: LimitsConfig::default(),
         }
     }
 }

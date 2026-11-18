@@ -11,7 +11,7 @@ cors = true
 [defaults]
 workdir = "."
 max_concurrency_per_provider = 10
-model_cache_ttl_secs = 300
+model_cache_ttl_secs = 600
 first_token_timeout_secs = 30
 
 # Provider configurations
@@ -65,7 +65,16 @@ disabled_builtins = []
 preserve_client_system_prompt = true
 # FIX-FREELIMIT-01: When true (default), skip verbose permission block in opencode.json
 # to avoid triggering provider.free-limit on free models (beam-free etc.)
-minimal_free_model = true
+minimal_free_model = false
+
+[bridge.limits]
+# FIX-QUOTA-03: Reduce concurrent runs for free tier to prevent quota exhaustion
+max_runs_per_key = 1
+max_parked_runs = 2
+max_tools = 128
+max_steps = 50
+call_ttl_secs = 600
+park_ttl_secs = 600
 
 [routing]
 no_tools_policy = "chat_only"
