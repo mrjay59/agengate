@@ -1,4 +1,4 @@
-﻿use crate::config::ReasoningConfig;
+use crate::config::ReasoningConfig;
 use crate::error::AppError;
 use crate::reasoning::{
     format::{parse_reasoning_format, reasoning_headers, SseWriter},
@@ -64,7 +64,7 @@ async fn preflight_isolation_check(
     // Verify isolation is active for this session
     if !session.isolation_active {
         info!(event = "guard.violation", session = %session.session_id, reason = "isolation_not_active");
-        crate::metrics::METRICS.record_guard_violation();
+        crate::metrics::init_metrics().record_guard_violation();
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
@@ -83,7 +83,7 @@ async fn preflight_isolation_check(
         .unwrap_or("");
     if !registry.bridge.is_bridge_tool(tool_name) {
         info!(event = "guard.violation", session = %session.session_id, observed_tool = %tool_name, reason = "not_bridge_tool");
-        crate::metrics::METRICS.record_guard_violation();
+        crate::metrics::init_metrics().record_guard_violation();
         return (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
@@ -113,7 +113,7 @@ async fn preflight_isolation_check(
 async fn metrics_endpoint() -> Response {
     (
         [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        crate::metrics::METRICS.render_prometheus(),
+        crate::metrics::init_metrics().render_prometheus(),
     )
         .into_response()
 }
@@ -297,7 +297,7 @@ async fn chat_completions(
         crate::run::Classified::NewBridge { .. } => "bridge",
         crate::run::Classified::NewChatOnly => "chat_only",
     };
-    crate::metrics::METRICS.mark_run_started();
+    crate::metrics::init_metrics().mark_run_started();
     info!(
         event = "run.start",
         run_id = %run_id,
@@ -392,8 +392,7 @@ async fn chat_completions(
                             Some(event) => {
                                 last_provider_activity = Instant::now();
                                 if !ttft_recorded {
-                                    crate::metrics::METRICS
-                                        .observe_ttft(ttft_start.elapsed().as_millis() as u64);
+                                    crate::metrics::init_metrics().observe_ttft(ttft_start.elapsed().as_millis() as u64);
                                     ttft_recorded = true;
                                 }
                                 let is_tool_calls = matches!(event, RunEvent::ToolCalls { .. });
@@ -492,7 +491,7 @@ async fn chat_completions(
 
             // Error/timeout paths already emitted their terminal chunk(s) and [DONE].
             if terminated_by_error {
-                crate::metrics::METRICS.mark_run_ended();
+                crate::metrics::init_metrics().mark_run_ended();
                 info!(event = "run.end", run_id = %stream_run_id, tool_calls = tool_calls_finished, terminated_by_error = true);
                 return;
             }
@@ -519,7 +518,7 @@ async fn chat_completions(
             let _ = tx
                 .send(Ok(axum::response::sse::Event::default().data("[DONE]")))
                 .await;
-            crate::metrics::METRICS.mark_run_ended();
+            crate::metrics::init_metrics().mark_run_ended();
             info!(event = "run.end", run_id = %stream_run_id, tool_calls = tool_calls_finished);
         });
 
@@ -558,7 +557,7 @@ async fn chat_completions(
         let response = match registry.chat_completion(request).await {
             Ok(resp) => {
                 if let Some(mode_label) = resume_mode {
-                    crate::metrics::METRICS.record_resume(if mode_label == "replay" {
+                    crate::metrics::init_metrics().record_resume(if mode_label == "replay" {
                         "replay"
                     } else {
                         "ok"
@@ -568,14 +567,14 @@ async fn chat_completions(
             }
             Err(e) => {
                 if resume_mode.is_some() && e.code() == "tool_already_resolved" {
-                    crate::metrics::METRICS.record_resume("conflict");
+                    crate::metrics::init_metrics().record_resume("conflict");
                 }
-                crate::metrics::METRICS.mark_run_ended();
+                crate::metrics::init_metrics().mark_run_ended();
                 return Err(e);
             }
         };
         let value = apply_non_stream_format(response, format, &reasoning_cfg);
-        crate::metrics::METRICS.mark_run_ended();
+        crate::metrics::init_metrics().mark_run_ended();
         let mut res = Json(value).into_response();
         res.headers_mut().insert(
             axum::http::header::HeaderName::from_static("x-agentgate-run"),
@@ -932,7 +931,7 @@ async fn bridge_mcp(
             // Bila tidak -> 503 `tool_isolation_unavailable` (tidak pernah hold/execute).
             if !session.tools.iter().any(|t| t.name == normalized_name) {
                 info!(event = "guard.violation", session = %session.session_id, observed_tool = %name, normalized = %normalized_name);
-                crate::metrics::METRICS.record_guard_violation();
+                crate::metrics::init_metrics().record_guard_violation();
                 return (
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
                     Json(serde_json::json!({
@@ -947,7 +946,7 @@ async fn bridge_mcp(
             // Preflight isolation check (spec §13.2): verify guard is active for this bridge provider.
             if let Err(e) = registry.bridge.preflight_isolation_check(&normalized_name, &session.tools) {
                 info!(event = "guard.violation", session = %session.session_id, observed_tool = %name, normalized = %normalized_name, reason = %e);
-                crate::metrics::METRICS.record_guard_violation();
+                crate::metrics::init_metrics().record_guard_violation();
                 return (
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
                     Json(serde_json::json!({
@@ -964,7 +963,7 @@ async fn bridge_mcp(
             let isolation = registry.bridge_config.isolation.clone();
             if let Err(e) = registry.bridge.preflight_active_probe(&session.tools, &isolation) {
                 info!(event = "guard.violation", session = %session.session_id, observed_tool = %name, normalized = %normalized_name, reason = %e);
-                crate::metrics::METRICS.record_guard_violation();
+                crate::metrics::init_metrics().record_guard_violation();
                 return (
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
                     Json(serde_json::json!({
@@ -985,7 +984,7 @@ async fn bridge_mcp(
             let tool_call_id: Option<String> = None;
             match registry.bridge.hold_tool_call(mcp_id.clone(), session.session_id.clone(), run_id, tool_call_id, normalized_name.clone(), registry.bridge_config.call_ttl_secs).await {
                 Ok(res) => {
-                    crate::metrics::METRICS.observe_tool_wait(hold_start.elapsed().as_millis() as u64);
+                    crate::metrics::init_metrics().observe_tool_wait(hold_start.elapsed().as_millis() as u64);
                     serde_json::json!({
                         "content": [{ "type": "text", "text": res.content.to_string() }],
                         "isError": res.is_error
@@ -1101,3 +1100,8 @@ fn stream_idle_timeout() -> Duration {
         .map(Duration::from_secs)
         .unwrap_or_else(|| Duration::from_secs(30))
 }
+
+
+
+
+

@@ -34,10 +34,26 @@ pub struct Metrics {
     pub ttft_ms_sum: AtomicU64,
     /// Count of ttft observations.
     pub ttft_ms_count: AtomicU64,
+    /// Total HTTP requests by method, path, status.
+    pub http_requests_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Total provider calls by provider, model, status.
+    pub provider_calls_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Total bridge sessions by provider, status.
+    pub bridge_sessions_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Total bridge continuations by provider, status.
+    pub bridge_continuations_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Model cache hits by provider.
+    pub model_cache_hits_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Model cache misses by provider.
+    pub model_cache_misses_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Tools injected by provider, model_type (free/paid).
+    pub tool_injected_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Errors by component, error_type.
+    pub errors_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
 }
 
 impl Metrics {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             runs_active: AtomicU64::new(0),
             runs_parked: AtomicU64::new(0),
@@ -52,6 +68,14 @@ impl Metrics {
             tool_wait_ms_count: AtomicU64::new(0),
             ttft_ms_sum: AtomicU64::new(0),
             ttft_ms_count: AtomicU64::new(0),
+            http_requests_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            provider_calls_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            bridge_sessions_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            bridge_continuations_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            model_cache_hits_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            model_cache_misses_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            tool_injected_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            errors_total: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -119,6 +143,55 @@ impl Metrics {
         self.bridge_keepalive_ticks.fetch_add(1, Ordering::Relaxed);
     }
 
+    // New granular metrics methods
+    fn increment_map(map: &std::sync::Mutex<std::collections::HashMap<String, u64>>, key: &str) {
+        map.lock().unwrap().entry(key.to_string()).and_modify(|v| *v += 1).or_insert(1);
+    }
+
+    pub fn record_http_request(&self, method: &str, path: &str, status: u16) {
+        let key = format!("method=\"{}\",path=\"{}\",status=\"{}\"", method, path, status);
+        Self::increment_map(&self.http_requests_total, &key);
+    }
+
+    pub fn record_provider_call(&self, provider: &str, model: &str, success: bool) {
+        let status = if success { "ok" } else { "error" };
+        let key = format!("provider=\"{}\",model=\"{}\",status=\"{}\"", provider, model, status);
+        Self::increment_map(&self.provider_calls_total, &key);
+    }
+
+    pub fn record_bridge_session(&self, provider: &str, success: bool) {
+        let status = if success { "ok" } else { "error" };
+        let key = format!("provider=\"{}\",status=\"{}\"", provider, status);
+        Self::increment_map(&self.bridge_sessions_total, &key);
+    }
+
+    pub fn record_bridge_continuation(&self, provider: &str, success: bool) {
+        let status = if success { "ok" } else { "error" };
+        let key = format!("provider=\"{}\",status=\"{}\"", provider, status);
+        Self::increment_map(&self.bridge_continuations_total, &key);
+    }
+
+    pub fn record_model_cache_hit(&self, provider: &str) {
+        let key = format!("provider=\"{}\"", provider);
+        Self::increment_map(&self.model_cache_hits_total, &key);
+    }
+
+    pub fn record_model_cache_miss(&self, provider: &str) {
+        let key = format!("provider=\"{}\"", provider);
+        Self::increment_map(&self.model_cache_misses_total, &key);
+    }
+
+    pub fn record_tool_injected(&self, provider: &str, is_free_model: bool) {
+        let model_type = if is_free_model { "free" } else { "paid" };
+        let key = format!("provider=\"{}\",model_type=\"{}\"", provider, model_type);
+        Self::increment_map(&self.tool_injected_total, &key);
+    }
+
+    pub fn record_error(&self, component: &str, error_type: &str) {
+        let key = format!("component=\"{}\",error_type=\"{}\"", component, error_type);
+        Self::increment_map(&self.errors_total, &key);
+    }
+
     fn ms(v: u64) -> f64 {
         v as f64 / 1000.0
     }
@@ -179,8 +252,43 @@ impl Metrics {
         );
         out
     }
+
+    fn render_map_metrics(&self, name: &str, map: &std::sync::Mutex<std::collections::HashMap<String, u64>>) -> String {
+        let mut out = String::new();
+        for (key, value) in map.lock().unwrap().iter() {
+            out.push_str(name);
+            out.push('{');
+            out.push_str(key);
+            out.push_str("} ");
+            out.push_str(&value.to_string());
+            out.push('\n');
+        }
+        out
+    }
+
+    pub fn render_prometheus_full(&self) -> String {
+        let mut out = self.render_prometheus();
+        out.push_str(&self.render_map_metrics("agentgate_http_requests_total", &self.http_requests_total));
+        out.push_str(&self.render_map_metrics("agentgate_provider_calls_total", &self.provider_calls_total));
+        out.push_str(&self.render_map_metrics("agentgate_bridge_sessions_total", &self.bridge_sessions_total));
+        out.push_str(&self.render_map_metrics("agentgate_bridge_continuations_total", &self.bridge_continuations_total));
+        out.push_str(&self.render_map_metrics("agentgate_model_cache_hits_total", &self.model_cache_hits_total));
+        out.push_str(&self.render_map_metrics("agentgate_model_cache_misses_total", &self.model_cache_misses_total));
+        out.push_str(&self.render_map_metrics("agentgate_tool_injected_total", &self.tool_injected_total));
+        out.push_str(&self.render_map_metrics("agentgate_errors_total", &self.errors_total));
+        out
+    }
 }
 
-pub static METRICS: Metrics = Metrics::new();
+pub static METRICS: std::sync::OnceLock<Metrics> = std::sync::OnceLock::new();
+
+pub fn init_metrics() -> &'static Metrics {
+    METRICS.get_or_init(Metrics::new)
+}
+
+
+
+
+
 
 

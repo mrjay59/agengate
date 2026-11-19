@@ -90,7 +90,10 @@ pub struct LimitsConfig {
     /// Maximum client tools per request.
     #[serde(default = "default_128")]
     pub max_tools: usize,
-    /// Maximum serialized bytes per tool schema.
+      /// Maximum tools to inject for free models (beam-free, etc.).
+      #[serde(default = "default_10")]
+      pub max_inject: usize,
+      /// Maximum serialized bytes per tool schema.
     #[serde(default = "default_65536")]
     pub max_schema_bytes: usize,
     /// Maximum bytes for a tool result.
@@ -105,7 +108,8 @@ impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
             max_tools: default_128(),
-            max_schema_bytes: default_65536(),
+              max_inject: default_10(),
+              max_schema_bytes: default_65536(),
             max_result_bytes: default_262144(),
             max_prompt_chars: default_400000(),
         }
@@ -246,8 +250,8 @@ pub struct IsolationConfig {
     pub disabled_builtins: Vec<String>,
     /// When true (default), skip verbose `permission` block in opencode.json for free models
     /// to avoid provider.free-limit errors (beam-free etc.). Keep `tools` block for safety.
-    #[serde(default = "default_true")]
-    pub minimal_free_model: bool,
+    #[serde(default)]
+      pub minimal_free_model: bool,
 }
 
 impl Default for IsolationConfig {
@@ -296,6 +300,7 @@ fn default_8() -> usize { 8 }
 fn default_4() -> usize { 4 }
 fn default_2() -> usize { 2 }
 fn default_1() -> usize { 1 }
+fn default_10() -> usize { 10 }
 fn default_3600() -> u64 { 3600 }
 fn default_64() -> usize { 64 }
 fn default_server_name() -> String { "agentgate".to_string() }
@@ -644,3 +649,13 @@ permission_mode = "read-only"
     tracing::info!("Config written to {}", path.display());
     Ok(())
 }
+
+
+
+
+
+
+
+
+
+

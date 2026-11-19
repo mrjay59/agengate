@@ -5,18 +5,14 @@
 host = "0.0.0.0"
 port = 8787
 api_keys = ["default_key"]
-request_timeout_secs = 600
+request_timeout_secs = 120
 cors = true
 
 [defaults]
 workdir = "."
-max_concurrency_per_provider = 10
-model_cache_ttl_secs = 600
+max_concurrency_per_provider = 1
+model_cache_ttl_secs = 300
 first_token_timeout_secs = 30
-
-[limits]
-# Tool injection limit (QUOTA-01)
-max_tools = 128
 
 # Provider configurations
 [[provider]]
@@ -62,7 +58,7 @@ early_role_chunk = true
 # off: no tool disabling
 mode = "selective"
 # Additional built-in tools to allow beyond the mode defaults
-allowed_builtins = ["bash", "execute", "shell", "read", "write", "edit", "glob", "list", "patch", "cat"]
+allowed_builtins = []
 # Override: explicitly disable these built-in tools
 disabled_builtins = []
 # FIX-PROMPT-01: When true, client system prompt is forwarded via CLI --system flag (default false: strip)
@@ -75,10 +71,12 @@ minimal_free_model = false
 # FIX-QUOTA-03: Reduce concurrent runs for free tier to prevent quota exhaustion
 max_runs_per_key = 1
 max_parked_runs = 2
+# Maximum tools to inject for free models (beam-free, etc.). Default: 10
+max_inject = 10
 max_tools = 128
 max_steps = 50
-call_ttl_secs = 600
-park_ttl_secs = 600
+call_ttl_secs = 120
+park_ttl_secs = 120
 
 [routing]
 no_tools_policy = "chat_only"

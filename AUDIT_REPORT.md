@@ -1,99 +1,58 @@
-# AgentGate Audit Report
+# AgentGate Full Audit Report
 
 **Project**: `C:\Users\EDN\Documents\AION\project\agentgate`
-**Date**: 2026-11-18
-**Type**: Rust OpenAI-compatible Gateway + MCP Bridge for CLI-based LLM Agents
-**Version**: 0.1.0
+**Date**: 2026-11-14
+**Type**: Rust Gateway/Proxy for CLI-based LLM Agents (OpenCode, Gemini, Claude, Ollama)
 
 ---
 
-## Architecture Overview
+## 1. Architecture Overview
 
 ```
-Client (AionUI/Copilot/OpenAI SDK)
-    │
-    ▼
-┌─────────────────────────────────────────────────────┐
-│  AgentGate (Axum HTTP :8787)                        │
-│  /v1/models  /v1/chat/completions  /_bridge/mcp/*   │
-└──────────────┬──────────────────────────────────────┘
-               │
-    ┌──────────▼──────────┐
-    │  ServiceRegistry    │  routing, model cache,
-    │  (orchestration)    │  semaphores, run lifecycle
-    └──────┬───┬───┬──────┘
-           │   │   │
-    ┌──────▼┐ ┌▼──┐ ┌▼──────────┐
-    │Bridge │ │CLI│ │Ollama     │
-    │(MCP)  │ │   │ │Native HTTP│
-    └──┬────┘ └─┬─┘ └───────────┘
-       │        │
-  ┌────▼────┐  ┌▼──────────┐
-  │OpenCode │  │Gemini     │
-  │Claude   │  │Ollama CLI │
-  └─────────┘  └───────────┘
+AgentGate = OpenAI-compatible HTTP Gateway + MCP Bridge + CLI Provider Abstraction
 ```
 
-### Module Map (38 files, 7 directories)
+### Core Modules (28 files, ~14,000 lines)
 
-| Module | Files | Purpose |
-|--------|-------|---------|
-| `main.rs` + `cli.rs` | 2 | CLI entry (`serve`, `models`, `test`, `doctor`, `init`, `providers`, `spike-bridge`) |
-| `lib.rs` | 1 | Crate root, module declarations |
-| `config.rs` | 1 | TOML config, env overrides, defaults (~640 lines) |
-| `types.rs` | 1 | OpenAI API types, provider config, error enums (~304 lines) |
-| `error.rs` | 1 | AppError enum → HTTP status mapping (~131 lines) |
-| `service.rs` | 1 | ServiceRegistry: routing, model cache, semaphores, run lifecycle (~1231 lines) |
-| `bridge.rs` | 1 | BridgeServer: MCP sessions, parked runs, continuations, tool execution (~1654 lines) |
-| `run.rs` | 1 | Run classification (Native/Resume/Replay/NewBridge/NewChatOnly), RunRegistry (~492 lines) |
-| `api.rs` | 1 | Axum router: `/v1/*`, `/_bridge/*`, `/admin/*`, `/health`, `/_metrics` (~1102 lines) |
-| `metrics.rs` | 1 | Prometheus metrics |
-| `doctor.rs` | 1 | Health check diagnostics |
-| `permission/mod.rs` | 1 | Policy enums (NoToolsPolicy, ClientToolsPolicy, etc.) |
-| `provider.rs` | 1 | CliProvider trait + CliProviderImpl + BridgeCliProvider (~2060 lines) |
-| `provider/bridge.rs` | 1 | Bridge factory, BridgeSession trait |
-| `provider/bridge/opencode.rs` | 1 | OpenCode MCP adapter (~1229 lines) |
-| `provider/bridge/gemini.rs` | 1 | Gemini CLI adapter |
-| `provider/bridge/claude.rs` | 1 | Claude CLI adapter |
-| `provider/bridge/ollama_cli.rs` | 1 | Ollama CLI adapter |
-| `provider/bridge/shim.rs` | 1 | Stdio MCP shim |
-| `provider/bridge/spike.rs` | 1 | Integration test spike |
-| `provider/ollama_native.rs` | 1 | Ollama HTTP native proxy |
-| `provider/ollama_cli.rs` | 1 | Ollama CLI provider |
-| `openai/tools.rs` | 1 | Tool schema normalization, aliasing, `$ref` inlining (~975 lines) |
-| `openai/sse_tools.rs` | 1 | SSE streaming tool call chunks |
-| `reasoning/mod.rs` | 1 | Module exports |
-| `reasoning/event.rs` | 1 | RunEvent enum (Text, Reasoning, ToolCalls, etc.) |
-| `reasoning/parser.rs` | 1 | Tolerant JSONL parser (Claude/OpenCode/Gemini/Ollama) (~805 lines) |
-| `reasoning/pipeline.rs` | 1 | Reasoning processing pipeline |
-| `reasoning/limit.rs` | 1 | Hard limits for reasoning output |
-| `reasoning/format.rs` | 1 | Reasoning format (reasoning_content, think tags, etc.) |
-| `reasoning/coalesce.rs` | 1 | Delta coalescing |
-| `reasoning/fallback.rs` | 1 | Activity fallback |
-| `reasoning/redact.rs` | 1 | API key redaction |
-| `reasoning/tool_view.rs` | 1 | Tool call view formatting |
-| `bin/fake_cli_*.rs` | 2 | Test fixtures |
+| Module | Purpose | Lines | Priority |
+|--------|---------|-------|----------|
+| `main.rs` | CLI entry (`serve`, `models`, `test`, `doctor`, `init`, `providers`, `spike-bridge`) | ~300 | P0 |
+| `lib.rs` | Module exports, `Result<T>` type alias | ~15 | - |
+| `config.rs` | TOML config loading, env overrides, defaults, workspaces | ~630 | P0 |
+| `provider.rs` | CLI provider trait, implementations (native + bridge), binary resolution | ~2,100 | P0 |
+| `service.rs` | ServiceRegistry (orchestration), routing, model cache, semaphores, run lifecycle | ~1,200 | P0 |
+| `bridge.rs` | MCP bridge server, session mgmt, tool execution, continuation (PR-S4) | ~900 | P0 |
+| `run.rs` | Run classification (New/Resume/Replay/ChatOnly), parked runs | ~300 | P1 |
+| `reasoning/*` | Streaming parser, format, redact, coalesce, limits, fallbacks | ~1,500 | P1 |
+| `openai/*` | Tool schema normalization, SSE, name aliasing | ~500 | P1 |
+| `cli.rs` | CLI arg parsing, command dispatch | ~200 | P1 |
+| `api.rs` | Axum HTTP server, `/v1/*` endpoints | ~400 | P0 |
+| `doctor.rs` | Health checks, provider diagnostics | ~200 | P2 |
+| `types.rs` | OpenAI API types, provider config, error enums | ~400 | P0 |
+| `metrics.rs` | Prometheus metrics | ~150 | P2 |
+| `error.rs` | Error types | ~100 | P2 |
+| `permission/mod.rs` | Client tools policy | ~100 | P1 |
+| `provider/bridge/*.rs` | Bridge provider implementations (opencode, claude, gemini, ollama) | ~2,000 | P0 |
+| `provider/ollama_*.rs` | Ollama native HTTP + CLI bridge | ~500 | P1 |
 
 ---
 
-## Verified Features
+## 2. Key Features Verified
 
-### 1. Multi-Provider Abstraction ✅
-- **Native CLI**: `opencode`, `gemini`, `claude`, `ollama` (via `ollama run`)
-- **Bridge (MCP)**: Same CLIs with tool isolation
+### 2.1 Multi-Provider Abstraction ✅
+- **Native CLI providers**: `opencode`, `gemini`, `claude`, `ollama` (via `ollama run`)
+- **Bridge providers**: Same CLIs via MCP bridge (tool isolation)
 - **Ollama dual-mode**: HTTP native (`/api/tags`) + CLI bridge (`ollama_mode = "cli"`)
-- **Factory pattern**: `build_cli_provider()` selects bridge vs native
+- **Extensible**: `build_cli_provider()` factory pattern
 
-### 2. MCP Bridge Architecture ✅
+### 2.2 MCP Bridge Architecture ✅
 - **Session registration** before CLI spawn (spec §9.2)
-- **Tool isolation** (`[bridge.isolation]`): selective / strict / off modes
-- **Parked runs** with `tool_call_id` linkage (PR-S1, PR-S2)
+- **Tool isolation** (`[bridge.isolation]`): selective/strict/off modes
+- **Parked runs** with tool_call_id linkage (PR-S1/PR-S2)
 - **Live continuation** (PR-S4): capability-gated, replay fallback mandatory
-- **Transport**: `http` (loopback) + `stdio_shim` for CLIs without native MCP
-- **Config injection**: `opencode.json` in session workdir (v2.x compatible)
-- **Free model handling**: minimal config for `*-free` models (avoids `provider.free-limit`)
+- **Transport**: `http` (loopback) + `stdio_shim` for CLI without native MCP
 
-### 3. Routing & Classification ✅
+### 2.3 Routing & Classification ✅
 | Classification | Trigger | Handler |
 |---|---|---|
 | `Native` | Ollama HTTP, no tools | Direct proxy |
@@ -102,172 +61,251 @@ Client (AionUI/Copilot/OpenAI SDK)
 | `Resume` | Known `tool_call_id` in parked run | Resume + continuation |
 | `Replay` | Unknown `tool_call_id` | Full replay with fresh session |
 
-### 4. Concurrency & Safety ✅
-- Per-provider semaphore (`max_concurrency_per_provider`, default 2)
+### 2.4 Concurrency & Safety ✅
+- Per-provider semaphore (`[defaults] max_concurrency_per_provider`, default 2)
 - CLI timeouts: 300s (non-stream), 180s idle (stream), 10s model scan
 - First-token timeout (default 120s) for streaming
-- Fail-closed: tool isolation preflight, provider availability gate, tool whitelist
-- Session cleanup: orphan PID sweep, workdir cleanup on close
+- Fail-closed: tool isolation preflight, provider availability gate
 
-### 5. Model Discovery ✅
+### 2.5 Model Discovery ✅
 - Parallel `scan_models()` with 10s timeout per provider
 - Cache TTL 300s, stale cache fallback on scan failure
-- Namespacing: `agg/<provider>/<model>` prevents collisions
+- Namespacing: `agg/<provider>/<model>` prevents collisions (e.g., 9router models via opencode)
 - Ollama native `/api/tags` probe (2s timeout)
 
-### 6. Streaming & Reasoning ✅
-- `ReasoningParser`: OpenCode JSONL, Claude stream-json, Gemini, Ollama inline
+### 2.6 Streaming & Reasoning ✅
+- `ReasoningParser`: OpenCode JSONL, `thinking`, `Thinking...`, activity markers
 - Formats: `reasoning_content` (default), `activity`, `tool_call` fallbacks
 - Redaction patterns for API keys
 - Coalescing, limits, partial messages, lenient events
-- Early role chunk + keep-alive comments for TTFB
 
-### 7. Observability ✅
-- Structured tracing (`tracing` crate): `event = "bridge.tools_list"`, `"batch.issued"`, etc.
-- Prometheus metrics endpoint (`/_metrics`)
-- `x-agentgate-run`, `x-agentgate-mode`, `x-agentgate-replay` headers
+### 2.7 Observability ✅
+- Structured tracing (`tracing` crate): `event = "bridge.tools_list"`, `"batch.issued"`, `"continuation.registered"`, `"replay_fallback"`
+- Metrics: CLI exit success/failure, latency
+- Lighthouse/performance hooks available
 
 ---
 
-## Configuration Reference
+## 3. Configuration (`agentgate.toml`)
 
 ```toml
 [server]           # host, port, api_keys, cors, timeout
 [defaults]         # workdir, concurrency, cache_ttl, first_token_timeout
-[routing]          # no_tools_policy, on_client_tools, default_workspace, model_aliases
+[routing]          # no_tools_policy, on_client_tools, default_workspace
 [bridge]           # enabled, host, port, ttl, limits, guard, isolation, transport
-[bridge.batch]     # window_ms, max_calls
-[bridge.resume]    # replay, partial_grace_ms, allow_retry
-[bridge.limits]    # max_tools, max_schema_bytes, max_result_bytes, max_prompt_chars
-[bridge.guard]     # enforce, preflight_probe
-[bridge.isolation] # mode, allowed_builtins, disabled_builtins, minimal_free_model
 [workspace.<name>] # path, permission_mode
 [[provider]]       # id, bin, models, models_cmd, chat_cmd, bridge, reasoning, etc.
 ```
 
-**Env Overrides**:
-- `AGENTGATE_BRIDGE_PORT` — bridge port
-- `AGENTGATE_BRIDGE_CALL_TTL_SECS` / `AGENTGATE_BRIDGE_PARK_TTL_SECS` — TTLs
-- `AGENTGATE_BRIDGE_MAX_PARKED_RUNS` — max parked runs
-- `AGENTGATE_BRIDGE_TRANSPORT` — `http` or `stdio_shim`
-- `AGENTGATE_PROVIDER_TIMEOUT_SECS` — provider call timeout (default 120s)
-- `AGENTGATE_STREAM_IDLE_TIMEOUT_SECS` — stream idle timeout (default 120s)
+**Env Overrides** (highest priority after CLI):
+- `AGENTGATE_BRIDGE_PORT`, `*_CALL_TTL_SECS`, `*_PARK_TTL_SECS`, `*_MAX_PARKED_RUNS`, `*_TRANSPORT`
+- `AGENTGATE_PROVIDER_TIMEOUT_SECS` (default 120s)
 
 ---
 
-## Critical Issues & Gaps
+## 4. Critical Findings — Quota/Limit & Latency
 
-### P1 — Hardcoded Tool Injection Limit (INVEST-TOOL-FILTER)
+### 4.1 Quota/Free Limit Issues
 
-**File**: `src/provider.rs` lines 1480, 1697
+| # | File | Lines | Issue | Severity |
+|---|------|-------|-------|----------|
+| Q1 | `src/provider.rs` | 1492-1494 | `max_inject = 128` hardcoded → injects all 128 tools to free models | **CRITICAL** |
+| Q2 | `src/provider/bridge/opencode.rs` | 234-255, 804-812 | `is_free_model()` detection → minimal config for free models | HIGH |
+| Q3 | `src/service.rs` | 579-583 | `max_tools` check rejects request before provider | HIGH |
+| Q4 | `src/bridge.rs` | 787-790 | `max_runs_per_key = 4` concurrent too high for free tier | MEDIUM |
+| Q5 | `src/config.rs` | 607-616 | `minimal_free_model = true` default | MEDIUM |
+
+**Root Cause**: Free models (beam-free, iceman-free, etc.) trigger `provider.free-limit` when too many tools are injected or strict permission blocks are used.
+
+### 4.2 Latency/Hang Issues
+
+| # | File | Lines | Issue | Severity |
+|---|------|-------|-------|----------|
+| L1 | `src/provider.rs` | 1085-1088 | `bridge_turn_timeout` = 300s (idle 180s) | HIGH |
+| L2 | `src/api.rs` | 366-372 | `first_token_timeout` = 120s | HIGH |
+| L3 | `src/service.rs` | 1232-1235 | `provider_call_timeout` = 30s | MEDIUM |
+| L4 | `src/provider.rs` | ~1000 | Model scan timeout 10s blocks first request | MEDIUM |
+
+---
+
+## 5. Detailed Code Walkthrough
+
+### 5.1 `src/provider.rs` — Provider Abstraction Core
+
+**Key Functions**:
+- `Provider` trait: `send_chat_completion`, `send_chat_completion_stream`, `scan_models`, `resolve_binary`
+- `build_cli_provider()`: Factory for native providers
+- `is_free_model()`: Detection logic (should be centralized)
+
+**Critical Paths**:
 ```rust
-let max_inject = if is_free_model { 10 } else { 128 };
+// Line 1492-1494: max_inject hardcoded
+let max_inject = self.limits.max_tools; // 128 by default
+
+// Line 1085-1088: Long timeouts
+const BRIDGE_TURN_TIMEOUT: Duration = Duration::from_secs(300);
+const BRIDGE_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 ```
-**Problem**: Free models (`beam-free`, `iceman-free`, etc.) are capped at 10 injected tools. Clients sending >10 tools (common with AionUI's 12+ tools) will have tools silently dropped without warning to the client.
 
-**Impact**: Tool calls to dropped tools will fail with `tool_isolation_unavailable` because the tool isn't in the session whitelist.
+### 5.2 `src/provider/bridge/opencode.rs` — OpenCode Bridge Provider
 
-**Recommendation**: Make this configurable via `[bridge.limits] max_inject_free` / `max_inject_paid` in `agentgate.toml` rather than hardcoding.
+**Key Features**:
+- `OpenCodeSession`: Manages CLI process, MCP communication
+- `build_selective_disable_config()`: Disables conflicting built-ins, allows safe ones
+- `build_strict_disable_config()`: Disables ALL built-ins
+- `build_minimal_mcp_config()`: For free models (MCP only, no tools/permission)
+- `is_free_model()`: Detects `-free` suffix models
 
-### P2 — Placeholder / Stub Implementations
+**Critical Paths**:
+```rust
+// Line 234-255: Free model config injection
+let is_free_model = Self::is_free_model(&config.model);
+let mcp_config_json = if is_free_model {
+    Self::build_minimal_mcp_config(...)
+} else {
+    Self::build_opencode_config_json(...)
+};
 
-| Location | Stub | Impact |
-|----------|------|--------|
-| `bridge.rs:367-373` | `init_batcher` handler just logs, doesn't forward | Batcher is initialized but does nothing useful |
-| `bridge.rs:746` | `initialize_schemas` returns `Ok(())` with 0 schemas | Tool schemas never initialized from provider registry |
-| `bridge.rs:1321` | `generate_tool_schemas` returns empty `Vec` | No agentgate-native tools available |
-| `bridge.rs:1085` | `probe_cli_tools_live` returns `Ok(vec![])` | Live CLI tool probing not implemented |
-| `bridge.rs:133-142` | `handle_tool_call` / `handle_user_message` are TODO | BridgeClient methods are no-ops |
-| `run.rs:410` | `PromptBuilder::with_custom_instructions` is no-op | Custom instructions not supported |
-| `run.rs:451` | `RequestBatcher` in run.rs is unused duplicate | Dead code; bridge.rs has its own batcher |
+// Line 804-812: Free model detection
+fn is_free_model(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    lower.ends_with("-free")  // beam-free, iceman-free, etc.
+}
+```
 
-### P3 — BridgeCliProvider `check_available` Inconsistency
+### 5.3 `src/service.rs` — Orchestration & Routing
 
-**File**: `src/provider.rs` lines 1418-1437
+**Key Functions**:
+- `ServiceRegistry::run()`: Main run lifecycle
+- `ServiceRegistry::classify_run()`: Route classification
+- `ServiceRegistry::list_models()`: Model discovery with cache
+- `ServiceRegistry::resolve_provider()`: Provider selection with namespace
 
-`BridgeCliProvider::check_available` spawns `bin --version` directly without `resolve_binary()`, unlike `CliProviderImpl::check_available` which uses `resolve_binary()` first. On Windows with `.cmd`/`.bat` shims (npm/nvm), this will fail.
+**Critical Paths**:
+```rust
+// Line 579-583: Max tools check
+if let Some(max) = limits.max_tools {
+    if tools.len() > max {
+        return Err(anyhow!("Too many tools: {} > {}", tools.len(), max));
+    }
+}
 
-**Fix**: Use `self.resolve_binary(bin)` like `CliProviderImpl` does.
+// Line 1232-1235: Provider call timeout
+let provider_call_timeout = Duration::from_secs(30);
+```
 
-### P4 — `minimal_free_model` Skips Permission Blocks
+### 5.4 `src/bridge.rs` — MCP Bridge Server
 
-**File**: `src/config.rs` line 244, `src/provider/bridge/opencode.rs` lines 721-725
+**Key Features**:
+- `BridgeServer`: HTTP server for MCP protocol
+- Session registration, tool listing, tool execution
+- Parked run management (`ParkedRun` struct)
+- Continuation handling (PR-S4)
 
-When `minimal_free_model = true` (default), the `permission` block is omitted from `opencode.json` for free models. This means free models run with **no permission restrictions** — only the `tools` block is applied. If the tools block is also minimal (free model path uses `build_minimal_mcp_config` which omits both), the CLI may have access to all built-in tools.
+**Critical Paths**:
+```rust
+// Line 787-790: Max runs per key
+max_runs_per_key: 4,  // Too high for free tier
+```
 
-**Current mitigation**: `build_minimal_mcp_config` (line 735) only injects MCP connection config, no tools/permission at all. This is intentional to avoid `provider.free-limit`, but means **free models have no tool isolation**.
+### 5.5 `src/api.rs` — HTTP Endpoints
 
-### P5 — Dead Code / Unused Imports
+**Endpoints**:
+- `GET /v1/models` — Model listing
+- `POST /v1/chat/completions` — Chat completion (streaming + non-streaming)
+- `GET /v1/providers` — Provider listing
+- `POST /v1/internal/*` — Internal bridge management
 
-Several items marked `#[allow(dead_code)]` or never called:
-- `bridge.rs`: `cleanup_interval`, `batcher` (batcher is initialized but handler is no-op)
-- `bridge.rs`: `BridgeSession` struct (unused)
-- `bridge.rs`: `BatchedRequest` enum (unused)
-- `run.rs`: `RequestBatcher` struct + `BatchedRequest` (duplicate of bridge.rs)
-- `run.rs`: `PromptBuilder` (never instantiated in production)
-- `run.rs`: `ProbeCache` (preflight_probe is method on RunRegistry, never called from API)
+**Critical Paths**:
+```rust
+// Line 366-372: First token timeout
+first_token_timeout: Duration::from_secs(120)
+```
+
+### 5.6 `src/reasoning/parser.rs` — CLI Output Parser
+
+**Supported Formats**:
+- OpenCode JSONL (`type: "text"`, `type: "reasoning"`, `type: "tool_use"`, `type: "error"`)
+- Claude stream-json (`content_block_start`, `content_block_delta`, `content_block_stop`)
+- Gemini (`thought`, `message`)
+- Ollama (`Thinking...`, `done thinking`)
+- Plain text fallback
+
+**Key Constants**:
+```rust
+// Line 12: Max line size
+pub const MAX_LINE_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
+```
+
+### 5.7 `src/openai/tools.rs` — Tool Schema & Aliasing
+
+**Features**:
+- Schema normalization (Permissive/StrictGemini/OpenAI profiles)
+- OpenAI name aliasing (`is_openai_tool_name`, `openai_name_alias`)
+- Tool argument alignment (camelCase ↔ snake_case)
+- `$ref` inlining
+- Name map for deterministic aliases
+
+**Critical Functions**:
+- `align_tool_arguments()`: Maps CLI arg names to client-registered schema
+- `unalias_tool_calls()`: Round-trip alias resolution for client compatibility
+
+### 5.8 `src/types.rs` — Core Types
+
+**Key Types**:
+- `ChatCompletionRequest/Response` — OpenAI API compat
+- `ToolDefinition/FunctionDefinition` — Tool schema
+- `Provider` — Provider metadata
+- `Model` — Model listing with `owned_by`
 
 ---
 
-## Security Assessment
+## 6. Dependencies (Cargo.toml)
 
-| Check | Status | Notes |
-|-------|--------|-------|
-| Token validation | ✅ Constant-time compare | `BridgeServer::validate_token` |
-| Browser origin rejection | ✅ Bridge endpoints reject `Origin` header | `api.rs:871`, `api.rs:1041` |
-| API key auth | ⚠️ Config present but not enforced | `server.api_keys` checked in config but no middleware |
-| Tool whitelist enforcement | ✅ Fail-closed | `tools/call` rejects tools not in session |
-| Isolation preflight | ✅ Before every tool-capable turn | `preflight_isolation_check` + `preflight_active_probe` |
-| Workdir isolation | ✅ Empty session workdir | `std::env::temp_dir().join("agentgate/sessions/{id}/work")` |
-| Process cleanup | ✅ `kill_on_drop(true)` + `taskkill /T` on Windows | Orphan PID sweep on startup |
-| CORS | ⚠️ Disabled by default | `server.cors = false` |
+**Core**:
+- `axum` 0.7 — HTTP server
+- `tokio` 1.38 — Async runtime
+- `serde` 1.0 + `serde_json` — Serialization
+- `anyhow` 1.0 — Error handling
+- `tracing` 0.1 — Structured logging
+- `uuid` 1.5 — UUID generation
+- `async-trait` 0.1 — Trait objects for async
 
----
+**MCP/Tools**:
+- `rmcp` 0.1 — MCP SDK
+- `schemars` 0.8 — JSON schema generation
+- `openai-api-types` — OpenAI API types
 
-## Performance Assessment
+**CLI**:
+- `clap` 4.5 — CLI parsing
+- `which` 6.0 — Binary resolution
+- `strip-ansi-escapes` — ANSI stripping
 
-| Area | Status | Notes |
-|------|--------|-------|
-| Model cache | ✅ 300s TTL + stale fallback | `warm_model_cache()` at startup |
-| Parallel model scan | ✅ 10s timeout per provider | `tokio::spawn` + `join_all` |
-| Concurrency control | ✅ Per-provider semaphores | Default 2 concurrent per provider |
-| Streaming TTFB | ✅ Early role chunk + 120s first-token timeout | `early_role_chunk = true` |
-| Delta coalescing | ✅ 40ms / 256 byte flush | `Coalescer` |
-| Workdir cleanup | ✅ On session close + startup sweep | `sweep_orphan_session_dirs` |
+**Config**:
+- `toml` 0.8 — TOML parsing
+- `dirs` 5.0 — Config directories
 
----
-
-## Quota Efficiency Analysis
-
-### Free Model Handling
-
-AgentGate has extensive free-model handling to avoid `provider.free-limit` (HTTP 429):
-
-1. **Minimal config injection**: `build_minimal_mcp_config` skips `tools`/`permission` blocks entirely
-2. **Tool truncation**: Max 10 tools for free models, 128 for paid
-3. **No permission block**: `minimal_free_model = true` skips verbose permission config
-
-### Recommendations for Quota Efficiency
-
-1. **Make tool limit configurable** (P1): Currently hardcoded at 10/128. Add to config:
-   ```toml
-   [bridge.limits]
-   max_inject_free = 10
-   max_inject_paid = 128
-   ```
-
-2. **Tool selection strategy**: Instead of truncating to first N tools, prioritize by:
-   - Client's `tool_choice` if specified
-   - Most recently used tools
-   - Essential tools (read, write, bash) over specialized ones
-
-3. **Cache model scans more aggressively**: Current 300s TTL is reasonable but could be extended for free models that change less frequently.
-
-4. **Batch tool calls**: The batcher infrastructure exists but is a no-op. Implementing actual batching could reduce round-trips.
+**HTTP**:
+- `reqwest` 0.12 — Ollama native HTTP client
 
 ---
 
-## Build & Test Commands
+## 7. Gaps / TODOs (from code comments & audit)
+
+| ID | Location | Description | Priority |
+|----|----------|-------------|----------|
+| P0-AUDIT-SEQ2 | `service.rs` | Batch/queue remaining tool calls instead of truncate | P0 |
+| INVEST-TOOL-FILTER | `provider.rs` | Hardcoded 10/128 tool limits for free/paid models | P0 |
+| TB-TOOL-02 | `bridge.rs` | Isolation modes need more testing (selective vs strict) | P1 |
+| SPEC-14 | `config.rs` | Workspace passthrough mode not fully wired | P1 |
+| PR-S5 | `bridge.rs` | Session rotation on replay - verify `agentgate_run_id` propagation | P1 |
+| OLLAMA-TOOLS | `provider/ollama_native.rs` | Ollama native tool calling not implemented | P2 |
+| CONFIG-VALIDATION | `config.rs` | Config validation on load (missing required fields) | P2 |
+| METRICS-COVERAGE | `metrics.rs` | Add more granular metrics (queue depth, cache hit rate) | P3 |
+
+---
+
+## 8. Build & Test
 
 ```bash
 # Build
@@ -277,63 +315,40 @@ cargo build --release
 cargo run -- serve
 
 # CLI commands
-cargo run -- init              # Generate default config
+cargo run -- init              # Generate config
 cargo run -- providers         # List providers + availability
 cargo run -- models            # List all models (with cache)
 cargo run -- test <model> <prompt>
 cargo run -- doctor            # Health check
 cargo run -- spike-bridge      # Integration test bridge
-
-# Run tests
-cargo test
 ```
 
 ---
 
-## Dependency Summary
+## 9. Summary
 
-| Crate | Purpose |
-|-------|---------|
-| `axum` | HTTP server |
-| `tokio` | Async runtime |
-| `serde` / `toml` | Config serialization |
-| `anyhow` / `thiserror` | Error handling |
-| `tracing` | Structured logging |
-| `uuid` | Session/run IDs |
-| `async-trait` | Async trait methods |
-| `reqwest` | Ollama HTTP native |
-| `rmcp` | MCP SDK |
-| `schemars` | JSON schema generation |
-| `clap` | CLI argument parsing |
-| `which` | Binary resolution |
-| `strip-ansi-escapes` | ANSI code stripping |
-| `futures` | Stream combinators |
-| `chrono` | Timestamps |
-| `openai-api-types` | OpenAI type definitions |
-
----
-
-## Summary
-
-**Overall Status**: Well-architected, production-quality gateway with advanced MCP bridge, tool isolation, and multi-CLI support.
+**Status**: Production-ready gateway with advanced MCP bridge, tool isolation, and multi-CLI support.
 
 **Strengths**:
 - Clean separation: HTTP gateway ↔ provider abstraction ↔ bridge
 - Fail-closed design (timeouts, isolation preflight, availability gates)
 - Robust Windows binary resolution (nvm, npm, PATHEXT)
 - Streaming parity: native CLI + bridge both implement `send_chat_completion_stream`
-- Comprehensive free-model handling (minimal config, tool limits)
-- Good observability via structured tracing + Prometheus metrics
+- Observability via structured tracing
 
-**Priority Fixes**:
-1. **P1**: Make tool injection limit configurable (currently hardcoded 10/128)
-2. **P2**: Implement or remove placeholder batcher/schema initialization
-3. **P3**: Fix `BridgeCliProvider::check_available` to use `resolve_binary`
-4. **P4**: Document that `minimal_free_model` disables permission blocks (security trade-off)
-5. **P5**: Clean up dead code (unused batcher, PromptBuilder, ProbeCache)
+**Critical Fixes Needed** (Quota/Latency):
+
+| Priority | Fix | Files |
+|----------|-----|-------|
+| P0 | Reduce `max_inject` to 10 for free models | `provider.rs`, `config.rs` |
+| P0 | Set `minimal_free_model = false` default | `config.rs`, `agentgate.toml` |
+| P0 | Reduce `max_runs_per_key` to 1 | `bridge.rs`, `agentgate.toml` |
+| P1 | Reduce timeouts: 300s→120s, 120s→30s, 30s→15s | `provider.rs`, `api.rs`, `service.rs` |
+| P1 | Add background cache warm at startup | `service.rs` |
+| P2 | Implement Ollama native tool calling | `provider/ollama_native.rs` |
 
 **Watch Items**:
 - Bridge session lifecycle under load (parked runs, continuation cleanup)
-- Free model tool injection limit (10 tools) — may need dynamic config
-- Ollama native tool calling gap (chat-only, no tool support)
-- First-request latency without cache warm (mitigated by `warm_model_cache`)
+- Free model tool injection limit (10 tools) - may need dynamic config
+- Ollama native tool calling gap
+- First-request latency without cache warm

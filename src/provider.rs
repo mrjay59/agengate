@@ -1082,13 +1082,13 @@ use crate::provider::bridge::{BridgeConfig, create_bridge_factory_v2};
 use crate::bridge::BridgeClient;
 
 /// Maximum time to wait for a CLI turn before killing the bridge session.
-/// Default: 300s (reduced from 600s to fail faster on free-tier quota issues).
+/// Default: 120s (reduced from 300s to fail faster on free-tier quota issues).
 /// Override with `AGENTGATE_BRIDGE_TIMEOUT_SECS`.
 pub fn bridge_turn_timeout() -> std::time::Duration {
     let secs = std::env::var("AGENTGATE_BRIDGE_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(300u64);
+        .unwrap_or(120u64);
     std::time::Duration::from_secs(secs)
 }
 
@@ -1489,9 +1489,10 @@ impl CliProvider for BridgeCliProvider {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
             let tool_schemas = self.tool_schemas_from_request(&request);
-            // FIX-QUOTA-01: Use full tool set (128) instead of hardcoded 10 for free models
-            // Free models need full tool access; limiting to 10 causes more CLI spawns and faster quota exhaustion.
-            let max_inject = self.limits.max_tools;
+            // Determine max_inject based on model type: free models (beam-free, etc.) get limited injection
+              // to avoid provider.free-limit errors, while paid models get full tool access.
+              let is_free_model = model.to_lowercase().ends_with("-free");
+              let max_inject = if is_free_model { self.limits.max_inject } else { self.limits.max_tools };
             let tool_schemas_for_bridge: Vec<_> = if tool_schemas.len() > max_inject {
                 tracing::warn!(model = %model, total = tool_schemas.len(), max = max_inject, "Truncating injected tools");
                 tool_schemas[..max_inject].to_vec()
@@ -1706,9 +1707,10 @@ impl CliProvider for BridgeCliProvider {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
             let tool_schemas = self.tool_schemas_from_request(&request);
-            // FIX-QUOTA-01: Use full tool set (128) instead of hardcoded 10 for free models
-            // Free models need full tool access; limiting to 10 causes more CLI spawns and faster quota exhaustion.
-            let max_inject = self.limits.max_tools;
+            // Determine max_inject based on model type: free models (beam-free, etc.) get limited injection
+              // to avoid provider.free-limit errors, while paid models get full tool access.
+              let is_free_model = model.to_lowercase().ends_with("-free");
+              let max_inject = if is_free_model { self.limits.max_inject } else { self.limits.max_tools };
             let tool_schemas_for_bridge: Vec<_> = if tool_schemas.len() > max_inject {
                 tracing::warn!(model = %model, total = tool_schemas.len(), max = max_inject, "Truncating injected tools");
                 tool_schemas[..max_inject].to_vec()
@@ -2072,3 +2074,9 @@ impl CliProvider for BridgeCliProvider {
         streaming_result
     }
 }
+
+
+
+
+
+
