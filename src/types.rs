@@ -302,3 +302,7 @@ pub struct AddSkillRequest {
     pub name: String,
     pub description: Option<String>,
 }
+
+
+
+

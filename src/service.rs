@@ -115,7 +115,11 @@ impl ServiceRegistry {
                 defaults.first_token_timeout_secs
             }),
             model_cache: RwLock::new(HashMap::new()),
-            model_cache_ttl: Duration::from_secs(300), // default 5 minutes
+            model_cache_ttl: Duration::from_secs(if defaults.model_cache_ttl_secs == 0 {
+                300
+            } else {
+                defaults.model_cache_ttl_secs
+            }),
         }
     }
 
@@ -723,7 +727,7 @@ impl ServiceRegistry {
         {
             Ok(result) => result.map_err(provider_error_to_app_error)?,
             Err(_) => {
-                crate::metrics::METRICS.record_cli_exit(false);
+                crate::metrics::init_metrics().record_cli_exit(false);
                 tracing::error!(model, provider_id = %provider_id, timeout_secs, "call_provider_native_with: provider call timed out");
                 return Err(AppError::ProviderError(format!(
                     "provider '{}' produced no result within {}s (timed out)",
@@ -734,7 +738,7 @@ impl ServiceRegistry {
         tracing::info!(model, provider_id = %provider_id, "call_provider_native_with: got response");
         match response {
             crate::provider::ProviderResponse::Success { content: text, reasoning, tool_calls, session_id, .. } => {
-                crate::metrics::METRICS.record_cli_exit(true);
+                crate::metrics::init_metrics().record_cli_exit(true);
                 let has_tool_calls = tool_calls.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
                 let finish_reason = if has_tool_calls { "tool_calls" } else { "stop" };
                 Ok(ChatCompletionResponse {
@@ -763,7 +767,7 @@ impl ServiceRegistry {
                 })
             }
             crate::provider::ProviderResponse::Error(e) => {
-                crate::metrics::METRICS.record_cli_exit(false);
+                crate::metrics::init_metrics().record_cli_exit(false);
                 Err(AppError::ProviderError(e))
             }
         }
@@ -958,7 +962,7 @@ impl ServiceRegistry {
 
         match response {
             crate::provider::ProviderResponse::Success { content: text, reasoning, mut tool_calls, session_id, mcp_session_id } => {
-                crate::metrics::METRICS.record_cli_exit(true);
+                crate::metrics::init_metrics().record_cli_exit(true);
                 let has_tool_calls = tool_calls.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
                 let finish_reason = if has_tool_calls { "tool_calls" } else { "stop" };
 
@@ -1046,7 +1050,7 @@ impl ServiceRegistry {
                 })
             }
             crate::provider::ProviderResponse::Error(e) => {
-                crate::metrics::METRICS.record_cli_exit(false);
+                crate::metrics::init_metrics().record_cli_exit(false);
                 Err(AppError::ProviderError(e))
             }
         }
@@ -1236,5 +1240,9 @@ fn provider_call_timeout_secs() -> u64 {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(30)
+        .unwrap_or(15)
 }
+
+
+
+

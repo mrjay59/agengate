@@ -132,3 +132,6 @@ impl RunEvent {
         matches!(self, RunEvent::ReasoningEnd { .. } | RunEvent::ToolCalls { .. } | RunEvent::Done { .. } | RunEvent::Error { .. })
     }
 }
+
+
+

@@ -803,7 +803,12 @@ impl OpenCodeSession {
     /// when opencode.json config is injected.
     fn is_free_model(model: &str) -> bool {
         let lower = model.to_lowercase();
-        lower.contains("-free") || lower.contains("free") && !lower.contains("non-free")
+        // OpenCode free-tier models are published with a "-free" suffix
+        // (beam-free, iceman-free, flint-40b-free, deepseek-v4.1-flash-free, ...).
+        // Match on the suffix (and the common namespaced forms) instead of a
+        // loose `contains("free")` so paid models that merely mention "free"
+        // in their name are not forced into the minimal-config path.
+        lower.ends_with("-free")
     }
 
     /// Wait for the CLI to initialize and connect to MCP
@@ -1353,3 +1358,7 @@ mod tests {
         assert_eq!(permissions.get("list_mcp_resources"), Some(&serde_json::Value::String("deny".to_string())));
     }
 }
+
+
+
+

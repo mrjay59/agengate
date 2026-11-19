@@ -151,3 +151,7 @@ mod tests {
         assert_eq!(normalize_line_endings("a\r\nb\rc\n"), "a\nb\nc\n");
     }
 }
+
+
+
+

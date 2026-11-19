@@ -307,3 +307,6 @@ mod tests {
         assert!(matches!(out[0], RunEvent::ToolCalls { .. }));
     }
 }
+
+
+

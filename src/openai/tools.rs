@@ -616,11 +616,11 @@ fn align_tool_arguments(
     // bash/execute-style: map `command` -> `cmd` (opencode/bash uses `cmd`)
     let is_bash = matches!(
         lower.as_str(),
-        "bash" | "execute" | "shell" | "sh" | "terminal"
+        "bash" | "execute" | "shell" | "sh" | "terminal" | "exec_command" | "execcommand"
     );
     if is_bash {
         if !obj.contains_key("cmd") {
-            let cands = &["command", "cmd", "command_line", "commandline"];
+            let cands = &["command", "cmd", "command_line", "commandline", "code"];
             let src_key = cands
                 .iter()
                 .find(|k| obj.contains_key(**k))
@@ -973,3 +973,7 @@ mod unalias_tests {
         assert_eq!(calls[1].function.name, "read");
     }
 }
+
+
+
+

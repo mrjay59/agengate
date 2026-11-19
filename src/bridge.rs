@@ -1,4 +1,4 @@
-﻿use crate::config::{BridgeConfig, ProviderConfig, IsolationConfig};
+use crate::config::{BridgeConfig, ProviderConfig, IsolationConfig};
 use crate::reasoning::event::ToolCall;
 use crate::types::Message;
 use anyhow::{anyhow, Result};
@@ -827,7 +827,7 @@ impl BridgeServer {
 
         let run_id = run.id.clone();
         parked.insert(run_id.clone(), run);
-        crate::metrics::METRICS.mark_run_parked();
+        crate::metrics::init_metrics().mark_run_parked();
         info!(event = "run.parked", run_id = %run_id);
         Ok(())
     }
@@ -837,7 +837,7 @@ impl BridgeServer {
         let mut parked = self.parked_runs.lock().await;
         let removed = parked.remove(run_id);
         if removed.is_some() {
-            crate::metrics::METRICS.mark_run_unparked();
+            crate::metrics::init_metrics().mark_run_unparked();
             info!(event = "run.resumed", run_id = %run_id);
         }
         removed
@@ -878,7 +878,7 @@ impl BridgeServer {
         if !self.is_bridge_tool(tool_name) {
             tracing::error!(event = "bridge.tool_call.reject", run_id = %run_id, tool = %tool_name, reason = "not_bridge_tool", tool_call_id = "");
             info!(event = "guard.violation", run_id = %run_id, observed_tool = %tool_name);
-            crate::metrics::METRICS.record_guard_violation();
+            crate::metrics::init_metrics().record_guard_violation();
             return Err(anyhow!("tool_isolation_violation: {} is not a bridge tool", tool_name));
         }
 
@@ -1643,6 +1643,10 @@ impl Run {
         }
     }
 }
+
+
+
+
 
 
 

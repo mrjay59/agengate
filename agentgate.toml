@@ -12,7 +12,7 @@ cors = true
 workdir = "."
 max_concurrency_per_provider = 1
 model_cache_ttl_secs = 300
-first_token_timeout_secs = 30
+first_token_timeout_secs = 120
 
 # Provider configurations
 [[provider]]
@@ -39,6 +39,7 @@ models = ["gemini-2.5-pro", "gemini-2.5-flash"]
 id = "ollama"
 bin = "ollama"
 ollama_mode = "cli"
+ollama_stream_timeout = 300
 models_cmd = ["list"]
 chat_cmd = ["run", "{model}"]
 strip_ansi = true
@@ -58,7 +59,7 @@ early_role_chunk = true
 # off: no tool disabling
 mode = "selective"
 # Additional built-in tools to allow beyond the mode defaults
-allowed_builtins = []
+allowed_builtins = ["execute"]
 # Override: explicitly disable these built-in tools
 disabled_builtins = []
 # FIX-PROMPT-01: When true, client system prompt is forwarded via CLI --system flag (default false: strip)

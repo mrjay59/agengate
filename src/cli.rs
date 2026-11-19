@@ -130,3 +130,7 @@ pub async fn execute_spike_bridge(cli: String, model: String, port: u16, prompt:
     eprintln!("Spike-bridge completed. (report saved if compat file written)");
     Ok(())
 }
+
+
+
+
