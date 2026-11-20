@@ -585,6 +585,8 @@ impl BridgeServer {
             // Other common variants
             "shell" | "sh" => "bash",
             "cat" => "read",  // opencode uses read for file viewing
+            // execute → bash (opencode built-in). Also try exec_command (AionUI ExecCommand)
+            "execute" | "execcommand" | "exec_command" => "exec_command",
             _ => name,
         };
         let mapped_str = if mapped == name { name } else { mapped };
@@ -633,6 +635,7 @@ impl BridgeServer {
         }
         // Also handle case-only prefix variants defensively (e.g. AgentGate_Glob).
         let lower = name.to_lowercase();
+        let is_execute_variant = lower == "execute" || lower == "execcommand" || lower == "exec_command";
         if lower != name {
             push_unique(lower.clone());
             let mut cur2 = lower;
@@ -649,6 +652,12 @@ impl BridgeServer {
                     _ => break,
                 }
             }
+        }
+        // Fallback candidates for execute → exec_command (AionUI ExecCommand is proven working)
+        if is_execute_variant {
+            push_unique("exec_command".to_string());
+            push_unique("ExecCommand".to_string());
+            push_unique("execcommand".to_string());
         }
         out
     }
