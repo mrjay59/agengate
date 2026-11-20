@@ -641,9 +641,8 @@ fn align_tool_arguments(
 /// `Provider::tool_schemas_from_request`. Keep in sync.
 pub fn canonical_tool_name(name: &str) -> String {
     match name.trim().to_lowercase().as_str() {
-        "shell" | "sh" | "terminal" | "execcommand" => "bash".to_string(),
+        "shell" | "sh" | "terminal" | "execcommand" | "exec_command" => "bash".to_string(),
         "cat" => "read".to_string(),
-        "execute" => "exec_command".to_string(),  // map to AionUI ExecCommand (proven working)
         other => other.to_string(),
     }
 }
@@ -730,19 +729,20 @@ pub fn unalias_tool_calls(
             align_tool_arguments(&original_name_for_alignment, &call.function.arguments, tools);
 
         let lower = call.function.name.to_lowercase();
-        // Fallback: if client has ExecCommand registered but execute is unknown,
-        // map execute → ExecCommand (AionUI shell tool that is proven working).
+        // Fallback: if client has ExecCommand/execute registered but opencode emits
+        // its built-in "shell"/"bash" name, map back to client's registered name.
+        // "execute" → canonical "bash" (opencode's built-in shell tool).
         let normalized_lower = match lower.as_str() {
-            "shell" | "sh" => "bash".to_string(),
-            "cat" => "read".to_string(),
-            "execute" if !by_lower.contains_key("execute") => {
-                // Check if ExecCommand is available (case-insensitive)
-                let has_exec = tools.iter().any(|t| {
-                    let n = t.function.name.to_lowercase();
-                    n == "exec_command" || n == "execcommand"
-                });
-                if has_exec { "execcommand" } else { "bash" }.to_string()
+            "bash" | "shell" | "sh" => {
+                // Prefer "execute" if client registered it (AionUI code-mode style)
+                if by_lower.contains_key("execute") {
+                    // Return lowercase "execute" to match canonical_to_client key
+                    "execute".to_string()
+                } else {
+                    "bash".to_string()
+                }
             }
+            "cat" => "read".to_string(),
             other => other.to_string(),
         };
         // Resolve to the client's exact registered casing when known (by_lower is
