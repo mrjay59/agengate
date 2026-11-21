@@ -1042,8 +1042,6 @@ impl ServiceRegistry {
 
                 let tool_calls = batched_tool_calls;
 
-                let finish_reason = if has_tool_calls { "tool_calls" } else { "stop" };
-
                 // Persist the assistant turn (including tool_calls) so a follow-up
                 // request carrying role:"tool" can be classified as Resume.
                 if let Some(mut run) = run {

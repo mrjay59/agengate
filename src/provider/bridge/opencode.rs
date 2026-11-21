@@ -183,6 +183,8 @@ impl OpenCodeSession {
         if has_run {
             cmd.arg("run");
             cmd.arg("--model").arg(&config.model);
+            // Pass session ID to reuse existing opencode session
+            cmd.arg("--session").arg(&session_id);
             // FIX-PROMPT-01: strip system prompt by default — don't forward via --system
             for a in &profile.args {
                 if a != "run" && a != "--model" {
@@ -194,6 +196,8 @@ impl OpenCodeSession {
             cmd.arg("run")
                 .arg("--model")
                 .arg(&config.model)
+                .arg("--session")
+                .arg(&session_id)
                 .arg("--format")
                 .arg("json")
                 .args(&profile.args);
