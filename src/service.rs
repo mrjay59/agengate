@@ -967,7 +967,10 @@ impl ServiceRegistry {
         // is performed by reissuing the request with flattened history.
         tracing::warn!(event = "replay_fallback", provider = %provider_id, reason = "explicit_replay");
         let mut new_request = request.clone();
-        new_request.messages.extend(history);
+        // `history` already is the full conversation (classify() returns
+        // request.messages.clone()). Extending would append it a second time and
+        // double the prompt on every replay.
+        new_request.messages = history;
         // PR-S5: force fresh session/CLI context on replay.
         new_request.session_id = None;
         new_request.agentgate_run_id = None;

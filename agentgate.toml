@@ -52,6 +52,15 @@ format = "reasoning_content"
 null_content = false
 early_role_chunk = true
 
+[bridge]
+# FIX-QUOTA-03: Reduce concurrent runs for free tier to prevent quota exhaustion.
+# These keys belong to [bridge]; under [bridge.limits] they were silently ignored.
+max_runs_per_key = 1
+max_parked_runs = 2
+max_steps = 50
+call_ttl_secs = 120
+park_ttl_secs = 120
+
 [bridge.isolation]
 # mode = "selective" | "strict" | "off"
 # selective: disable conflicting built-ins (read, write, bash/execute, glob, list, patch), allow grep, webfetch, todo*, task
@@ -62,22 +71,24 @@ mode = "selective"
 allowed_builtins = ["execute"]
 # Override: explicitly disable these built-in tools
 disabled_builtins = []
-# FIX-PROMPT-01: When true, client system prompt is forwarded via CLI --system flag (default false: strip)
-preserve_client_system_prompt = true
 # FIX-FREELIMIT-01: When true (default), skip verbose permission block in opencode.json
 # to avoid triggering provider.free-limit on free models (beam-free etc.)
 minimal_free_model = false
 
+# MCP tool-hold truncation (bridge.rs execute_tool path).
 [bridge.limits]
-# FIX-QUOTA-03: Reduce concurrent runs for free tier to prevent quota exhaustion
-max_runs_per_key = 1
-max_parked_runs = 2
-# Maximum tools to inject for free models (beam-free, etc.). Default: 10
 max_inject = 10
 max_tools = 128
-max_steps = 50
-call_ttl_secs = 120
-park_ttl_secs = 120
+max_prompt_chars = 64000
+max_result_bytes = 262144
+
+# Rendered-conversation limits actually used by the CLI/bridge provider.
+# A replay re-sends the whole transcript, so this budget must stay small.
+[limits]
+max_inject = 10
+max_tools = 128
+max_prompt_chars = 64000
+max_result_bytes = 262144
 
 [routing]
 no_tools_policy = "chat_only"

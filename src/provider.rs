@@ -1104,91 +1104,108 @@ pub fn render_conversation(
 ) -> String {
     use crate::types::MessageRole;
 
-    let mut out = String::new();
-    let mut total_chars = 0usize;
-    for msg in messages {
-        match msg.role {
-            // FIX-PROMPT-01: skip system messages (default strip; preserve only with explicit config)
-            MessageRole::System => continue,
-            MessageRole::User => {
-                if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
-                    let trimmed = content.trim();
-                    let (truncated, exceeded) = limit_chars(trimmed, max_prompt_chars, total_chars);
-                    if exceeded {
-                        break;
+    // One cumulative budget for the WHOLE rendered prompt. Previously only
+    // user/assistant *content* was charged; tool-call arguments (110 KB in the
+    // field) and every tool result (up to 256 KB each) were appended verbatim,
+    // so replay prompts grew without bound until the 120 s turn timeout.
+    let budget = max_prompt_chars.unwrap_or(64_000);
+    // A single giant result must not crowd out the rest of the conversation.
+    let per_part = max_result_bytes.unwrap_or(262_144).min(16_384);
+
+    let blocks: Vec<String> = messages
+        .iter()
+        .filter_map(|msg| {
+            let block = match msg.role {
+                // FIX-PROMPT-01: strip system messages by default.
+                MessageRole::System => return None,
+                MessageRole::User => {
+                    let content = msg.content.as_deref()?.trim();
+                    if content.is_empty() {
+                        return None;
                     }
-                    total_chars += truncated.len();
-                    out.push_str("[user]\n");
-                    out.push_str(truncated);
-                    out.push_str("\n\n");
+                    format!("[user]\n{}", content)
                 }
-            }
-            MessageRole::Assistant => {
-                if let Some(calls) = msg.tool_calls.as_ref().filter(|c| !c.is_empty()) {
-                    for call in calls {
-                        out.push_str(&format!(
-                            "[assistant tool_call id={} name={}]\n{}\n\n",
-                            call.id,
-                            call.function.name,
-                            call.function.arguments
-                        ));
+                MessageRole::Assistant => {
+                    let mut parts: Vec<String> = Vec::new();
+                    if let Some(calls) = msg.tool_calls.as_deref() {
+                        for call in calls {
+                            parts.push(format!(
+                                "[assistant tool_call id={} name={}]\n{}",
+                                call.id,
+                                call.function.name,
+                                clip(&call.function.arguments, per_part)
+                            ));
+                        }
                     }
-                }
-                if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
-                    let trimmed = content.trim();
-                    let (truncated, exceeded) = limit_chars(trimmed, max_prompt_chars, total_chars);
-                    if exceeded {
-                        break;
+                    if let Some(content) = msg.content.as_deref().filter(|c| !c.trim().is_empty()) {
+                        parts.push(format!("[assistant]\n{}", content.trim()));
                     }
-                    total_chars += truncated.len();
-                    out.push_str("[assistant]\n");
-                    out.push_str(truncated);
-                    out.push_str("\n\n");
+                    if parts.is_empty() {
+                        return None;
+                    }
+                    parts.join("\n")
                 }
-            }
-            MessageRole::Tool => {
-                let id = msg.tool_call_id.as_deref().unwrap_or("");
-                let name = msg.name.as_deref().unwrap_or("");
-                let content = msg.content.as_deref().unwrap_or("");
-                // Enforce max_result_bytes on tool result content
-                let truncated = limit_bytes(content, max_result_bytes);
-                out.push_str(&format!(
-                    "[tool result id={} name={}]\n{}\n\n",
-                    id,
-                    name,
-                    truncated
-                ));
-            }
+                MessageRole::Tool => {
+                    let content = clip(msg.content.as_deref().unwrap_or(""), per_part);
+                    format!(
+                        "[tool result id={} name={}]\n{}",
+                        msg.tool_call_id.as_deref().unwrap_or(""),
+                        msg.name.as_deref().unwrap_or(""),
+                        content
+                    )
+                }
+            };
+            Some(block)
+        })
+        .collect();
+
+    // Walk from newest to oldest so the most recent context always survives a
+    // truncation (the old code broke out of a forward loop and dropped the
+    // tail, i.e. exactly the messages that mattered).
+    let mut start = blocks.len();
+    let mut used = 0usize;
+    for (i, block) in blocks.iter().enumerate().rev() {
+        let cost = block.len() + 1; // +1 for the joining newline
+        if used + cost <= budget {
+            used += cost;
+            start = i;
+        } else {
+            break;
         }
     }
-    out.trim_end().to_string()
-}
 
-/// Limit character count within remaining budget. Returns (content, exceeded).
-fn limit_chars(content: &str, max_prompt_chars: Option<usize>, used: usize) -> (&str, bool) {
-    let Some(limit) = max_prompt_chars else {
-        return (content, false);
-    };
-    let remaining = limit.saturating_sub(used);
-    if remaining == 0 {
-        return ("", true);
+    let mut out = String::with_capacity(used + 128);
+    if start > 0 {
+        out.push_str(&format!(
+            "[... {} earlier messages truncated to keep prompt under {} bytes]\n\n",
+            start, budget
+        ));
     }
-    let bytes = content.as_bytes();
-    let take = bytes.len().min(remaining);
-    let truncated = &content[..take];
-    (truncated, take < bytes.len())
+    if start < blocks.len() {
+        // A single newest block can still exceed the budget on its own.
+        let mut first = blocks[start].clone();
+        if first.len() > budget {
+            first = format!("{}...[truncated]", clip(&first, budget.saturating_sub(16)));
+        }
+        out.push_str(&first);
+        for block in &blocks[start + 1..] {
+            out.push('\n');
+            out.push_str(block);
+        }
+    }
+    out
 }
 
-/// Limit byte count for tool result content. Returns truncated content.
-fn limit_bytes(content: &str, max_result_bytes: Option<usize>) -> &str {
-    let Some(limit) = max_result_bytes else {
-        return content;
-    };
+/// Truncate `content` to at most `limit` bytes without splitting a UTF-8 char.
+fn clip(content: &str, limit: usize) -> &str {
     if content.len() <= limit {
         return content;
     }
-    // Truncate at a character boundary near the limit
-    &content[..limit.min(content.len())]
+    let mut end = limit.min(content.len());
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    &content[..end]
 }
 
 /// Prompt instructions for CLIs/models without native tool calling
@@ -1267,6 +1284,8 @@ impl BridgeCliProvider {
 
         // Get limits config, defaulting to default LimitsConfig
         let limits = limits.cloned().unwrap_or_default();
+        let max_prompt_chars = limits.max_prompt_chars;
+        let max_result_bytes = limits.max_result_bytes;
 
         Some(Self {
             id: config.id,
@@ -1281,8 +1300,8 @@ impl BridgeCliProvider {
             isolation_config,
             limits,
             persistent_sessions: Arc::new(RwLock::new(HashMap::new())),
-            max_prompt_chars: 400_000,
-            max_result_bytes: 262_144,
+            max_prompt_chars,
+            max_result_bytes,
         })
     }
 
@@ -1564,6 +1583,13 @@ impl CliProvider for BridgeCliProvider {
             Some(self.max_prompt_chars),
             Some(self.max_result_bytes),
         );
+        tracing::info!(
+            model = %model,
+            messages = request.messages.len(),
+            prompt_bytes = user_message.len(),
+            budget_bytes = self.max_prompt_chars,
+            "rendered prompt for CLI"
+        );
         if self.prompt_tools_fallback {
             if let Some(tools) = request.tools.as_deref().filter(|t| !t.is_empty()) {
                 user_message.push_str(&tool_prompt_instructions(tools));
@@ -1779,6 +1805,13 @@ impl CliProvider for BridgeCliProvider {
             &request.messages,
             Some(self.max_prompt_chars),
             Some(self.max_result_bytes),
+        );
+        tracing::info!(
+            model = %model,
+            messages = request.messages.len(),
+            prompt_bytes = user_message.len(),
+            budget_bytes = self.max_prompt_chars,
+            "rendered prompt for CLI"
         );
         if self.prompt_tools_fallback {
             if let Some(tools) = request.tools.as_deref().filter(|t| !t.is_empty()) {

@@ -99,8 +99,10 @@ pub struct LimitsConfig {
     /// Maximum bytes for a tool result.
     #[serde(default = "default_262144")]
     pub max_result_bytes: usize,
-    /// Maximum prompt characters.
-    #[serde(default = "default_400000")]
+    /// Maximum bytes of *rendered* conversation sent to a CLI on each turn.
+    /// Kept small on purpose: replay re-sends the whole transcript, so a large
+    /// budget turns into multi-MB prompts and 120 s+ latency on free models.
+    #[serde(default = "default_64000")]
     pub max_prompt_chars: usize,
 }
 
@@ -111,7 +113,7 @@ impl Default for LimitsConfig {
               max_inject: default_10(),
               max_schema_bytes: default_65536(),
             max_result_bytes: default_262144(),
-            max_prompt_chars: default_400000(),
+            max_prompt_chars: default_64000(),
         }
     }
 }
@@ -175,7 +177,7 @@ fn default_16() -> usize { 16 }
 fn default_128() -> usize { 128 }
 fn default_65536() -> usize { 65536 }
 fn default_262144() -> usize { 262144 }
-fn default_400000() -> usize { 400_000 }
+fn default_64000() -> usize { 64_000 }
 
 impl Default for RoutingConfig {
     fn default() -> Self {
