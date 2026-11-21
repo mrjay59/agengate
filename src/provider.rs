@@ -1460,7 +1460,6 @@ impl CliProvider for BridgeCliProvider {
         model: &str,
         request: crate::types::ChatCompletionRequest,
     ) -> Result<ProviderResponse, anyhow::Error> {
-        println!("DEBUG: BridgeCliProvider::send_chat_completion ENTRY: model={}, has_tools={}", model, request.tools.as_deref().map(|t| t.len()).unwrap_or(0));
         use uuid::Uuid;
         // Ollama models may arrive as "ollama/<model>".
         let model = model.strip_prefix("ollama/").unwrap_or(model);
@@ -1655,13 +1654,11 @@ impl CliProvider for BridgeCliProvider {
 
         let mut tool_calls = output.tool_calls;
         if let Some(calls) = tool_calls.as_mut() {
-            println!("DEBUG: Before unalias_tool_calls: {:?}, request.tools count: {}", calls, request.tools.as_deref().map(|t| t.len()).unwrap_or(0));
             tracing::info!(target: "bridge.unalias", before = ?calls, tools_count = request.tools.as_deref().map(|t| t.len()).unwrap_or(0), "Before unalias_tool_calls");
             crate::openai::tools::unalias_tool_calls(
                 calls,
                 request.tools.as_deref().unwrap_or(&[]),
             );
-            println!("DEBUG: After unalias_tool_calls: {:?}", calls);
             tracing::info!(target: "bridge.unalias", after = ?calls, "After unalias_tool_calls");
         }
         Ok(ProviderResponse::Success {

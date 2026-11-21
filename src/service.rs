@@ -56,6 +56,29 @@ fn provider_error_to_app_error(e: anyhow::Error) -> AppError {
     }
 }
 
+/// RAII guard around a provider semaphore permit (spec §10.3).
+/// Updates the `agentgate_provider_concurrency` gauge when it is dropped.
+pub(crate) struct ProviderPermit {
+    _permit: tokio::sync::OwnedSemaphorePermit,
+    provider_id: String,
+}
+
+// Manual impl: `OwnedSemaphorePermit` has no useful `Debug` surface, and
+// `Run` derives `Debug` (bridge.rs), so the permit field must be printable.
+impl std::fmt::Debug for ProviderPermit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderPermit")
+            .field("provider_id", &self.provider_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for ProviderPermit {
+    fn drop(&mut self) {
+        crate::metrics::init_metrics().record_provider_concurrency(&self.provider_id, -1);
+    }
+}
+
 pub struct ServiceRegistry {
     providers: RwLock<HashMap<String, Arc<dyn CliProvider + Send + Sync>>>,
     native_providers: RwLock<HashMap<String, Arc<dyn CliProvider + Send + Sync>>>,
@@ -116,7 +139,7 @@ impl ServiceRegistry {
             }),
             model_cache: RwLock::new(HashMap::new()),
             model_cache_ttl: Duration::from_secs(if defaults.model_cache_ttl_secs == 0 {
-                300
+                900
             } else {
                 defaults.model_cache_ttl_secs
             }),
@@ -780,18 +803,34 @@ impl ServiceRegistry {
             .filter_map(|m| m.tool_call_id.clone().map(|id| (id, m.content.clone().unwrap_or_default())))
             .collect();
 
-        // Find parked run for any call_ids (PR-S1 linkage + PR-S2 liveness)
+        // Find parked run for any call_ids (PR-S1 linkage + PR-S2 liveness).
+        // PR-S1 fix: lookup and consume are atomic under one guard, so no
+        // concurrent resume/cleanup can consume the same parked run between
+        // find and remove.
         let (run_id, session_key) = {
-            let parked_runs = self.bridge.parked_runs().lock().await;
-            call_ids.iter().find_map(|id| {
+            let mut parked_runs = self.bridge.parked_runs().lock().await;
+            // PR-S1 fix: find + consume atomically under one guard, so no
+            // concurrent resume/cleanup can consume the same parked run between
+            // find and remove.
+            let consumed = call_ids.iter().find_map(|id| {
                 parked_runs.iter().find(|(_, run)| {
                     run.pending_tool_call_ids.iter().any(|p| p == id)
                         || run.messages.iter().any(|msg| {
                             msg.tool_call_id.as_ref() == Some(id)
                                 || msg.tool_calls.as_ref().is_some_and(|tcs| tcs.iter().any(|tc| &tc.id == id))
                         })
-                }).map(|(k, run)| (k.clone(), run.mcp_session_id.clone().or(run.provider_session_key.clone())))
-            }).map(|(rid, skey)| (Some(rid), skey)).unwrap_or((None, None))
+                }).map(|(k, run)| (
+                    k.clone(),
+                    run.mcp_session_id.clone().or_else(|| run.provider_session_key.clone()),
+                ))
+            });
+            match consumed {
+                Some((key, skey)) => {
+                    parked_runs.remove(&key);
+                    (Some(key), skey)
+                }
+                None => (None, None),
+            }
         };
         let session_lost_reason = if run_id.is_some() {
             if let Some(ref key) = session_key {
@@ -812,19 +851,25 @@ impl ServiceRegistry {
                     content: serde_json::json!(content),
                     is_error: false,
                 };
-                let _ = self.run_registry.resume_run(&run_id, res.clone()).await;
+                let resumed = self.run_registry.resume_run(&run_id, res.clone()).await;
+                if resumed.is_err() {
+                    // PR-S1: race with cleanup/expiry between the parked-run
+                    // lookup and resume. The replay fallback still runs below,
+                    // so this is observability only.
+                    tracing::warn!(event = "resume.run_missing", run_id = %run_id, "parked run not found at resume time");
+                }
                 // PR-S4: deliver real results to held MCP tools/call (unblocks live CLI continuation).
                 let _ = self.bridge.resolve_tool_result_by_id(id, res).await;
             }
             // PR-S4: capability-gated live continuation (opencode). Await continuation if registered;
             // replay fallback mandatory on absence/timeout/error/session loss.
             let mut replay_reason = "continuation_not_available";
-            let mut has_live_session = self.bridge.has_provider_session(run_id).await;
+            let mut has_live_session = self.bridge.has_provider_session(&run_id).await;
             if let Some(ref k) = session_key {
                 if self.bridge.has_provider_session(k).await { has_live_session = true; }
             }
             if has_live_session {
-                let cont = match self.bridge.take_continuation(run_id).await {
+                let cont = match self.bridge.take_continuation(&run_id).await {
                     Some(c) => Some(c),
                     None => match session_key.as_deref() {
                         Some(k) => self.bridge.take_continuation(k).await,
@@ -840,9 +885,9 @@ impl ServiceRegistry {
                             let finish_reason = if has_tool_calls { "tool_calls" } else { "stop" };
                             // PR-S5: best-effort cleanup when continuation completes without further tool calls.
                             if !has_tool_calls {
-                                self.bridge.remove_continuation(run_id).await;
+                                self.bridge.remove_continuation(&run_id).await;
                                 if let Some(ref k) = session_key { self.bridge.unregister_provider_session(k).await; }
-                                self.bridge.unregister_provider_session(run_id).await;
+                                self.bridge.unregister_provider_session(&run_id).await;
                                 // Remove from run registries best-effort.
                                 let _ = self.bridge.runs().write().await.remove(run_id);
                             }
@@ -870,12 +915,12 @@ impl ServiceRegistry {
                         Ok(Err(_)) => {
                             replay_reason = "continuation_channel_closed";
                             if let Some(ref k) = session_key { self.bridge.unregister_provider_session(k).await; }
-                            self.bridge.unregister_provider_session(run_id).await;
+                            self.bridge.unregister_provider_session(&run_id).await;
                         }
                         Err(_) => {
                             replay_reason = "continuation_timeout";
                             if let Some(ref k) = session_key { self.bridge.unregister_provider_session(k).await; }
-                            self.bridge.unregister_provider_session(run_id).await;
+                            self.bridge.unregister_provider_session(&run_id).await;
                         }
                     }
                 } else {
@@ -885,7 +930,7 @@ impl ServiceRegistry {
             let mut tools = request.tools.take().unwrap_or_default();
             // Preserve parked-run tool schemas for replay/re-invocation when client omits tools.
             if tools.is_empty() {
-                if let Some(run) = self.run_registry.get_run(run_id).await {
+                if let Some(run) = self.run_registry.get_run(&run_id).await {
                     tools = run.tools.into_iter().map(|t| crate::types::ToolDefinition {
                         r#type: "function".to_string(),
                         function: crate::types::FunctionDefinition {
@@ -896,7 +941,7 @@ impl ServiceRegistry {
                     }).collect();
                 }
             }
-            tracing::warn!(event = "replay_fallback", provider = %provider_id, run_id = %run_id, session_key = ?session_key, reason = %replay_reason);
+            tracing::warn!(event = "replay_fallback", provider = %provider_id, run_id = ?run_id, session_key = ?session_key, reason = %replay_reason);
             // PR-S5: rotate session on replay fallback (avoid stale CLI/persistent session reuse).
             request.session_id = None;
             request.agentgate_run_id = None;
@@ -932,7 +977,7 @@ impl ServiceRegistry {
 
     async fn new_bridge_run(&self, provider_id: &str, tools: Vec<crate::types::ToolDefinition>, request: ChatCompletionRequest) -> Result<ChatCompletionResponse, AppError> {
         // Acquire provider semaphore to limit concurrent runs per provider (spec §10.3)
-        let _permit = self.acquire_provider_permit(provider_id).await?;
+        let permit = self.acquire_provider_permit(provider_id).await?;
 
         // Create new run with bridge (best-effort; do not block on failure)
         let tool_schemas: Vec<crate::bridge::ToolSchema> = tools.iter().map(|t| crate::bridge::ToolSchema {
@@ -957,7 +1002,19 @@ impl ServiceRegistry {
         let model = request.model.clone();
         let mut req_for_provider = request.clone();
         req_for_provider.agentgate_run_id = run.as_ref().map(|r| r.id.clone());
-        let response = provider.send_chat_completion(&model, req_for_provider).await.map_err(provider_error_to_app_error)?;
+        let response = match provider.send_chat_completion(&model, req_for_provider).await {
+            Ok(r) => r,
+            Err(e) => {
+                // Mark the run Failed so the sweeper reaps it after call_ttl
+                // instead of leaving it Pending until max_run_lifetime.
+                if let Some(mut r) = run {
+                    r.fail(e.to_string());
+                    self.bridge.runs().write().await.insert(r.id.clone(), r);
+                }
+                drop(providers);
+                return Err(provider_error_to_app_error(e));
+            }
+        };
         drop(providers);
 
         match response {
@@ -1015,6 +1072,13 @@ impl ServiceRegistry {
                                 run.provider_session_key = mcp_session_id.clone().or(session_id.clone());
                                 run.pending_tool_call_ids = calls.iter().map(|c| c.id.clone()).collect();
                                 run.continuation_capable = mcp_session_id.is_some();
+                                // Hold the provider semaphore permit while parked
+                                // (config `parked_holds_permit`); released on resume/reap.
+                                run.permit = if self.bridge_config.parked_holds_permit {
+                                    Some(permit)
+                                } else {
+                                    None
+                                };
                                 let _ = self.bridge.park_run(run.clone()).await;
                             }
                         }
@@ -1051,6 +1115,11 @@ impl ServiceRegistry {
             }
             crate::provider::ProviderResponse::Error(e) => {
                 crate::metrics::init_metrics().record_cli_exit(false);
+                // Mark the run Failed so the sweeper reaps it after call_ttl.
+                if let Some(mut r) = run {
+                    r.fail(e.clone());
+                    self.bridge.runs().write().await.insert(r.id.clone(), r);
+                }
                 Err(AppError::ProviderError(e))
             }
         }
@@ -1059,8 +1128,13 @@ impl ServiceRegistry {
     /// Acquire a permit from the provider semaphore to limit concurrent runs (spec §10.3).
     /// Returns an owned permit that can be held for the duration of the provider turn.
     /// Semaphore size is clamped to >= 1: a 0-sized semaphore would deadlock every caller.
-    /// Bounded timeout remains as a last-resort guard against permit leaks/starvation.
-    async fn acquire_provider_permit(&self, provider_id: &str) -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
+    ///
+    /// Acquisition retries with exponential backoff instead of failing on the
+    /// first timeout: when the per-provider limit is reached, requests that
+    /// would succeed seconds later (after a permit frees up) are aborted by an
+    /// immediate timeout. The overall bound stays as a last-resort guard
+    /// against permit leaks or starvation.
+    async fn acquire_provider_permit(&self, provider_id: &str) -> Result<Arc<ProviderPermit>, AppError> {
         let limit = self.max_concurrency_per_provider.max(1);
         let semaphore = {
             let mut semaphores = self.provider_semaphores.write().await;
@@ -1069,18 +1143,39 @@ impl ServiceRegistry {
                 .or_insert_with(|| Arc::new(Semaphore::new(limit)))
                 .clone()
         };
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            semaphore.acquire_owned(),
-        )
-        .await
-        {
-            Ok(Ok(permit)) => Ok(permit),
-            Ok(Err(_)) => Err(AppError::Internal("Provider semaphore closed".to_string())),
-            Err(_) => Err(AppError::Internal(format!(
-                "Provider semaphore acquisition timed out (provider={}, limit={})",
-                provider_id, limit
-            ))),
+        const OVERALL_DEADLINE: Duration = Duration::from_secs(30);
+        const PER_TRY_TIMEOUT: Duration = Duration::from_millis(500);
+        const FIRST_RETRY_DELAY: Duration = Duration::from_millis(200);
+        const MAX_RETRY_DELAY: Duration = Duration::from_secs(2);
+        let start = Instant::now();
+        let mut retry_delay = FIRST_RETRY_DELAY;
+        loop {
+            match tokio::time::timeout(PER_TRY_TIMEOUT, semaphore.clone().acquire_owned()).await {
+                Ok(Ok(permit)) => {
+                    let metrics = crate::metrics::init_metrics();
+                    metrics.observe_semaphore_wait(start.elapsed().as_millis() as u64);
+                    metrics.record_provider_concurrency(provider_id, 1);
+                    return Ok(Arc::new(ProviderPermit {
+                        _permit: permit,
+                        provider_id: provider_id.to_string(),
+                    }));
+                }
+                Ok(Err(_)) => {
+                    return Err(AppError::Internal("Provider semaphore closed".to_string()));
+                }
+                Err(_) => {
+                    let elapsed = start.elapsed();
+                    if elapsed >= OVERALL_DEADLINE {
+                        return Err(AppError::Internal(format!(
+                            "Provider semaphore acquisition timed out (provider={}, limit={})",
+                            provider_id, limit
+                        )));
+                    }
+                    let sleep_for = retry_delay.min(OVERALL_DEADLINE - elapsed);
+                    tokio::time::sleep(sleep_for).await;
+                    retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
+                }
+            }
         }
     }
 
@@ -1233,14 +1328,13 @@ impl ServiceRegistry {
 /// CLI agents can block indefinitely: a missing ollama model starts a multi-GB
 /// auto-pull, and some CLI versions do not exit after an upstream error. Without
 /// this bound the HTTP client sees no response at all. Override with
-/// `AGENTGATE_PROVIDER_TIMEOUT_SECS`. Default: 30s (reduced from 120s to fail
-/// faster on free-tier quota issues).
+/// `AGENTGATE_PROVIDER_TIMEOUT_SECS`. Default: 60s.
 fn provider_call_timeout_secs() -> u64 {
     std::env::var("AGENTGATE_PROVIDER_TIMEOUT_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(15)
+        .unwrap_or(60)
 }
 
 

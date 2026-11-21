@@ -30,10 +30,16 @@ pub struct Metrics {
     pub tool_wait_ms_sum: AtomicU64,
     /// Number of held tool results observed (histogram, count).
     pub tool_wait_ms_count: AtomicU64,
+    /// Total time spent acquiring provider semaphore permits (histogram, sum).
+    pub semaphore_wait_ms_sum: AtomicU64,
+    /// Number of semaphore acquisition observations.
+    pub semaphore_wait_ms_count: AtomicU64,
     /// Sum of time-to-first-token / first byte, ms.
     pub ttft_ms_sum: AtomicU64,
     /// Count of ttft observations.
     pub ttft_ms_count: AtomicU64,
+    /// Active permit holders per provider (gauge map: provider -> count).
+    pub provider_concurrency: std::sync::Mutex<std::collections::HashMap<String, u64>>,
     /// Total HTTP requests by method, path, status.
     pub http_requests_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
     /// Total provider calls by provider, model, status.
@@ -66,8 +72,11 @@ impl Metrics {
             cli_exit_error: AtomicU64::new(0),
             tool_wait_ms_sum: AtomicU64::new(0),
             tool_wait_ms_count: AtomicU64::new(0),
+            semaphore_wait_ms_sum: AtomicU64::new(0),
+            semaphore_wait_ms_count: AtomicU64::new(0),
             ttft_ms_sum: AtomicU64::new(0),
             ttft_ms_count: AtomicU64::new(0),
+            provider_concurrency: std::sync::Mutex::new(std::collections::HashMap::new()),
             http_requests_total: std::sync::Mutex::new(std::collections::HashMap::new()),
             provider_calls_total: std::sync::Mutex::new(std::collections::HashMap::new()),
             bridge_sessions_total: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -134,9 +143,21 @@ impl Metrics {
         self.tool_wait_ms_count.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn observe_semaphore_wait(&self, ms: u64) {
+        self.semaphore_wait_ms_sum.fetch_add(ms, Ordering::Relaxed);
+        self.semaphore_wait_ms_count.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn observe_ttft(&self, ms: u64) {
         self.ttft_ms_sum.fetch_add(ms, Ordering::Relaxed);
         self.ttft_ms_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_provider_concurrency(&self, provider: &str, delta: i64) {
+        let key = format!("provider=\"{}\"", provider);
+        let mut map = self.provider_concurrency.lock().unwrap();
+        let v = map.entry(key).or_insert(0);
+        *v = (*v as i64 + delta).max(0) as u64;
     }
 
     pub fn record_bridge_keepalive(&self) {
@@ -250,6 +271,14 @@ impl Metrics {
             "agentgate_ttft_seconds_count",
             self.ttft_ms_count.load(Ordering::Relaxed) as f64,
         );
+        line(&mut out,
+            "agentgate_semaphore_wait_seconds_sum",
+            Self::ms(self.semaphore_wait_ms_sum.load(Ordering::Relaxed)),
+        );
+        line(&mut out,
+            "agentgate_semaphore_wait_seconds_count",
+            self.semaphore_wait_ms_count.load(Ordering::Relaxed) as f64,
+        );
         out
     }
 
@@ -275,6 +304,7 @@ impl Metrics {
         out.push_str(&self.render_map_metrics("agentgate_model_cache_hits_total", &self.model_cache_hits_total));
         out.push_str(&self.render_map_metrics("agentgate_model_cache_misses_total", &self.model_cache_misses_total));
         out.push_str(&self.render_map_metrics("agentgate_tool_injected_total", &self.tool_injected_total));
+        out.push_str(&self.render_map_metrics("agentgate_provider_concurrency", &self.provider_concurrency));
         out.push_str(&self.render_map_metrics("agentgate_errors_total", &self.errors_total));
         out
     }

@@ -4,6 +4,7 @@ use crate::types::Message;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock, oneshot, mpsc};
@@ -156,6 +157,7 @@ pub struct BridgeSession {
 
 pub struct BridgeServer {
     config: BridgeConfig,
+    cleanup_started: AtomicBool,
     runs: Arc<RwLock<HashMap<String, Run>>>,
     tool_schemas: Arc<RwLock<HashMap<String, ToolSchema>>>,
     parked_runs: Arc<Mutex<HashMap<String, Run>>>,
@@ -289,6 +291,7 @@ impl BridgeServer {
 
         Self {
             config,
+            cleanup_started: AtomicBool::new(false),
             runs: Arc::new(RwLock::new(HashMap::new())),
             tool_schemas: Arc::new(RwLock::new(HashMap::new())),
             parked_runs: Arc::new(Mutex::new(HashMap::new())),
@@ -552,7 +555,7 @@ impl BridgeServer {
                     }
                 }
                 _ = ticker.tick() => {
-                    info!(event = "bridge.tool_call.hold_keepalive", mcp_id = %mcp_id);
+                    debug!(event = "bridge.tool_call.hold_keepalive", mcp_id = %mcp_id);
                 }
                 _ = tokio::time::sleep(remaining) => {
                     self.pending_calls.lock().await.remove(&mcp_id);
@@ -787,6 +790,7 @@ impl BridgeServer {
         let current_runs = {
             let runs = self.runs.read().await;
             runs.values()
+                .filter(|r| !r.state.is_terminal())
                 .filter(|r| {
                     let r_key = format!("{}:{}", r.workspace, r.model);
                     r_key == key
@@ -822,6 +826,7 @@ impl BridgeServer {
         &self.parked_runs
     }
 
+
     /// Get a run by ID
     pub async fn get_run(&self, run_id: &str) -> Option<Run> {
         self.runs.read().await.get(run_id).cloned()
@@ -830,6 +835,16 @@ impl BridgeServer {
     /// Park a run (waiting for tool result)
     pub async fn park_run(&self, run: Run) -> Result<()> {
         let mut parked = self.parked_runs.lock().await;
+
+        if parked.len() >= self.config.max_parked_runs {
+            // Best-effort: evict expired parked runs so a long-lived session
+            // can make room instead of failing the new park.
+            let now = Instant::now();
+            parked.retain(|_, r| {
+                now.duration_since(r.parked_at.unwrap_or(now)) < Duration::from_secs(self.config.park_ttl_secs)
+                    && now.duration_since(r.created_at) < Duration::from_secs(self.config.max_run_lifetime_secs)
+            });
+        }
 
         if parked.len() >= self.config.max_parked_runs {
             return Err(anyhow!("Max parked runs reached"));
@@ -943,9 +958,11 @@ impl BridgeServer {
         // This is done via the MCP tools/call endpoint which the CLI polls/calls
 
         // Wait for client to execute tool and send result via bridge/resolve
+        let hold_start = std::time::Instant::now();
         match tokio::time::timeout(std::time::Duration::from_secs(self.config.call_ttl_secs), rx).await {
             Ok(Ok(mut result)) => {
                 info!(event = "bridge.tool_call.resolved", mcp_id = %mcp_id, tool = %tool_name);
+                crate::metrics::init_metrics().observe_tool_wait(hold_start.elapsed().as_millis() as u64);
                 // Enforce max_result_bytes on tool result (spec §14)
                 let result_str = result.content.to_string();
                 let limit = self.config.limits.max_result_bytes;
@@ -962,10 +979,12 @@ impl BridgeServer {
             },
             Ok(Err(_)) => {
                 self.pending_calls.lock().await.remove(&mcp_id);
+                crate::metrics::init_metrics().observe_tool_wait(hold_start.elapsed().as_millis() as u64);
                 Err(anyhow::anyhow!("channel closed"))
             },
             Err(_) => {
                 self.pending_calls.lock().await.remove(&mcp_id);
+                crate::metrics::init_metrics().observe_tool_wait(hold_start.elapsed().as_millis() as u64);
                 info!(event = "bridge.tool_call.timeout", mcp_id = %mcp_id, tool = %tool_name);
                 Err(anyhow::anyhow!("timeout menunggu hasil dari client"))
             }
@@ -1107,6 +1126,12 @@ impl BridgeServer {
 
     /// Start cleanup task for expired runs
     pub async fn start_cleanup_task(&self) {
+        // Start the sweeper once per BridgeServer instance (main.rs and
+        // spike.rs both call this on startup; `with_bridge_config` recreates
+        // the server so the guard resets with it).
+        if self.cleanup_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
         // PR-S5: Sweep orphan PIDs on startup (leftover CLI processes from crashed runs).
         self.sweep_orphan_pids_on_startup().await;
 
@@ -1118,26 +1143,32 @@ impl BridgeServer {
         let park_ttl = Duration::from_secs(self.config.park_ttl_secs);
         let call_ttl = Duration::from_secs(self.config.call_ttl_secs);
         let max_run_lifetime = Duration::from_secs(self.config.max_run_lifetime_secs);
-        let session_ttl = Duration::from_secs(600);
+        let session_ttl = Duration::from_secs(self.config.session_ttl_secs);
+        // Clone for the spawned sweeper so `self` isn't captured by the task.
+        let tool_call_ttls = self.tool_call_ttls.clone();
+        let tool_call_queue = self.tool_call_queue.clone();
 
         tokio::spawn(async move {
-            let mut interval = interval(park_ttl.max(Duration::from_secs(30)));
+            let sweep = park_ttl.min(call_ttl).min(session_ttl).min(Duration::from_secs(300)).max(Duration::from_secs(30));
+            let mut interval = interval(sweep);
             loop {
                 interval.tick().await;
                 let now = std::time::Instant::now();
                 let mut removed_keys: Vec<String> = Vec::new();
 
                 // Clean expired parked runs (collect removed for best-effort S5 cleanup).
+                // Memory-growth fix: use the run's TTL predicates so parked runs
+                // with a stale/missing parked_at still expire via call TTL.
                 let parked_len = {
                     let mut parked = parked_runs.lock().await;
                     parked.retain(|id, run| {
-                        let keep = now.duration_since(run.parked_at.unwrap_or(now)) < park_ttl;
-                        if !keep {
+                        let expired = run.is_call_expired() || run.is_park_expired();
+                        if expired {
                             removed_keys.push(id.clone());
                             if let Some(ref k) = run.mcp_session_id { removed_keys.push(k.clone()); }
                             if let Some(ref k) = run.provider_session_key { removed_keys.push(k.clone()); }
                         }
-                        keep
+                        !expired
                     });
                     parked.len()
                 };
@@ -1146,18 +1177,23 @@ impl BridgeServer {
                 let runs_len = {
                     let mut runs_guard = runs.write().await;
                     runs_guard.retain(|id, run| {
-                        if let RunState::Running { started_at, .. } = &run.state {
-                            let age = now.duration_since(*started_at);
-                            let keep = age < call_ttl && age < max_run_lifetime;
-                            if !keep {
-                                removed_keys.push(id.clone());
-                                if let Some(ref k) = run.mcp_session_id { removed_keys.push(k.clone()); }
-                                if let Some(ref k) = run.provider_session_key { removed_keys.push(k.clone()); }
+                        let expired = match &run.state {
+                            RunState::Running { started_at, .. } => {
+                                let age = now.duration_since(*started_at);
+                                age >= call_ttl || age >= max_run_lifetime
                             }
-                            keep
-                        } else {
-                            true
+                            RunState::Pending => run.created_at.elapsed() >= max_run_lifetime,
+                            // Terminal runs (Completed/Failed/Cancelled) are never
+                            // resumed; reap them once they age out of the call
+                            // TTL (previously they accumulated forever).
+                            _ => run.created_at.elapsed() >= call_ttl,
+                        };
+                        if expired {
+                            removed_keys.push(id.clone());
+                            if let Some(ref k) = run.mcp_session_id { removed_keys.push(k.clone()); }
+                            if let Some(ref k) = run.provider_session_key { removed_keys.push(k.clone()); }
                         }
+                        !expired
                     });
                     runs_guard.len()
                 };
@@ -1168,6 +1204,20 @@ impl BridgeServer {
                     sessions_guard.retain(|_, s| now.duration_since(s.created_at) < session_ttl);
                     sessions_guard.len()
                 };
+
+                // P0-AUDIT: drop empty serial-mode queues and expired tool_call_ttls
+                // so they do not accumulate unboundedly on long-lived servers.
+                {
+                    let mut queue = tool_call_queue.lock().await;
+                    queue.retain(|_, calls| !calls.is_empty());
+                }
+                {
+                    // Inline of cleanup_expired_tool_call_ttls() — hoisted
+                    // `self` reference cannot be captured by the spawned task.
+                    let mut ttl_map = tool_call_ttls.lock().await;
+                    let now = std::time::Instant::now();
+                    ttl_map.retain(|_, deadline| now <= *deadline);
+                }
 
                 // PR-S5: clean stale continuation waiters (replay fallback applies if later resumed).
                 let cont_len = {
@@ -1507,6 +1557,10 @@ pub struct Run {
     pub provider_session_key: Option<String>,
     pub pending_tool_call_ids: Vec<String>,
     pub continuation_capable: bool,
+    /// Provider semaphore permit held while the run is parked
+    /// (config `parked_holds_permit`). Stored on the `Run` so the permit is
+    /// released when the parked run is resumed or reaped.
+    pub permit: Option<Arc<crate::service::ProviderPermit>>,
 }
 
 impl Run {
@@ -1537,6 +1591,7 @@ impl Run {
             provider_session_key: None,
             pending_tool_call_ids: Vec::new(),
             continuation_capable: false,
+            permit: None,
         }
     }
 
@@ -1587,10 +1642,14 @@ impl Run {
             current_tool: None,
         };
         self.parked_at = None;
+        // Release the parked-holds-permit slot (concurrency optimization:
+        // a resumed run re-acquires through `new_bridge_run`).
+        self.permit = None;
     }
 
     /// Complete the run
     pub fn complete(&mut self, final_messages: Vec<Message>) {
+        self.permit = None;
         self.state = RunState::Completed {
             completed_at: std::time::Instant::now(),
             final_messages,

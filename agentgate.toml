@@ -10,8 +10,8 @@ cors = true
 
 [defaults]
 workdir = "."
-max_concurrency_per_provider = 1
-model_cache_ttl_secs = 300
+max_concurrency_per_provider = 2
+model_cache_ttl_secs = 900
 first_token_timeout_secs = 120
 
 # Provider configurations

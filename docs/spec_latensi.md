@@ -33,7 +33,7 @@ Semua path **bounded** (tidak menggantung): stdout EOF = turn selesai, tunggu pr
 - Log singkat: hanya `line_count` + `line_len` (ANSI-stripped), preview failure ≤120 char.
 - Parser error mapping: `error.message`/`error.status` → `ProviderResponse::Error` → 502 jelas (bukan 200 kosong).
 - View step tool (`tool_view`): `grep→search`, `glob→list`, `create/write→write`, `edit→edit`, `bash/run→run`, selainnya→`dll` (faithful CLI projection). Operasi edit (`create/write/edit/patch/multiedit/delete/mkdir`) diberi ringkasan perubahan `(+N lines)` / `(-N +M)` dan path camelCase OpenCode (`filePath`) dikenali.
-- `/v1/models`: scan `models_cmd` per provider dijalankan **paralel** (batas 10 s/provider) + cache TTL 300 s; cache di-*warm* saat startup (`warm_model_cache`) sehingga request pertama ≈ 0 ms (bukan 2–4 s). Ollama `/api/tags` hanya dipakai bila `ollama_mode != "cli"` dan dibatasi 2 s.
+- `/v1/models`: scan `models_cmd` per provider dijalankan **paralel** (batas 10 s/provider) + cache TTL 900 s (`defaults.model_cache_ttl_secs`, mengurangi latency spike saat cache expire); cache di-*warm* saat startup (`warm_model_cache`) sehingga request pertama ≈ 0 ms (bukan 2–4 s). Ollama `/api/tags` hanya dipakai bila `ollama_mode != "cli"` dan dibatasi 2 s.
 - Namespace `agg/` untuk integrasi 9router: model `provider/model` → `agg/provider/model`; model tanpa namespace → `agg/<provider>/<model>`. Resolusi provider memakai cache model, jadi `agg/9router/...` tetap dirutekan ke provider penemunya (opencode).
 - Chat-only Ollama mode CLI memakai `CliProviderImpl` langsung (`ollama run`), bukan bridge MCP; blok `Thinking... / ...done thinking.` dipisah menjadi `reasoning_content` (stream & non-stream).
 

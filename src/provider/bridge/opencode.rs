@@ -932,15 +932,15 @@ impl BridgeSession for OpenCodeSession {
             return Err(anyhow!("Session is closed"));
         }
 
-        // Send user message to CLI via stdin
-        // For non-persistent mode, send plain text and close stdin to signal EOF
+        // Send user message to CLI via stdin.
+        // Keep stdin open so the CLI can receive tool results on subsequent turns
+        // without requiring a new process spawn (which would trigger a new opencode
+        // session and waste provider quota).
         let mut stdin_guard = self.stdin.lock().await;
         if let Some(stdin) = stdin_guard.as_mut() {
             stdin.write_all(text.as_bytes()).await?;
             stdin.write_all(b"\n").await?;
             stdin.flush().await?;
-            // Explicitly drop stdin to close the pipe and signal EOF
-            drop(stdin_guard.take());
         } else {
             return Err(anyhow!("No stdin available"));
         }

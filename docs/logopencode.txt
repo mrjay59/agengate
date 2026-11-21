@@ -1,0 +1,149 @@
+d-9e91-63ead77b60b9 pid=Some(29172)
+2026-11-21T06:09:17.267444Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=3 line_len=9247 preview={"type":"tool_use","timestamp":1795241357240,"sessionID":"ses_e0346e864ffe3C4a7T5I0hAG52","part":{"partID":"prt_1fcb92d29001OjTqJxfUH9DNAG","sessionID":"ses_e0346e864ffe3C4a7T5I0hAG52","messageID":"ms
+2026-11-21T06:09:17.267640Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=4 line_len=369 preview={"type":"step_finish","timestamp":1795241357241,"sessionID":"ses_e0346e864ffe3C4a7T5I0hAG52","part":{"id":"prt_1fcb92fb9001QoYb3KFrWTEeRe","sessionID":"ses_e0346e864ffe3C4a7T5I0hAG52","messageID":"msg
+2026-11-21T06:09:17.268598Z  INFO agentgate::service: provider stream DONE: model='opencode/tidepool-alpha-free'
+2026-11-21T06:09:17.268747Z  WARN agentgate.bridge.opencode.stdin: No stdin available to write to
+2026-11-21T06:09:17.392026Z  INFO agentgate::provider::bridge::opencode: OpenCode session 3d48bdd4-89ea-4b3f-9dd2-162f65a13c46 closed
+2026-11-21T06:09:17.392526Z  INFO agentgate.bridge.opencode.stdout: opencode stdout reader finished line_count=4
+2026-11-21T06:09:17.392693Z  INFO agentgate.bridge.opencode.stderr: opencode stderr reader finished line_count=0
+2026-11-21T06:09:18.686895Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=5 line_len=7398 preview={"type":"tool_use","timestamp":1795241358684,"sessionID":"ses_e03474988ffecc4umJli4wMyMF","part":{"partID":"prt_1fcb934a9001VYRAT3MpfPCqQd","sessionID":"ses_e03474988ffecc4umJli4wMyMF","messageID":"ms
+2026-11-21T06:09:18.687847Z  INFO agentgate::service: provider stream DONE: model='opencode/tidepool-alpha-free'
+2026-11-21T06:09:18.688002Z  WARN agentgate.bridge.opencode.stdin: No stdin available to write to
+2026-11-21T06:09:18.708034Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=6 line_len=1303 preview={"type":"tool_use","timestamp":1795241358689,"sessionID":"ses_e03474988ffecc4umJli4wMyMF","part":{"partID":"prt_1fcb931af001XNLeSG780k15ai","sessionID":"ses_e03474988ffecc4umJli4wMyMF","messageID":"ms
+2026-11-21T06:09:18.810892Z  INFO agentgate::provider::bridge::opencode: OpenCode session cd28a74d-e0c0-4b2e-9416-d969e3dbee56 closed
+2026-11-21T06:09:18.811266Z  INFO agentgate.bridge.opencode.stdout: opencode stdout reader finished line_count=6
+2026-11-21T06:09:18.811375Z  INFO agentgate.bridge.opencode.stderr: opencode stderr reader finished line_count=0
+2026-11-21T06:09:19.787344Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=1 line_len=249 preview={"type":"step_start","timestamp":1795241359779,"sessionID":"ses_e0346ce9fffeO7S7Nk8YPiHwRz","part":{"id":"prt_1fcb939a3001nc4v791dDj2MM4","sessionID":"ses_e0346ce9fffeO7S7Nk8YPiHwRz","messageID":"msg_
+2026-11-21T06:09:45.603192Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=2 line_len=457 preview={"type":"text","timestamp":1795241385593,"sessionID":"ses_e0346ce9fffeO7S7Nk8YPiHwRz","part":{"id":"prt_1fcb99540002vXQq7BqEPo6in8","sessionID":"ses_e0346ce9fffeO7S7Nk8YPiHwRz","messageID":"msg_1fcb93
+2026-11-21T06:09:45.656825Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=3 line_len=3858 preview={"type":"tool_use","timestamp":1795241385650,"sessionID":"ses_e0346ce9fffeO7S7Nk8YPiHwRz","part":{"partID":"prt_1fcb99c9f001kSdN7G6zSJKuM9","sessionID":"ses_e0346ce9fffeO7S7Nk8YPiHwRz","messageID":"ms
+2026-11-21T06:09:45.657219Z  INFO agentgate::api: event="run.end" run_id=b3217945-7c22-4de5-b756-78d9fc17b2ce tool_calls=true
+2026-11-21T06:09:45.688151Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=4 line_len=2041 preview={"type":"tool_use","timestamp":1795241385657,"sessionID":"ses_e0346ce9fffeO7S7Nk8YPiHwRz","part":{"partID":"prt_1fcb99a99001n3V7EoAB56HgsH","sessionID":"ses_e0346ce9fffeO7S7Nk8YPiHwRz","messageID":"ms
+2026-11-21T06:09:45.688434Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=5 line_len=370 preview={"type":"step_finish","timestamp":1795241385661,"sessionID":"ses_e0346ce9fffeO7S7Nk8YPiHwRz","part":{"id":"prt_1fcb99ebd001FxNZCNx1yXJ4yB","sessionID":"ses_e0346ce9fffeO7S7Nk8YPiHwRz","messageID":"msg
+2026-11-21T06:09:45.688515Z  INFO agentgate::api: Request received: model=agg/opencode/tidepool-alpha-free, stream=Some(true), messages=194
+2026-11-21T06:09:45.688743Z  INFO agentgate::run: event="run.replay.lost_session" unknown_ids=["call_4e80291aaf5d4a5487cf5b54"]
+2026-11-21T06:09:45.688881Z  INFO agentgate::run: event="run.replay" message_count=194
+2026-11-21T06:09:45.689287Z  INFO agentgate::api: event="run.start" run_id=61fe44f7-5e38-4fda-95a4-f50bf4aebd8d provider=opencode model=agg/opencode/tidepool-alpha-free original_model=agg/opencode/tidepool-alpha-free mode=replay tools=91
+2026-11-21T06:09:45.689781Z  INFO agentgate::service: provider stream DONE: model='opencode/tidepool-alpha-free'
+2026-11-21T06:09:45.689946Z  WARN agentgate.bridge.opencode.stdin: No stdin available to write to
+2026-11-21T06:09:45.691079Z  INFO agentgate::service: stream_run_events START: provider='opencode', model='agg/opencode/tidepool-alpha-free'
+2026-11-21T06:09:45.693546Z  WARN agentgate::provider: Truncating injected tools model=opencode/tidepool-alpha-free total=91 max=10
+2026-11-21T06:09:45.693753Z  INFO agentgate::provider: event="bridge.tools_list" session=0baad1b9-3888-4744-8ba4-faffe1330f0b n_tools=91 provider=opencode
+2026-11-21T06:09:45.694716Z  INFO agentgate.bridge.opencode.config: Transport mode selected session_id=0baad1b9-3888-4744-8ba4-faffe1330f0b transport=stdio_shim
+2026-11-21T06:09:45.696306Z  INFO agentgate.bridge.opencode.config: PATH being used for opencode spawn session_id=0baad1b9-3888-4744-8ba4-faffe1330f0b path_len=1477
+2026-11-21T06:09:45.699793Z  INFO agentgate.bridge.opencode.spawn: OpenCode process spawned session_id=0baad1b9-3888-4744-8ba4-faffe1330f0b pid=Some(28060)
+2026-11-21T06:09:45.844246Z  INFO agentgate::provider::bridge::opencode: OpenCode session 581d2430-2e25-464d-9e91-63ead77b60b9 closed
+2026-11-21T06:09:45.844728Z  INFO agentgate.bridge.opencode.stderr: opencode stderr reader finished line_count=0
+2026-11-21T06:09:45.844901Z  INFO agentgate.bridge.opencode.stdout: opencode stdout reader finished line_count=5
+2026-11-21T06:09:48.932722Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=1 line_len=249 preview={"type":"step_start","timestamp":1795241388927,"sessionID":"ses_e03465eedffe9OGWAQoNO3jlgV","part":{"id":"prt_1fcb9ab7f001mBJuHDn14jsHxd","sessionID":"ses_e03465eedffe9OGWAQoNO3jlgV","messageID":"msg_
+2026-11-21T06:10:10.408635Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=2 line_len=633 preview={"type":"text","timestamp":1795241410403,"sessionID":"ses_e03465eedffe9OGWAQoNO3jlgV","part":{"id":"prt_1fcb9f5bc002l9OTPda6MgRKWc","sessionID":"ses_e03465eedffe9OGWAQoNO3jlgV","messageID":"msg_1fcb9a
+2026-11-21T06:10:10.430114Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=3 line_len=784 preview={"type":"tool_use","timestamp":1795241410424,"sessionID":"ses_e03465eedffe9OGWAQoNO3jlgV","part":{"partID":"prt_1fcb9fad8001ca7O5Wxb6Zy5oa","sessionID":"ses_e03465eedffe9OGWAQoNO3jlgV","messageID":"ms
+2026-11-21T06:10:10.430570Z  INFO agentgate::api: event="run.end" run_id=61fe44f7-5e38-4fda-95a4-f50bf4aebd8d tool_calls=true
+2026-11-21T06:10:10.430847Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=4 line_len=40397 preview={"type":"tool_use","timestamp":1795241410426,"sessionID":"ses_e03465eedffe9OGWAQoNO3jlgV","part":{"partID":"prt_1fcb9fd750013e34gwuruhiAed","sessionID":"ses_e03465eedffe9OGWAQoNO3jlgV","messageID":"ms
+2026-11-21T06:10:10.432461Z  INFO agentgate::service: provider stream DONE: model='opencode/tidepool-alpha-free'
+2026-11-21T06:10:10.432616Z  WARN agentgate.bridge.opencode.stdin: No stdin available to write to
+2026-11-21T06:10:10.447038Z  INFO agentgate::api: Request received: model=agg/opencode/tidepool-alpha-free, stream=Some(true), messages=196
+2026-11-21T06:10:10.447974Z  INFO agentgate::run: event="run.replay.lost_session" unknown_ids=["call_460eaedca2f04587ac75e309"]
+2026-11-21T06:10:10.448587Z  INFO agentgate::run: event="run.replay" message_count=196
+2026-11-21T06:10:10.448913Z  INFO agentgate::api: event="run.start" run_id=e7df5b14-36be-4c1d-ab60-626c0c4dc8b2 provider=opencode model=agg/opencode/tidepool-alpha-free original_model=agg/opencode/tidepool-alpha-free mode=replay tools=91
+2026-11-21T06:10:10.450501Z  INFO agentgate::service: stream_run_events START: provider='opencode', model='agg/opencode/tidepool-alpha-free'
+2026-11-21T06:10:10.453091Z  WARN agentgate::provider: Truncating injected tools model=opencode/tidepool-alpha-free total=91 max=10
+2026-11-21T06:10:10.453332Z  INFO agentgate::provider: event="bridge.tools_list" session=eda39be7-6369-4d7f-8800-64804396043c n_tools=91 provider=opencode
+2026-11-21T06:10:10.454373Z  INFO agentgate.bridge.opencode.config: Transport mode selected session_id=eda39be7-6369-4d7f-8800-64804396043c transport=stdio_shim
+2026-11-21T06:10:10.457909Z  INFO agentgate.bridge.opencode.config: PATH being used for opencode spawn session_id=eda39be7-6369-4d7f-8800-64804396043c path_len=1477
+2026-11-21T06:10:10.460851Z  INFO agentgate.bridge.opencode.spawn: OpenCode process spawned session_id=eda39be7-6369-4d7f-8800-64804396043c pid=Some(27520)
+2026-11-21T06:10:10.492163Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=5 line_len=2289 preview={"type":"tool_use","timestamp":1795241410460,"sessionID":"ses_e03465eedffe9OGWAQoNO3jlgV","part":{"partID":"prt_1fcb9fc6c001nZrfDlNnWtOR8k","sessionID":"ses_e03465eedffe9OGWAQoNO3jlgV","messageID":"ms
+2026-11-21T06:10:10.592703Z  INFO agentgate::provider::bridge::opencode: OpenCode session 0baad1b9-3888-4744-8ba4-faffe1330f0b closed
+2026-11-21T06:10:10.593142Z  INFO agentgate.bridge.opencode.stdout: opencode stdout reader finished line_count=5
+2026-11-21T06:10:10.593292Z  INFO agentgate.bridge.opencode.stderr: opencode stderr reader finished line_count=0
+2026-11-21T06:10:13.191677Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=1 line_len=249 preview={"type":"step_start","timestamp":1795241413187,"sessionID":"ses_e0345fe26ffetzsrZ59Ko2KUOi","part":{"id":"prt_1fcba0a43001PkBmODgE9oG0Gg","sessionID":"ses_e0345fe26ffetzsrZ59Ko2KUOi","messageID":"msg_
+2026-11-21T06:10:20.350767Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=2 line_len=497 preview={"type":"text","timestamp":1795241420341,"sessionID":"ses_e0345fe26ffetzsrZ59Ko2KUOi","part":{"id":"prt_1fcba210b001uBCAewy7PYJ6H0","sessionID":"ses_e0345fe26ffetzsrZ59Ko2KUOi","messageID":"msg_1fcba0
+2026-11-21T06:10:20.384075Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=3 line_len=40397 preview={"type":"tool_use","timestamp":1795241420379,"sessionID":"ses_e0345fe26ffetzsrZ59Ko2KUOi","part":{"partID":"prt_1fcba2588001gEwhAgIu9vk6SO","sessionID":"ses_e0345fe26ffetzsrZ59Ko2KUOi","messageID":"ms
+2026-11-21T06:10:20.384655Z  INFO agentgate::api: event="run.end" run_id=e7df5b14-36be-4c1d-ab60-626c0c4dc8b2 tool_calls=true
+2026-11-21T06:10:20.398285Z  INFO agentgate::api: Request received: model=agg/opencode/tidepool-alpha-free, stream=Some(true), messages=198
+2026-11-21T06:10:20.398521Z  INFO agentgate::run: event="run.replay.lost_session" unknown_ids=["call_b8ee7abc95bd4d4fa7933dcd"]
+2026-11-21T06:10:20.398656Z  INFO agentgate::run: event="run.replay" message_count=198
+2026-11-21T06:10:20.398940Z  INFO agentgate::api: event="run.start" run_id=f60d4cdb-e0fa-4d77-b23e-4c761afadcb9 provider=opencode model=agg/opencode/tidepool-alpha-free original_model=agg/opencode/tidepool-alpha-free mode=replay tools=91
+2026-11-21T06:10:20.400234Z  INFO agentgate::service: stream_run_events START: provider='opencode', model='agg/opencode/tidepool-alpha-free'
+2026-11-21T06:10:20.402276Z  WARN agentgate::provider: Truncating injected tools model=opencode/tidepool-alpha-free total=91 max=10
+2026-11-21T06:10:20.402720Z  INFO agentgate::provider: event="bridge.tools_list" session=ebe0fb91-eadb-4f41-b564-4d92020611bb n_tools=91 provider=opencode
+2026-11-21T06:10:20.403846Z  INFO agentgate.bridge.opencode.config: Transport mode selected session_id=ebe0fb91-eadb-4f41-b564-4d92020611bb transport=stdio_shim
+2026-11-21T06:10:20.405784Z  INFO agentgate.bridge.opencode.config: PATH being used for opencode spawn session_id=ebe0fb91-eadb-4f41-b564-4d92020611bb path_len=1477
+2026-11-21T06:10:20.410477Z  INFO agentgate.bridge.opencode.spawn: OpenCode process spawned session_id=ebe0fb91-eadb-4f41-b564-4d92020611bb pid=Some(27956)
+2026-11-21T06:10:20.429833Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=4 line_len=3716 preview={"type":"tool_use","timestamp":1795241420390,"sessionID":"ses_e0345fe26ffetzsrZ59Ko2KUOi","part":{"partID":"prt_1fcba24f7001S2ax07IEY6A7pw","sessionID":"ses_e0345fe26ffetzsrZ59Ko2KUOi","messageID":"ms
+2026-11-21T06:10:20.430074Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=5 line_len=369 preview={"type":"step_finish","timestamp":1795241420393,"sessionID":"ses_e0345fe26ffetzsrZ59Ko2KUOi","part":{"id":"prt_1fcba2669001rmif4HCIZUJeUK","sessionID":"ses_e0345fe26ffetzsrZ59Ko2KUOi","messageID":"msg
+2026-11-21T06:10:20.430998Z  INFO agentgate::service: provider stream DONE: model='opencode/tidepool-alpha-free'
+2026-11-21T06:10:20.431142Z  WARN agentgate.bridge.opencode.stdin: No stdin available to write to
+2026-11-21T06:10:20.594614Z  INFO agentgate::provider::bridge::opencode: OpenCode session eda39be7-6369-4d7f-8800-64804396043c closed
+2026-11-21T06:10:20.595233Z  INFO agentgate.bridge.opencode.stdout: opencode stdout reader finished line_count=5
+2026-11-21T06:10:20.595386Z  INFO agentgate.bridge.opencode.stderr: opencode stderr reader finished line_count=0
+2026-11-21T06:10:23.786763Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=1 line_len=249 preview={"type":"step_start","timestamp":1795241423782,"sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","part":{"id":"prt_1fcba33a6001IfGK6fJNd4YHMZ","sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","messageID":"msg_
+2026-11-21T06:11:14.968288Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=2 line_len=710 preview={"type":"text","timestamp":1795241474953,"sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","part":{"id":"prt_1fcbae7c80028q8mhk04CXnU5U","sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","messageID":"msg_1fcba2
+2026-11-21T06:11:14.982473Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=3 line_len=1229 preview={"type":"tool_use","timestamp":1795241474965,"sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","part":{"partID":"prt_1fcbaf735001Fgu56cbzmHUaBt","sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","messageID":"ms
+2026-11-21T06:11:14.982936Z  INFO agentgate::api: event="run.end" run_id=f60d4cdb-e0fa-4d77-b23e-4c761afadcb9 tool_calls=true
+2026-11-21T06:11:14.995603Z  INFO agentgate::api: Request received: model=agg/opencode/tidepool-alpha-free, stream=Some(true), messages=200
+2026-11-21T06:11:14.995818Z  INFO agentgate::run: event="run.replay.lost_session" unknown_ids=["call_8e42491fcf9c4c7d97a9af30"]
+2026-11-21T06:11:14.995980Z  INFO agentgate::run: event="run.replay" message_count=200
+2026-11-21T06:11:14.996267Z  INFO agentgate::api: event="run.start" run_id=daf8a2d2-d9c8-47d5-aa59-0b06334f0c1a provider=opencode model=agg/opencode/tidepool-alpha-free original_model=agg/opencode/tidepool-alpha-free mode=replay tools=91
+2026-11-21T06:11:14.997589Z  INFO agentgate::service: stream_run_events START: provider='opencode', model='agg/opencode/tidepool-alpha-free'
+2026-11-21T06:11:14.999390Z  WARN agentgate::provider: Truncating injected tools model=opencode/tidepool-alpha-free total=91 max=10
+2026-11-21T06:11:14.999629Z  INFO agentgate::provider: event="bridge.tools_list" session=70297e0e-d9ff-450a-b90b-44bd4b94f3ca n_tools=91 provider=opencode
+2026-11-21T06:11:15.000578Z  INFO agentgate.bridge.opencode.config: Transport mode selected session_id=70297e0e-d9ff-450a-b90b-44bd4b94f3ca transport=stdio_shim
+2026-11-21T06:11:15.002321Z  INFO agentgate.bridge.opencode.config: PATH being used for opencode spawn session_id=70297e0e-d9ff-450a-b90b-44bd4b94f3ca path_len=1477
+2026-11-21T06:11:15.004945Z  INFO agentgate.bridge.opencode.spawn: OpenCode process spawned session_id=70297e0e-d9ff-450a-b90b-44bd4b94f3ca pid=Some(12552)
+2026-11-21T06:11:15.005588Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=4 line_len=2289 preview={"type":"tool_use","timestamp":1795241474986,"sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","part":{"partID":"prt_1fcbaf0f70014vhcwa5y31av3X","sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","messageID":"ms
+2026-11-21T06:11:15.006101Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=5 line_len=13582 preview={"type":"tool_use","timestamp":1795241474995,"sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","part":{"partID":"prt_1fcbaefcd001uQr3J0zQjCgxXF","sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","messageID":"ms
+2026-11-21T06:11:15.006350Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=6 line_len=6938 preview={"type":"tool_use","timestamp":1795241474999,"sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","part":{"partID":"prt_1fcbaf257001KXFOhRq4IakcJ4","sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","messageID":"ms
+2026-11-21T06:11:15.006779Z  INFO agentgate::service: provider stream DONE: model='opencode/tidepool-alpha-free'
+2026-11-21T06:11:15.007053Z  WARN agentgate.bridge.opencode.stdin: No stdin available to write to
+2026-11-21T06:11:15.007940Z  INFO agentgate::provider::bridge::opencode: OpenCode session ebe0fb91-eadb-4f41-b564-4d92020611bb closed
+2026-11-21T06:11:15.039346Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=7 line_len=2615 preview={"type":"tool_use","timestamp":1795241475011,"sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","part":{"partID":"prt_1fcbaf5090013d0Ub4NEED1hY0","sessionID":"ses_e0345d744ffeSG5S9M8WOgGVoq","messageID":"ms
+2026-11-21T06:11:15.039535Z  INFO agentgate.bridge.opencode.stdout: opencode stdout reader finished line_count=7
+2026-11-21T06:11:18.450736Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=1 line_len=249 preview={"type":"step_start","timestamp":1795241478447,"sessionID":"ses_e03450207ffeFpU2Jy8o71xdD6","part":{"id":"prt_1fcbb092f001v44EnIglRthV41","sessionID":"ses_e03450207ffeFpU2Jy8o71xdD6","messageID":"msg_
+2026-11-21T06:11:28.553241Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=2 line_len=1645 preview={"type":"tool_use","timestamp":1795241488550,"sessionID":"ses_e03450207ffeFpU2Jy8o71xdD6","part":{"partID":"prt_1fcbb2fbb001G7gN1Gpnjw4OwB","sessionID":"ses_e03450207ffeFpU2Jy8o71xdD6","messageID":"ms
+2026-11-21T06:11:28.553784Z  INFO agentgate::api: event="run.end" run_id=daf8a2d2-d9c8-47d5-aa59-0b06334f0c1a tool_calls=true
+2026-11-21T06:11:28.561502Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=3 line_len=3716 preview={"type":"tool_use","timestamp":1795241488556,"sessionID":"ses_e03450207ffeFpU2Jy8o71xdD6","part":{"partID":"prt_1fcbb2df8001GU365q97J7Dhh0","sessionID":"ses_e03450207ffeFpU2Jy8o71xdD6","messageID":"ms
+2026-11-21T06:11:28.562703Z  INFO agentgate::service: provider stream DONE: model='opencode/tidepool-alpha-free'
+2026-11-21T06:11:28.563083Z  WARN agentgate.bridge.opencode.stdin: No stdin available to write to
+2026-11-21T06:11:28.563764Z  INFO agentgate::provider::bridge::opencode: OpenCode session 70297e0e-d9ff-450a-b90b-44bd4b94f3ca closed
+2026-11-21T06:11:28.580639Z  INFO agentgate::api: Request received: model=agg/opencode/tidepool-alpha-free, stream=Some(true), messages=202
+2026-11-21T06:11:28.580880Z  INFO agentgate::run: event="run.replay.lost_session" unknown_ids=["call_bc0ea46468c649ca82418b04"]
+2026-11-21T06:11:28.581067Z  INFO agentgate::run: event="run.replay" message_count=202
+2026-11-21T06:11:28.581347Z  INFO agentgate::api: event="run.start" run_id=279124a1-0060-4b4f-beae-f5b2ae30af1d provider=opencode model=agg/opencode/tidepool-alpha-free original_model=agg/opencode/tidepool-alpha-free mode=replay tools=91
+2026-11-21T06:11:28.582765Z  INFO agentgate::service: stream_run_events START: provider='opencode', model='agg/opencode/tidepool-alpha-free'
+2026-11-21T06:11:28.584005Z  WARN agentgate::provider: Truncating injected tools model=opencode/tidepool-alpha-free total=91 max=10
+2026-11-21T06:11:28.584182Z  INFO agentgate::provider: event="bridge.tools_list" session=4cf11184-f53c-46ec-b3ff-6a9ddecfada7 n_tools=91 provider=opencode
+2026-11-21T06:11:28.584916Z  INFO agentgate.bridge.opencode.config: Transport mode selected session_id=4cf11184-f53c-46ec-b3ff-6a9ddecfada7 transport=stdio_shim
+2026-11-21T06:11:28.586454Z  INFO agentgate.bridge.opencode.config: PATH being used for opencode spawn session_id=4cf11184-f53c-46ec-b3ff-6a9ddecfada7 path_len=1477
+2026-11-21T06:11:28.589593Z  INFO agentgate.bridge.opencode.spawn: OpenCode process spawned session_id=4cf11184-f53c-46ec-b3ff-6a9ddecfada7 pid=Some(25412)
+2026-11-21T06:11:28.837258Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=4 line_len=1001 preview={"type":"tool_use","timestamp":1795241488832,"sessionID":"ses_e03450207ffeFpU2Jy8o71xdD6","part":{"partID":"prt_1fcbb2cb6001L97zLylPDh4kpZ","sessionID":"ses_e03450207ffeFpU2Jy8o71xdD6","messageID":"ms
+2026-11-21T06:11:28.837447Z  INFO agentgate.bridge.opencode.stdout: opencode stdout reader finished line_count=4
+2026-11-21T06:11:32.107138Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=1 line_len=249 preview={"type":"step_start","timestamp":1795241492102,"sessionID":"ses_e0344cce9ffe0QhgixWfIfk4Z4","part":{"id":"prt_1fcbb3e860013Z2nsT8z9nzWqh","sessionID":"ses_e0344cce9ffe0QhgixWfIfk4Z4","messageID":"msg_
+2026-11-21T06:12:27.111344Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=2 line_len=801 preview={"type":"text","timestamp":1795241547102,"sessionID":"ses_e0344cce9ffe0QhgixWfIfk4Z4","part":{"id":"prt_1fcbbfe90002rykNFP8ERBCFvS","sessionID":"ses_e0344cce9ffe0QhgixWfIfk4Z4","messageID":"msg_1fcbb3
+2026-11-21T06:12:27.141194Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=3 line_len=40397 preview={"type":"tool_use","timestamp":1795241547134,"sessionID":"ses_e0344cce9ffe0QhgixWfIfk4Z4","part":{"partID":"prt_1fcbc1137001O6970Fyd0zD5f1","sessionID":"ses_e0344cce9ffe0QhgixWfIfk4Z4","messageID":"ms
+2026-11-21T06:12:27.142047Z  INFO agentgate::api: event="run.end" run_id=279124a1-0060-4b4f-beae-f5b2ae30af1d tool_calls=true
+2026-11-21T06:12:27.157031Z  INFO agentgate::api: Request received: model=agg/opencode/tidepool-alpha-free, stream=Some(true), messages=204
+2026-11-21T06:12:27.157233Z  INFO agentgate::run: event="run.replay.lost_session" unknown_ids=["call_d85d5178ff1c40f894decc71"]
+2026-11-21T06:12:27.157385Z  INFO agentgate::run: event="run.replay" message_count=204
+2026-11-21T06:12:27.157610Z  INFO agentgate::api: event="run.start" run_id=01ca2e5d-9e64-4853-83a0-1eee477a8fae provider=opencode model=agg/opencode/tidepool-alpha-free original_model=agg/opencode/tidepool-alpha-free mode=replay tools=91
+2026-11-21T06:12:27.158901Z  INFO agentgate::service: stream_run_events START: provider='opencode', model='agg/opencode/tidepool-alpha-free'
+2026-11-21T06:12:27.160747Z  WARN agentgate::provider: Truncating injected tools model=opencode/tidepool-alpha-free total=91 max=10
+2026-11-21T06:12:27.161017Z  INFO agentgate::provider: event="bridge.tools_list" session=c50baa2a-4985-4444-9ab6-047a4e0d2147 n_tools=91 provider=opencode
+2026-11-21T06:12:27.162097Z  INFO agentgate.bridge.opencode.config: Transport mode selected session_id=c50baa2a-4985-4444-9ab6-047a4e0d2147 transport=stdio_shim
+2026-11-21T06:12:27.179578Z  INFO agentgate.bridge.opencode.config: PATH being used for opencode spawn session_id=c50baa2a-4985-4444-9ab6-047a4e0d2147 path_len=1477
+2026-11-21T06:12:27.184572Z  INFO agentgate.bridge.opencode.spawn: OpenCode process spawned session_id=c50baa2a-4985-4444-9ab6-047a4e0d2147 pid=Some(16540)
+2026-11-21T06:12:27.440579Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=4 line_len=1133 preview={"type":"tool_use","timestamp":1795241547437,"sessionID":"ses_e0344cce9ffe0QhgixWfIfk4Z4","part":{"partID":"prt_1fcbc08fb001lGmxZugQmaCs2B","sessionID":"ses_e0344cce9ffe0QhgixWfIfk4Z4","messageID":"ms
+2026-11-21T06:12:27.442157Z  INFO agentgate::service: provider stream DONE: model='opencode/tidepool-alpha-free'
+2026-11-21T06:12:27.442596Z  WARN agentgate.bridge.opencode.stdin: No stdin available to write to
+2026-11-21T06:12:27.443355Z  INFO agentgate::provider::bridge::opencode: OpenCode session 4cf11184-f53c-46ec-b3ff-6a9ddecfada7 closed
+2026-11-21T06:12:27.518582Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=5 line_len=2197 preview={"type":"tool_use","timestamp":1795241547513,"sessionID":"ses_e0344cce9ffe0QhgixWfIfk4Z4","part":{"partID":"prt_1fcbc1099001y6EsQOCJDwx6G9","sessionID":"ses_e0344cce9ffe0QhgixWfIfk4Z4","messageID":"ms
+2026-11-21T06:12:27.518828Z  INFO agentgate.bridge.opencode.stdout: opencode stdout reader finished line_count=5
+2026-11-21T06:12:31.473402Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=1 line_len=249 preview={"type":"step_start","timestamp":1795241551467,"sessionID":"ses_e0343e7a4ffedthGrmrBgGTeIZ","part":{"id":"prt_1fcbc266b001546gMC1SNB5M3X","sessionID":"ses_e0343e7a4ffedthGrmrBgGTeIZ","messageID":"msg_
+2026-11-21T06:13:25.458408Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=2 line_len=714 preview={"type":"text","timestamp":1795241605449,"sessionID":"ses_e0343e7a4ffedthGrmrBgGTeIZ","part":{"id":"prt_1fcbcdfca002WGP9MoDYmU8Em8","sessionID":"ses_e0343e7a4ffedthGrmrBgGTeIZ","messageID":"msg_1fcbc2
+2026-11-21T06:13:25.679613Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=3 line_len=11856 preview={"type":"tool_use","timestamp":1795241605635,"sessionID":"ses_e0343e7a4ffedthGrmrBgGTeIZ","part":{"partID":"prt_1fcbcf59d0016b4w9jx1tTpILO","sessionID":"ses_e0343e7a4ffedthGrmrBgGTeIZ","messageID":"ms
+2026-11-21T06:13:25.679928Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=4 line_len=4004 preview={"type":"tool_use","timestamp":1795241605639,"sessionID":"ses_e0343e7a4ffedthGrmrBgGTeIZ","part":{"partID":"prt_1fcbcf5a20011cT9eDFiXdBdcI","sessionID":"ses_e0343e7a4ffedthGrmrBgGTeIZ","messageID":"ms
+2026-11-21T06:13:25.680164Z  INFO agentgate::api: event="run.end" run_id=01ca2e5d-9e64-4853-83a0-1eee477a8fae tool_calls=true
+2026-11-21T06:13:25.681503Z  INFO agentgate::service: provider stream DONE: model='opencode/tidepool-alpha-free'
+2026-11-21T06:13:25.681805Z  WARN agentgate.bridge.opencode.stdin: No stdin available to write to
+2026-11-21T06:13:25.682374Z  INFO agentgate.bridge.opencode.stdout: Read line from opencode stdout line_count=5 line_len=116070 preview={"type":"tool_use","timestamp":1795241605647,"sessionID":"ses_e0343e7a4ffedthGrmrBgGTeIZ","part":{"partID":"prt_1fcbcf59000215Cqou5I7tVubV","sessionID":"ses_e0343e7a4ffedthGrmrBgGTeIZ","messageID":"ms
+2026-11-21T06:13:25.682496Z  INFO agentgate::provider::bridge::opencode: OpenCode session c50baa2a-4985-4444-9ab6-047a4e0d2147 closed
+2026-11-21T06:13:25.682711Z  INFO agentgate.bridge.opencode.stdout: opencode stdout reader finished line_count=5

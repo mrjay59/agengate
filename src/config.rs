@@ -136,7 +136,7 @@ impl Config {
     /// Apply environment overrides (highest priority after CLI flags).
     /// Supported: AGENTGATE_BRIDGE_PORT, AGENTGATE_BRIDGE_CALL_TTL_SECS,
     /// AGENTGATE_BRIDGE_PARK_TTL_SECS, AGENTGATE_BRIDGE_MAX_PARKED_RUNS,
-    /// AGENTGATE_BRIDGE_TRANSPORT.
+    /// AGENTGATE_BRIDGE_SESSION_TTL_SECS, AGENTGATE_BRIDGE_TRANSPORT.
     pub fn apply_env_overrides(mut self) -> Self {
         if let Ok(v) = std::env::var("AGENTGATE_BRIDGE_PORT") {
             if let Ok(p) = v.parse::<u16>() {
@@ -151,6 +151,11 @@ impl Config {
         if let Ok(v) = std::env::var("AGENTGATE_BRIDGE_PARK_TTL_SECS") {
             if let Ok(p) = v.parse() {
                 self.bridge.park_ttl_secs = p;
+            }
+        }
+        if let Ok(v) = std::env::var("AGENTGATE_BRIDGE_SESSION_TTL_SECS") {
+            if let Ok(p) = v.parse() {
+                self.bridge.session_ttl_secs = p;
             }
         }
         if let Ok(v) = std::env::var("AGENTGATE_BRIDGE_MAX_PARKED_RUNS") {
@@ -195,6 +200,10 @@ pub struct BridgeConfig {
     pub port: u16,
     #[serde(default = "default_600")]
     pub park_ttl_secs: u64,
+    /// Background sweeper TTL: stale runs/sessions are reaped after this
+    /// idle window (`session_ttl_secs`).
+    #[serde(default = "default_1800")]
+    pub session_ttl_secs: u64,
     #[serde(default = "default_600")]
     pub call_ttl_secs: u64,
     #[serde(default = "default_15")]
@@ -274,10 +283,11 @@ impl Default for BridgeConfig {
             host: default_bridge_host(),
             port: 0,
             park_ttl_secs: default_600(),
+            session_ttl_secs: default_1800(),
             call_ttl_secs: default_600(),
             keepalive_interval_secs: default_15(),
             max_parked_runs: default_2(),
-            max_runs_per_key: default_1(),
+            max_runs_per_key: default_4(),
             max_run_lifetime_secs: default_3600(),
             max_steps: default_64(),
             parked_holds_permit: default_true(),
@@ -295,6 +305,7 @@ impl Default for BridgeConfig {
 fn default_true() -> bool { true }
 fn default_bridge_host() -> String { "127.0.0.1".to_string() }
 fn default_600() -> u64 { 600 }
+fn default_1800() -> u64 { 1800 }
 fn default_15() -> u64 { 15 }
 fn default_8() -> usize { 8 }
 fn default_4() -> usize { 4 }
@@ -331,7 +342,7 @@ pub struct DefaultsConfig {
     pub first_token_timeout_secs: u64,
 }
 
-fn default_first_token_timeout() -> u64 { 30 }
+fn default_first_token_timeout() -> u64 { 120 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReasoningConfig {
@@ -502,11 +513,13 @@ fn default_cwd() -> PathBuf {
 }
 
 fn default_concurrency() -> usize {
-    2
+    5
 }
 
 fn default_cache_ttl() -> u64 {
-    600
+    // Raised from 300s: fewer provider model-list re-probes means fewer
+    // latency spikes when the cache expires (see docs/spec_latensi.md).
+    900
 }
 
 impl Default for Config {
@@ -572,8 +585,8 @@ cors = false
 
 [defaults]
 workdir = "."
-max_concurrency_per_provider = 2
-model_cache_ttl_secs = 300
+max_concurrency_per_provider = 5
+model_cache_ttl_secs = 900
 # Fail fast: max seconds to wait for the first provider event on a streaming
 # request before returning an error chunk (code = first_token_timeout).
 first_token_timeout_secs = 120
@@ -588,6 +601,7 @@ enabled = true
 host = "127.0.0.1"
 port = 0
 park_ttl_secs = 600
+session_ttl_secs = 1800
 call_ttl_secs = 600
 max_parked_runs = 8
 max_runs_per_key = 4
