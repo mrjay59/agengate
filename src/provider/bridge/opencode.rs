@@ -180,11 +180,19 @@ impl OpenCodeSession {
         let mut cmd = Command::new(&binary);
         // profile.args typically ["run","--format","json"]; normalize order.
         let has_run = profile.args.iter().any(|a| a == "run");
+        // `--session` only accepts real OpenCode session IDs (validated as
+        // starting with "ses"). `session_id` here is agentgate's own UUID for
+        // the MCP bridge session, so passing it makes opencode fail instantly
+        // with: Expected a string starting with "ses" at ["sessionID"].
+        // Only forward it when it is genuinely an OpenCode ID; otherwise let
+        // opencode create its own `ses_...` session.
+        let opencode_session_id = session_id.starts_with("ses").then_some(session_id.as_str());
         if has_run {
             cmd.arg("run");
             cmd.arg("--model").arg(&config.model);
-            // Pass session ID to reuse existing opencode session
-            cmd.arg("--session").arg(&session_id);
+            if let Some(sid) = opencode_session_id {
+                cmd.arg("--session").arg(sid);
+            }
             // FIX-PROMPT-01: strip system prompt by default — don't forward via --system
             for a in &profile.args {
                 if a != "run" && a != "--model" {
@@ -193,14 +201,11 @@ impl OpenCodeSession {
                 }
             }
         } else {
-            cmd.arg("run")
-                .arg("--model")
-                .arg(&config.model)
-                .arg("--session")
-                .arg(&session_id)
-                .arg("--format")
-                .arg("json")
-                .args(&profile.args);
+            cmd.arg("run").arg("--model").arg(&config.model);
+            if let Some(sid) = opencode_session_id {
+                cmd.arg("--session").arg(sid);
+            }
+            cmd.arg("--format").arg("json").args(&profile.args);
             // FIX-PROMPT-01: strip system prompt by default — don't forward via --system
         }
 
@@ -937,14 +942,21 @@ impl BridgeSession for OpenCodeSession {
         }
 
         // Send user message to CLI via stdin.
-        // Keep stdin open so the CLI can receive tool results on subsequent turns
-        // without requiring a new process spawn (which would trigger a new opencode
-        // session and waste provider quota).
+        //
+        // `opencode run` reads its prompt from stdin **until EOF**. Keeping the
+        // pipe open leaves the CLI blocked waiting for more input: it emits no
+        // JSONL events and agentgate eventually fails with
+        // "provider_error: bridge turn timed out" (120 s default). Tool results
+        // are delivered through the replay path (a fresh run carrying the full
+        // conversation), not by writing to this pipe, so closing stdin here is
+        // both required and safe. See commit e32a0d1 which dropped the EOF.
         let mut stdin_guard = self.stdin.lock().await;
         if let Some(stdin) = stdin_guard.as_mut() {
             stdin.write_all(text.as_bytes()).await?;
             stdin.write_all(b"\n").await?;
             stdin.flush().await?;
+            // Signal end-of-prompt so opencode actually starts the turn.
+            drop(stdin_guard.take());
         } else {
             return Err(anyhow!("No stdin available"));
         }
