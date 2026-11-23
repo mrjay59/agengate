@@ -1232,6 +1232,17 @@ fn tool_prompt_instructions(tools: &[crate::types::ToolDefinition]) -> String {
 
 /// A CLI provider that uses the bridge architecture (MCP bridge to Device A).
 /// Used for OpenCode, Gemini, and Claude CLI agents per spec_tooling.md.
+/// A cached provider session with its creation time, so keep_alive sessions
+/// can be expired instead of accumulating live CLI child processes forever.
+struct PersistentSession {
+    session: Arc<dyn crate::provider::bridge::BridgeSession + Send + Sync>,
+    created_at: std::time::Instant,
+}
+
+/// Maximum number of persistent provider sessions kept alive. Beyond this,
+/// the oldest sessions are closed to bound memory / child-process count.
+const MAX_PERSISTENT_SESSIONS: usize = 8;
+
 pub struct BridgeCliProvider {
     pub id: String,
     pub bin: Option<String>,
@@ -1251,7 +1262,9 @@ pub struct BridgeCliProvider {
     /// Cache of persistent sessions (keyed by session_id) for keep_alive mode.
     /// When keep_alive is enabled, sessions are stored here instead of being closed.
     /// Using Arc to allow cloning and sharing sessions across requests.
-    persistent_sessions: Arc<RwLock<HashMap<String, Arc<dyn crate::provider::bridge::BridgeSession>>>>,
+    persistent_sessions: Arc<RwLock<HashMap<String, PersistentSession>>>,
+    /// Parsed keep_alive duration (default 600s when config uses a boolean).
+    keep_alive_ttl: std::time::Duration,
     /// Cache of OpenCode CLI conversation session ids (e.g. `ses_...`) captured
     /// from CLI events, keyed by the agentgate session id. Used to resume the
     /// same CLI conversation via `--session` on the next spawn (cross-turn
@@ -1262,7 +1275,66 @@ pub struct BridgeCliProvider {
     max_result_bytes: usize,
 }
 
+/// Parse a keep_alive value into a duration. Accepts "10m", "600s", "600",
+/// or the legacy booleans "true"/"1" (default 10 minutes).
+fn parse_keep_alive_ttl(value: Option<&str>) -> std::time::Duration {
+    let default = std::time::Duration::from_secs(600);
+    let Some(raw) = value else { return default };
+    let v = raw.trim().to_ascii_lowercase();
+    if v.is_empty() || matches!(v.as_str(), "true" | "1" | "yes" | "on") {
+        return default;
+    }
+    let (num, unit) = if let Some(n) = v.strip_suffix('m') {
+        (n, 60u64)
+    } else if let Some(n) = v.strip_suffix('s') {
+        (n, 1u64)
+    } else {
+        (v.as_str(), 1u64)
+    };
+    num.trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|n| *n > 0)
+        .map(|n| std::time::Duration::from_secs(n.saturating_mul(unit)))
+        .unwrap_or(default)
+}
+
 impl BridgeCliProvider {
+    /// Cache a persistent session, first evicting sessions older than
+    /// `keep_alive_ttl` and then the oldest ones beyond `MAX_PERSISTENT_SESSIONS`.
+    /// This bounds live CLI child processes / memory under sustained load.
+    async fn store_persistent_session(
+        &self,
+        id: String,
+        session: Arc<dyn crate::provider::bridge::BridgeSession + Send + Sync>,
+    ) {
+        let mut sessions = self.persistent_sessions.write().await;
+        let now = std::time::Instant::now();
+        let expired: Vec<String> = sessions
+            .iter()
+            .filter(|(_, p)| now.duration_since(p.created_at) >= self.keep_alive_ttl)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in expired {
+            if let Some(old) = sessions.remove(&key) {
+                tracing::info!(target: "bridge.session", session = %key, "evicting expired keep_alive session");
+                let _ = old.session.close().await;
+            }
+        }
+        while sessions.len() >= MAX_PERSISTENT_SESSIONS {
+            let oldest = sessions
+                .iter()
+                .min_by_key(|(_, p)| p.created_at)
+                .map(|(k, _)| k.clone());
+            let Some(key) = oldest else { break };
+            if let Some(old) = sessions.remove(&key) {
+                tracing::info!(target: "bridge.session", session = %key, "evicting LRU keep_alive session (cap reached)");
+                let _ = old.session.close().await;
+            }
+        }
+        sessions.insert(id, PersistentSession { session, created_at: now });
+    }
+
     pub fn new(
         config: crate::config::ProviderConfig,
         bridge_config: Option<&crate::config::BridgeConfig>,
@@ -1300,6 +1372,7 @@ impl BridgeCliProvider {
             factory,
             bridge,
             keep_alive: config.keep_alive.clone(),
+            keep_alive_ttl: parse_keep_alive_ttl(config.keep_alive.as_deref()),
             prompt_tools_fallback: config.prompt_tools_fallback,
             transport: config.transport.clone(),
             isolation_config,
@@ -1531,7 +1604,7 @@ impl CliProvider for BridgeCliProvider {
         let keep_alive = self.keep_alive.is_some();
         let existing_session = if keep_alive {
             let sessions = self.persistent_sessions.read().await;
-            sessions.get(&session_id).map(|s| s.clone())
+            sessions.get(&session_id).map(|p| p.session.clone())
         } else {
             None
         };
@@ -1718,14 +1791,12 @@ impl CliProvider for BridgeCliProvider {
         if continuation_registered {
             // Keep session + MCP registration alive for live continuation; do not close/release.
             if should_store {
-                let mut sessions = self.persistent_sessions.write().await;
-                sessions.insert(session_id.clone(), session.clone());
+                self.store_persistent_session(session_id.clone(), session.clone()).await;
             }
         } else if keep_alive {
             // Store the session for reuse, don't close it
             if should_store {
-                let mut sessions = self.persistent_sessions.write().await;
-                sessions.insert(session_id.clone(), session.clone());
+                self.store_persistent_session(session_id.clone(), session.clone()).await;
             }
             // Don't release MCP session for persistent sessions
         } else {
@@ -1771,7 +1842,7 @@ impl CliProvider for BridgeCliProvider {
         let keep_alive = self.keep_alive.is_some();
         let existing_session = if keep_alive {
             let sessions = self.persistent_sessions.read().await;
-            sessions.get(&session_id).map(|s| s.clone())
+            sessions.get(&session_id).map(|p| p.session.clone())
         } else {
             None
         };
@@ -1955,6 +2026,7 @@ impl CliProvider for BridgeCliProvider {
         let session_id_for_cleanup = session_id.clone();
         let mcp_session_id_for_cleanup = mcp_session_id.clone();
         let persistent_sessions_clone = self.persistent_sessions.clone();
+        let keep_alive_ttl_for_cleanup = self.keep_alive_ttl;
         let bridge_turn_timeout_secs = bridge_turn_timeout();
 
         // Collect streaming output
@@ -2196,8 +2268,34 @@ impl CliProvider for BridgeCliProvider {
             if !keep_alive_flag {
                 let _ = session_for_completion.close().await;
             } else if should_store_flag {
+                // Bound the persistent-session cache the same way as the
+                // non-stream path (TTL + cap) so CLI child processes don't pile up.
                 let mut sessions = persistent_sessions_clone.write().await;
-                sessions.insert(session_id_for_cleanup, session_for_completion);
+                let now = std::time::Instant::now();
+                let expired: Vec<String> = sessions
+                    .iter()
+                    .filter(|(_, p)| now.duration_since(p.created_at) >= keep_alive_ttl_for_cleanup)
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for key in expired {
+                    if let Some(old) = sessions.remove(&key) {
+                        let _ = old.session.close().await;
+                    }
+                }
+                while sessions.len() >= MAX_PERSISTENT_SESSIONS {
+                    let oldest = sessions
+                        .iter()
+                        .min_by_key(|(_, p)| p.created_at)
+                        .map(|(k, _)| k.clone());
+                    let Some(key) = oldest else { break };
+                    if let Some(old) = sessions.remove(&key) {
+                        let _ = old.session.close().await;
+                    }
+                }
+                sessions.insert(
+                    session_id_for_cleanup,
+                    PersistentSession { session: session_for_completion, created_at: now },
+                );
             }
             let _ = mcp_session_id_for_cleanup;
         });

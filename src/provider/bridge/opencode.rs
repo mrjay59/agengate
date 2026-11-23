@@ -245,6 +245,14 @@ impl OpenCodeSession {
         // (e.g. `opencode run --model ... --format json`). Placing --model/--format
         // before `run` triggers "Unrecognized flag" on the root command.
         let mut cmd = Command::new(&binary);
+        // FIX-RAM-LEAK: put the CLI in its own process group so `close()` can
+        // terminate the entire tree on Linux (child.kill() only kills the
+        // direct child and leaves Node.js grandchildren behind).
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         // profile.args typically ["run","--format","json"]; normalize order.
         let has_run = profile.args.iter().any(|a| a == "run");
         // `--session` only accepts real OpenCode session IDs (validated as
@@ -1112,6 +1120,14 @@ impl BridgeSession for OpenCodeSession {
             if let Some(pid) = pid {
                 let _ = tokio::process::Command::new("taskkill")
                     .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .output()
+                    .await;
+            }
+            // Kill the whole process group (spawned with process_group(0)).
+            #[cfg(unix)]
+            if let Some(pid) = pid {
+                let _ = tokio::process::Command::new("kill")
+                    .args(["-TERM", &format!("-{}", pid)])
                     .output()
                     .await;
             }
