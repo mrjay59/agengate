@@ -323,7 +323,7 @@ impl OpenCodeSession {
                 model = %config.model,
                 "Free model detected — injecting MINIMAL opencode.json (MCP only, no tools/permission blocks)"
             );
-            Self::build_minimal_mcp_config(&mcp_token, mcp_port, &session_id, &transport, config.host.as_str())
+            Self::build_minimal_mcp_config(&mcp_token, mcp_port, &session_id, &transport, config.host.as_str(), &config.tools)
         } else {
             Self::build_opencode_config_json(
                 &mcp_token,
@@ -822,10 +822,15 @@ impl OpenCodeSession {
         session_id: &str,
         transport: &str,
         bridge_host: &str,
+        tools: &[crate::bridge::ToolSchema],
     ) -> String {
         let agentgate_bin = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| "agentgate".to_string());
+        // FIX-MCP-TOOLS: the minimal config must ALSO pass the client tool
+        // schemas to the shim. Without AGENTGATE_SHIM_TOOLS the shim starts but
+        // tools/list is empty, so the model never sees any bridged tool.
+        let tools_json = serde_json::to_string(tools).unwrap_or_default();
 
         let (mcp_config, mcp_servers_config) = if transport == "stdio_shim" {
             let mcp = serde_json::json!({
@@ -843,6 +848,7 @@ impl OpenCodeSession {
                         "--port".to_string(),
                         port.to_string()
                     ],
+                    "environment": { "AGENTGATE_SHIM_TOOLS": tools_json.clone() },
                     "enabled": true
                 }
             });
@@ -850,6 +856,7 @@ impl OpenCodeSession {
                 "agentgate": {
                     "command": agentgate_bin,
                     "args": ["mcp-shim", "--session", session_id, "--token", token, "--host", bridge_host, "--port", &port.to_string()],
+                    "env": { "AGENTGATE_SHIM_TOOLS": tools_json }
                 }
             });
             (mcp, mcp_servers)
@@ -876,15 +883,19 @@ impl OpenCodeSession {
         // FIX-TOOL-EXEC: free models previously received NO tool block at all,
         // so opencode's built-in `execute`/`bash` stayed active and competed with
         // the bridged MCP tool. A minimal `tools` block (no permission block —
-        // permission denials are what trigger provider.free-limit) disables only
-        // only the conflicting built-in `execute` while leaving MCP tools intact
-        // (do not disable bash/write/edit — the bridged MCP tools share those names).
+        // permission denials are what trigger provider.free-limit) disables the
+        // conflicting built-ins (`bash`, `execute`, `shell`) so the model is
+        // forced to use the bridged MCP tools (registered under their original
+        // client names, e.g. `execCommand`), which no longer collide with the
+        // built-in `bash`.
         let config = serde_json::json!({
             "$schema": "https://opencode.ai/config.json",
             "mcp": mcp_config,
             "mcpServers": mcp_servers_config,
             "tools": {
-                "execute": false
+                "execute": false,
+                "bash": false,
+                "shell": false
             }
         });
 

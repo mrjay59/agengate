@@ -108,9 +108,101 @@ pub async fn run_stdio_shim(config: ShimConfig) -> Result<()> {
     // Track initialization state
     let mut initialized = false;
 
+    // FIX-SHIM-LEAK: opencode in `serve --service` mode never closes the MCP
+    // subprocess stdin, so relying on EOF alone leaks one `agentgate mcp-shim`
+    // process per session. Bound the lifetime with an idle timeout. The default
+    // must exceed bridge `call_ttl_secs` (120s) so a held tools/call can still
+    // be resolved by the client.
+    let idle_secs = std::env::var("AGENTGATE_SHIM_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(300);
+    let idle_timeout = std::time::Duration::from_secs(idle_secs);
+
+    // Hard ceiling independent of message activity. opencode's MCP client can
+    // keep sending periodic messages (ping/tools-list), which resets the idle
+    // timer forever. A shim only serves one turn, so a finite lifetime is safe.
+    let max_lifetime_secs = std::env::var("AGENTGATE_SHIM_MAX_LIFETIME_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(300);
+    info!(
+        "Stdio shim lifetime limits: idle={}s max={}s for session {}",
+        idle_secs, max_lifetime_secs, config.session_id
+    );
+
+    // Hard exit timer: the main loop can be blocked inside a held tools/call
+    // for `call_ttl_secs` (120s), so a cooperative watch flag is not enough.
+    // This process-level timer guarantees the shim never outlives its turn.
+    {
+        let session_id = config.session_id.clone();
+        let secs = max_lifetime_secs;
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+            info!("Stdio shim hard lifetime reached, exiting {}", session_id);
+            std::process::exit(0);
+        });
+    }
+
+    // Watchdog: exit when the owning bridge session is gone (the normal case
+    // after a turn ends) or when the hard lifetime is reached.
+    let (exit_tx, mut exit_rx) = tokio::sync::watch::channel(false);
+    {
+        let session_id = config.session_id.clone();
+        let token = config.session_token.clone();
+        let host = config.bridge_host.clone();
+        let port = config.bridge_port;
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            let url = format!("http://{}:{}/_bridge/preflight/{}", host, port, session_id);
+            let client = reqwest::Client::new();
+            let mut missing = 0u8;
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(15));
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                if started.elapsed() >= std::time::Duration::from_secs(max_lifetime_secs) {
+                    info!("Stdio shim watchdog: max lifetime reached for session {}", session_id);
+                    let _ = exit_tx.send(true);
+                    return;
+                }
+                match client.get(&url).bearer_auth(&token).send().await {
+                    Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
+                        missing += 1;
+                        if missing >= 2 {
+                            info!("Stdio shim watchdog: session gone, exiting {}", session_id);
+                            let _ = exit_tx.send(true);
+                            return;
+                        }
+                    }
+                    Ok(_) => missing = 0,
+                    Err(_) => {} // transient; keep trying
+                }
+            }
+        });
+    }
+
     loop {
         line.clear();
-        let bytes_read = reader.read_line(&mut line).await?;
+        let bytes_read = tokio::select! {
+            n = reader.read_line(&mut line) => n?,
+            _ = tokio::time::sleep(idle_timeout) => {
+                info!(
+                    "Stdio shim exiting (idle {}s) for session {}",
+                    idle_secs, config.session_id
+                );
+                break;
+            }
+            _ = exit_rx.changed() => {
+                if *exit_rx.borrow() {
+                    info!("Stdio shim exiting (watchdog) for session {}", config.session_id);
+                    break;
+                }
+                continue;
+            }
+        };
         if bytes_read == 0 {
             // EOF - client disconnected
             info!("Stdio shim: client disconnected (EOF)");

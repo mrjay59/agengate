@@ -100,5 +100,6 @@ no_tools_policy = "chat_only"
 on_client_tools = "bridge"
 default_workspace = "default"
 # Model alias mapping handled in code defaults (service.rs resolve_model_alias)
-# For custom mappings, use inline table format:
-# model_aliases = { gpt4o = "agg/opencode/beam-free", ... }
+# FIX-TEST-MODEL: 9router is an upstream aggregator, not a local provider, so
+# map its model names to a locally registered free model for testing.
+model_aliases = { "9router/free_forever" = "agg/opencode/beam-free", "agg/9router/free_forever" = "agg/opencode/beam-free", "free_forever" = "agg/opencode/beam-free" }

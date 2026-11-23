@@ -651,11 +651,11 @@ fn align_tool_arguments(
 /// by the CLI/bridge. Mirror of the mapping applied in
 /// `Provider::tool_schemas_from_request`. Keep in sync.
 pub fn canonical_tool_name(name: &str) -> String {
-    match name.trim().to_lowercase().as_str() {
-        "shell" | "sh" | "terminal" | "execute" | "execcommand" | "exec_command" => "bash".to_string(),
-        "cat" => "read".to_string(),
-        other => other.to_string(),
-    }
+    // Identity: client-registered tool names are bridged verbatim via MCP, so
+    // they must NOT be remapped to opencode built-in names (bash/read/...).
+    // Remapping caused collisions (e.g. execCommand -> bash) that hid the
+    // bridged tool from the model. Keep the client name as-is.
+    name.trim().to_string()
 }
 
 pub fn unalias_tool_calls(
@@ -973,12 +973,14 @@ mod unalias_tests {
     }
 
     #[test]
-    fn reverse_maps_execute_to_bash() {
-        // Client registered "execute" (AionUI); CLI emits canonical "bash".
-        let tools = vec![tool("execute"), tool("read")];
-        let mut calls = vec![call("bash")];
+    fn keeps_client_tool_name_unchanged() {
+        // Bridged MCP tools are registered under their original client names
+        // (e.g. `execCommand`), so the emitted name must stay as-is instead of
+        // being remapped to the opencode built-in `bash`.
+        let tools = vec![tool("execCommand"), tool("read")];
+        let mut calls = vec![call("execCommand")];
         unalias_tool_calls(&mut calls, &tools);
-        assert_eq!(calls[0].function.name, "execute");
+        assert_eq!(calls[0].function.name, "execCommand");
     }
 
     #[test]

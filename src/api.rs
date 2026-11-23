@@ -564,8 +564,8 @@ async fn chat_completions(
 
         Ok(res)
     } else {
-        let response = match registry.chat_completion(request).await {
-            Ok(resp) => {
+        let response = match tokio::time::timeout(registry.request_timeout, registry.chat_completion(request)).await {
+            Ok(Ok(resp)) => {
                 if let Some(mode_label) = resume_mode {
                     crate::metrics::init_metrics().record_resume(if mode_label == "replay" {
                         "replay"
@@ -575,12 +575,16 @@ async fn chat_completions(
                 }
                 resp
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 if resume_mode.is_some() && e.code() == "tool_already_resolved" {
                     crate::metrics::init_metrics().record_resume("conflict");
                 }
                 crate::metrics::init_metrics().mark_run_ended();
                 return Err(e);
+            }
+            Err(_) => {
+                crate::metrics::init_metrics().mark_run_ended();
+                return Err(AppError::Timeout);
             }
         };
         let value = apply_non_stream_format(response, format, &reasoning_cfg);
@@ -983,7 +987,7 @@ async fn bridge_mcp(
 
             // Preflight active probe (L3): validate against isolation config allowed_builtins
             let isolation = registry.bridge_config.isolation.clone();
-            if let Err(e) = registry.bridge.preflight_active_probe(&session.tools, &isolation) {
+            if let Err(e) = registry.bridge.preflight_client_tools(&session.tools, &isolation) {
                 info!(event = "guard.violation", session = %session.session_id, observed_tool = %name, normalized = %normalized_name, reason = %e);
                 crate::metrics::init_metrics().record_guard_violation();
                 return (
@@ -1001,10 +1005,33 @@ async fn bridge_mcp(
             let mcp_id = id.as_ref().map(|v| v.to_string()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             info!(event = "bridge.call_held", mcp_req_id = %mcp_id, session = %session.session_id, tool = %normalized_name);
             let hold_start = Instant::now();
-            // P0-AUDIT seq2: Pass run_id/tool_call_id when available (None for MCP hold path).
-            let run_id: Option<String> = None;
-            let tool_call_id: Option<String> = None;
-            match registry.bridge.hold_tool_call(mcp_id.clone(), session.session_id.clone(), run_id, tool_call_id, normalized_name.clone(), registry.bridge_config.call_ttl_secs).await {
+            // FIX-TOOL-ROUNDTRIP: surface the held MCP tool call to the client
+            // stream. Previously this path only held the call and waited for
+            // /_bridge/resolve, but the client never received a tool_calls
+            // chunk (and had no way to learn the mcp_id), so the turn hung.
+            let tool_call_id = crate::openai::TOOL_CALL_ID_GENERATOR.lock().unwrap().generate();
+            registry.bridge.emit_tool_call_event(
+                &session.session_id,
+                serde_json::json!({
+                    "type": "tool_calls",
+                    "calls": [{
+                        "id": tool_call_id.clone(),
+                        "type": "function",
+                        "function": {
+                            "name": normalized_name.clone(),
+                            "arguments": _args.to_string()
+                        }
+                    }]
+                }),
+            );
+            match registry.bridge.hold_tool_call(
+                mcp_id.clone(),
+                session.session_id.clone(),
+                None,
+                Some(tool_call_id),
+                normalized_name.clone(),
+                registry.bridge_config.call_ttl_secs,
+            ).await {
                 Ok(res) => {
                     crate::metrics::init_metrics().observe_tool_wait(hold_start.elapsed().as_millis() as u64);
                     serde_json::json!({

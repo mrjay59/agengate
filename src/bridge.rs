@@ -186,6 +186,10 @@ pub struct BridgeServer {
     session_generation: Arc<RwLock<HashMap<String, u64>>>,
     /// PR-S5: tracked orphan PIDs for startup sweep.
     orphan_pids: Arc<Mutex<Vec<u32>>>,
+    /// FIX-TOOL-ROUNDTRIP: broadcast channel carrying held MCP tool calls to
+    /// provider event streams. Without this, a `tools/call` held by the bridge
+    /// blocks the CLI forever and the client never sees a `tool_calls` chunk.
+    tool_events: tokio::sync::broadcast::Sender<(String, serde_json::Value)>,
 }
 
 /// A held `tools/call` bound to the session that issued it.
@@ -288,6 +292,7 @@ impl BridgeServer {
 
     pub fn new(config: BridgeConfig) -> Self {
         let batcher = Arc::new(Mutex::new(None));
+        let (tool_events, _) = tokio::sync::broadcast::channel(128);
 
         Self {
             config,
@@ -307,7 +312,20 @@ impl BridgeServer {
             cli_gen: Arc::new(Mutex::new(0)),
             session_generation: Arc::new(RwLock::new(HashMap::new())),
             orphan_pids: Arc::new(Mutex::new(Vec::new())),
+            tool_events,
         }
+    }
+
+    /// Subscribe to tool-call events emitted by held MCP `tools/call` requests.
+    pub fn subscribe_tool_events(&self) -> tokio::sync::broadcast::Receiver<(String, serde_json::Value)> {
+        self.tool_events.subscribe()
+    }
+
+    /// Publish a held tool call so the provider stream can forward it to the
+    /// client as an OpenAI `tool_calls` chunk. The value must be in the shape
+    /// the ReasoningParser understands (`{"type":"tool_calls","calls":[...]}`).
+    pub fn emit_tool_call_event(&self, session_id: &str, event: serde_json::Value) {
+        let _ = self.tool_events.send((session_id.to_string(), event));
     }
 
     /// Register a provider session (for cancellation/cleanup; P0-3).
@@ -1110,6 +1128,37 @@ impl BridgeServer {
         }
 
         info!(event = "bridge.preflight.pass", tool_count = session_tools.len());
+        Ok(())
+    }
+
+    /// Preflight for CLIENT-registered tools bridged via MCP.
+    ///
+    /// Unlike `preflight_active_probe`, this does not reject a tool merely
+    /// because its name matches a CLI built-in (e.g. AionUI registers
+    /// `Read`/`Write`/`ExecCommand` in TitleCase). Those are bridged tools,
+    /// not built-ins; real built-ins are disabled in selective mode by
+    /// `build_selective_disable_config` in opencode.json. Explicit
+    /// `disabled_builtins` and strict mode remain fail-closed.
+    pub fn preflight_client_tools(&self, session_tools: &[crate::bridge::ToolSchema], isolation: &IsolationConfig) -> Result<(), String> {
+        let all_builtins = [
+            "read", "write", "bash", "execute", "glob", "list", "patch", "edit",
+            "grep", "webfetch", "todowrite", "todoread", "task",
+            "opencode_list_mcp_resources", "list_mcp_resources"
+        ];
+        let mut disabled = std::collections::HashSet::new();
+        for tool in &isolation.disabled_builtins {
+            disabled.insert(tool.to_lowercase());
+        }
+        for tool in session_tools {
+            let name_lower = tool.name.to_lowercase();
+            let bare_name = name_lower.split(':').last().unwrap_or(&name_lower);
+            if disabled.contains(bare_name) {
+                return Err(format!("tool_isolation_unavailable: tool {} is explicitly disabled", tool.name));
+            }
+            if isolation.mode.as_str() == "strict" && all_builtins.contains(&bare_name) {
+                return Err(format!("tool_isolation_unavailable: tool {} conflicts with strict isolation policy", tool.name));
+            }
+        }
         Ok(())
     }
 

@@ -1558,7 +1558,11 @@ impl CliProvider for BridgeCliProvider {
             } else {
                 tool_schemas.clone()
             };
-            let (mcp_session_id, session_token) = match self.register_session(tool_schemas).await {
+            // FIX-SESSION-TOOLS: register the same truncated list that is handed
+            // to the shim/config; registering the full 91-tool list made
+            // preflight see client tools like `Read` and (before the name fix)
+            // reject every tool call.
+            let (mcp_session_id, session_token) = match self.register_session(tool_schemas_for_bridge.clone()).await {
                 Some((id, token)) => (Some(id), Some(token)),
                 None => (None, None),
             };
@@ -1794,7 +1798,11 @@ impl CliProvider for BridgeCliProvider {
             } else {
                 tool_schemas.clone()
             };
-            let (mcp_session_id, session_token) = match self.register_session(tool_schemas).await {
+            // FIX-SESSION-TOOLS: register the same truncated list that is handed
+            // to the shim/config; registering the full 91-tool list made
+            // preflight see client tools like `Read` and (before the name fix)
+            // reject every tool call.
+            let (mcp_session_id, session_token) = match self.register_session(tool_schemas_for_bridge.clone()).await {
                 Some((id, token)) => (Some(id), Some(token)),
                 None => (None, None),
             };
@@ -1902,6 +1910,43 @@ impl CliProvider for BridgeCliProvider {
             tx.send(serde_json::json!({"type": "warning", "message": "no event receiver available"})).ok();
             rx
         });
+
+        // FIX-TOOL-ROUNDTRIP: merge held MCP tool calls into the CLI event
+        // stream. The bridge `tools/call` handler broadcasts tool_calls events
+        // for this session; without this merge the client never sees them and
+        // cannot answer with a tool result.
+        if let Some(ref bridge) = self.bridge {
+            let session_key = mcp_session_id.clone().unwrap_or_default();
+            let mut tool_rx = bridge.subscribe_tool_events();
+            let cli_rx = event_rx;
+            let (merged_tx, merged_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(async move {
+                let mut cli_rx = cli_rx;
+                loop {
+                    tokio::select! {
+                        ev = cli_rx.recv() => match ev {
+                            Some(value) => { if merged_tx.send(value).is_err() { break; } }
+                            None => break,
+                        },
+                        ev = tool_rx.recv() => match ev {
+                            Ok((sid, value)) if sid == session_key => {
+                                if merged_tx.send(value).is_err() { break; }
+                            }
+                            Ok(_) | Err(_) => {}
+                        },
+                    }
+                }
+            });
+            event_rx = merged_rx;
+        }
+
+        // FIX-SESSION: capture the CLI conversation session id (e.g. `ses_...`)
+        // reported by the adapter and remember it for cross-turn resume via
+        // `--session`. Only for keep_alive flows (fresh sessions are transient).
+        let captured_cli_sid_stream = session.cli_session_id();
+        if keep_alive {
+            self.remember_opencode_session(&session_id, captured_cli_sid_stream.clone()).await;
+        }
 
         // Spawn a task to wait for completion in background (for session cleanup)
         let session_for_completion = session.clone();

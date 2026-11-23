@@ -115,11 +115,18 @@ pub struct ServiceRegistry {
     pub max_concurrency_per_provider: usize,
     /// Tool injection limits (QUOTA-01)
     pub limits: LimitsConfig,
+    /// Deadline for the whole non-streaming request (`[server] request_timeout_secs`).
+    /// Applied in the HTTP handler only for non-stream requests so SSE streams
+    /// and valid tool loops are never cut (B7).
+    pub request_timeout: Duration,
     /// Deadline for the first provider event on a streaming request
     /// (`[defaults] first_token_timeout_secs`, default 120 s).
     pub first_token_timeout: Duration,
     /// Model cache: provider_id -> (models, cached_at)
     model_cache: RwLock<HashMap<String, (Vec<String>, Instant)>>,
+    /// Negative cache: model_id -> cached_at (for models not found, to avoid repeated scans)
+    /// FIX-MODEL-CACHE: prevents unknown models from triggering full CLI scan on every request.
+    model_negative_cache: RwLock<HashMap<String, Instant>>,
     /// Cache TTL for model scans (default 300s).
     model_cache_ttl: Duration,
 }
@@ -154,7 +161,9 @@ impl ServiceRegistry {
             } else {
                 defaults.first_token_timeout_secs
             }),
+            request_timeout: Duration::from_secs(600),
             model_cache: RwLock::new(HashMap::new()),
+            model_negative_cache: RwLock::new(HashMap::new()),
             model_cache_ttl: Duration::from_secs(if defaults.model_cache_ttl_secs == 0 {
                 900
             } else {
@@ -178,6 +187,14 @@ impl ServiceRegistry {
     /// Replace the global reasoning configuration.
     pub fn with_reasoning(mut self, reasoning: ReasoningConfig) -> Self {
         self.reasoning = reasoning;
+        self
+    }
+
+    /// Wire the server-level request timeout (applied to non-stream requests only).
+    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        if timeout.as_secs() > 0 {
+            self.request_timeout = timeout;
+        }
         self
     }
 
@@ -373,10 +390,19 @@ impl ServiceRegistry {
                 if let Some((models, cached_at)) = cache.get(id) {
                     if now.duration_since(*cached_at) < cache_ttl {
                         cached_models.insert(id.clone(), models.clone());
+                        // FIX-MODEL-CACHE-02: record cache hit so /_metrics
+                        // shows the hit/miss ratio for observability.
+                        crate::metrics::init_metrics().record_model_cache_hit(id);
                         continue;
                     }
                     // Expired but known: keep as fallback if scan fails.
                     stale_models.insert(id.clone(), models.clone());
+                    // Cache miss (expired) — record it so we can observe
+                    // how often TTL expiry forces re-scans.
+                    crate::metrics::init_metrics().record_model_cache_miss(id);
+                } else {
+                    // Never seen this provider before — a miss.
+                    crate::metrics::init_metrics().record_model_cache_miss(id);
                 }
                 providers_to_scan.push((id.clone(), provider.clone()));
             }
@@ -385,6 +411,17 @@ impl ServiceRegistry {
         // Scan missing/expired providers in parallel. Each scan is bounded so a
         // hung CLI (`opencode models`, `gemini list`, …) cannot stall the whole
         // request past the client's gateway timeout.
+        // FIX-MODEL-CACHE-03: skip scanning providers whose previous scan already
+        // failed recently (negative cache). This prevents every request for an
+        // unknown/missing model from paying another 5 s CLI scan.
+        let neg_cache = self.model_negative_cache.read().await;
+        providers_to_scan.retain(|(id, _)| {
+            match neg_cache.get(id) {
+                Some(&cached_at) => now.duration_since(cached_at) < cache_ttl,
+                None => true,
+            }
+        });
+        drop(neg_cache);
         let scan_timeout = Duration::from_secs(5);
         let scan_futures: Vec<_> = providers_to_scan.into_iter().map(|(id, provider)| {
             let id_clone = id.clone();
@@ -410,10 +447,16 @@ impl ServiceRegistry {
         for result in scan_results {
             match result {
                 Ok((id, Ok(models), elapsed)) => {
+                    // FIX-MODEL-CACHE-02: clear negative cache on successful scan.
+                    self.model_negative_cache.write().await.remove(&id);
                     cache.insert(id.clone(), (models.clone(), Instant::now()));
                     cached_models.insert(id, models);
                 }
                 Ok((id, Err(e), elapsed)) => {
+                    // FIX-MODEL-CACHE-03: record in negative cache so the next
+                    // request does not re-scan until TTL expires (prevents
+                    // repeated 5 s CLI scans for unavailable providers).
+                    self.model_negative_cache.write().await.insert(id.clone(), now);
                     // On scan failure, keep stale cached models as fallback.
                     // This prevents transient CLI failures from evicting
                     // dynamically-discovered models (e.g. 9router/* via
@@ -564,6 +607,34 @@ impl ServiceRegistry {
                 tracing::warn!(error = %e, "model cache warm-up failed");
             }
         }
+    }
+
+    /// Pre-populate the model cache from static config models (agentgate.toml
+    /// [[provider]] models = [...]). This eliminates the initial CLI scan for
+    /// known models, reducing first-request latency from ~seconds to ~zero.
+    /// Unknown models remain subject to per-TTL scanning (handled by list_models).
+    ///
+    /// FIX-MODEL-CACHE-01: reduces hot-path scan time from 5 s to zero for
+    /// pre-registered models. Unknown models still fall back to scanning but
+    /// results are cached positive/negative for model_cache_ttl_secs.
+    pub async fn pre_populate_cache(&self, providers: &[crate::config::ProviderConfig]) {
+        let mut cache = self.model_cache.write().await;
+        for pc in providers {
+            if !pc.enabled {
+                continue;
+            }
+            let provider_id = &pc.id;
+            // Seed cache with configured models so the first request is a hit.
+            let now = Instant::now();
+            cache.insert(provider_id.clone(), (pc.models.clone(), now));
+            tracing::debug!(
+                provider = %provider_id,
+                count = pc.models.len(),
+                "pre-populated model cache from config"
+            );
+        }
+        drop(cache);
+        tracing::info!(count = providers.len(), "model cache pre-populated from config");
     }
 
     pub async fn list_providers(&self) -> Result<Vec<crate::types::Provider>, AppError> {

@@ -12,7 +12,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -129,7 +129,25 @@ impl BridgeProviderV2 for GeminiBridgeProvider {
         config: BridgeConfig,
         client: Arc<BridgeClient>,
     ) -> Result<Box<dyn BridgeSession>> {
-        let session = GeminiSession::spawn(config, client, self.profile.clone(), self.build_tool_disable_config()).await?;
+        let spawn = |cfg: BridgeConfig| {
+            GeminiSession::spawn(cfg, client.clone(), self.profile.clone(), self.build_tool_disable_config())
+        };
+        let session = match spawn(config.clone()).await {
+            Ok(s) => s,
+            // Fallback: if resuming via `--session-id` fails, degrade to a fresh
+            // session instead of surfacing the error (clear fallback path for
+            // unusable captured session ids).
+            Err(e) => {
+                info!(
+                    target: "bridge.gemini.spawn",
+                    error = %e,
+                    "Gemini resume spawn failed; retrying without --session-id (fresh session fallback)"
+                );
+                let mut cfg = config.clone();
+                cfg.cli_session_id = None;
+                spawn(cfg).await?
+            }
+        };
         Ok(Box::new(session))
     }
 
@@ -156,9 +174,48 @@ struct GeminiSession {
     mcp_port: u16,
     /// Empty working directory for this session (spec §11.3)
     workdir: PathBuf,
+    /// Gemini CLI conversation session id captured from events.
+    /// Used to resume via `--session-id` on next spawn (session reuse).
+    gemini_session_id: Arc<RwLock<Option<String>>>,
 }
 
 impl GeminiSession {
+    /// Extract the original Gemini CLI conversation session id from a raw
+    /// CLI event JSON value. Looks for session ID in Gemini's stream-json output.
+    /// Tolerant: scans for session-ish keys with string values.
+    fn extract_gemini_session_id(value: &serde_json::Value) -> Option<String> {
+        fn visit(v: &serde_json::Value) -> Option<String> {
+            match v {
+                serde_json::Value::Object(map) => {
+                    for (k, val) in map {
+                        let lower = k.to_lowercase();
+                        if lower.contains("session") {
+                            if let serde_json::Value::String(s) = val {
+                                let t = s.trim().to_string();
+                                if !t.is_empty() {
+                                    return Some(t);
+                                }
+                            }
+                        }
+                        if let Some(found) = visit(val) {
+                            return Some(found);
+                        }
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        if let Some(found) = visit(item) {
+                            return Some(found);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            None
+        }
+        visit(value)
+    }
+
     async fn spawn(
         config: BridgeConfig,
         client: Arc<BridgeClient>,
@@ -209,6 +266,12 @@ impl GeminiSession {
         let resolved_binary = resolve_binary_path(&profile.binary)?;
         let mut cmd = Command::new(resolved_binary);
         cmd.args(&profile.args);
+
+        // Resume Gemini conversation session via `--session-id` if we have a captured
+        // session id from a previous turn. `--session-id` expects a UUID string.
+        if let Some(gemini_sid) = &config.cli_session_id {
+            cmd.arg("--session-id").arg(gemini_sid);
+        }
 
         // Set working directory to empty session workdir (spec §11.3)
         cmd.current_dir(&workdir);
@@ -322,6 +385,7 @@ impl GeminiSession {
             mcp_token,
             mcp_port,
             workdir,
+            gemini_session_id: Arc::new(RwLock::new(config.cli_session_id.clone())),
         };
 
         session.wait_for_mcp_initialize().await?;
@@ -518,6 +582,16 @@ impl BridgeSession for GeminiSession {
         &self.profile
     }
 
+    /// Provider-specific CLI conversation session id (e.g. UUID) captured
+    /// from CLI events. Lets the bridge provider resume the same CLI
+    /// conversation via `--session-id` on the next spawn (session reuse).
+    fn cli_session_id(&self) -> Option<String> {
+        self.gemini_session_id
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
     /// Preflight isolation check per spec §13.2 (wired via shared helper).
     async fn preflight_isolation_check(&self) -> Result<bool> {
         crate::provider::bridge::preflight_isolation_check(&self.profile, &self.session_id, "gemini").await
@@ -591,6 +665,14 @@ impl BridgeSession for GeminiSession {
         if let Some(mut rx) = rx_guard.take() {
             // Drain all events
             while let Some(event) = rx.recv().await {
+                // Capture Gemini CLI conversation session id from events
+                // (e.g., session_id in stream-json events) so the next spawn
+                // can resume via --session-id (cross-turn reuse).
+                if let Some(sid) = Self::extract_gemini_session_id(&event) {
+                    if let Ok(mut guard) = self.gemini_session_id.write() {
+                        *guard = Some(sid);
+                    }
+                }
                 // Parse event for content and reasoning
                 if let Some(text) = event.get("text").and_then(|v| v.as_str()) {
                     content.push_str(text);

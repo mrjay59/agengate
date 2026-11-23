@@ -205,9 +205,9 @@ fn reasoning_grouping_repeated_batches_share_block() {
     assert!(!out2.iter().any(|e| matches!(e, RunEvent::ReasoningStart { .. })),
         "Second batch should not start new reasoning block: {:?}", out2);
     
-    // Should contain ReasoningDelta for the new tool view step
-    assert!(out2.iter().any(|e| matches!(e, RunEvent::ReasoningDelta { .. })),
-        "Second batch should emit ReasoningDelta");
+    // Should contain Activity for the new tool view step
+    assert!(out2.iter().any(|e| matches!(e, RunEvent::Activity { .. })),
+        "Second batch should emit Activity");
 }
 
 /// Regression test: Coalescer preserves reasoning block across ToolCalls

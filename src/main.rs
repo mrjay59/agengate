@@ -174,7 +174,8 @@ async fn main() -> Result<()> {
                 config.defaults.clone(),
                 ollama_cli_enabled(&config),
                 config.limits.clone(),
-            );
+            )
+            .with_request_timeout(std::time::Duration::from_secs(config.server.request_timeout_secs));
             for provider_cfg in &config.provider {
                 // Bridge-capable agents use the MCP bridge adapter (spec_tooling.md §12);
                 // set `bridge = false` on the provider to opt out.
@@ -195,6 +196,10 @@ async fn main() -> Result<()> {
                     registry.register_native(np).await;
                 }
             }
+            // FIX-MODEL-CACHE-01: pre-populate model cache from static config
+            // (agentgate.toml [[provider]] models = [...]). This makes the first
+            // /v1/models a cache hit instead of paying the full CLI scan cost.
+            registry.pre_populate_cache(&config.provider).await;
             registry.bridge.sweep_orphan_session_dirs().await;
             registry.bridge.start_cleanup_task().await;
             let registry = Arc::new(registry);
