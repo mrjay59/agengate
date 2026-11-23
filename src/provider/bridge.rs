@@ -66,6 +66,11 @@ pub struct BridgeConfig {
     /// Tool schemas for this session (used by stdio_shim transport)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<crate::bridge::ToolSchema>,
+    /// OpenCode conversation session id (e.g. `ses_...`) to resume via `--session`.
+    /// Populated from the CLI-captured session id so a fresh process can
+    /// continue the same CLI conversation instead of always starting new.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_session_id: Option<String>,
     /// Isolation config for selective tool disabling (TB-TOOL-02)
     #[serde(default)]
     pub isolation: Option<crate::config::IsolationConfig>,
@@ -90,6 +95,7 @@ impl Default for BridgeConfig {
             transport: Some("http".to_string()),
             tools: Vec::new(),
             isolation: None,
+            cli_session_id: None,
         }
     }
 }
@@ -207,6 +213,12 @@ pub struct ContinuationHandle {
 pub trait BridgeSession: Send + Sync + std::any::Any {
     fn session_id(&self) -> &SessionId;
     fn provider_profile(&self) -> &BridgeProfile;
+    /// Provider-specific CLI conversation session id captured from adapter
+    /// events (e.g. opencode `ses_...`). Adapters override; the default returns
+    /// `None` for adapters that do not track a CLI session.
+    fn cli_session_id(&self) -> Option<String> {
+        None
+    }
     async fn send_user_message(&self, text: &str) -> Result<()>;
     async fn send_tool_result(&self, result: BridgeToolResult) -> Result<()>;
     async fn close(&self) -> Result<()>;

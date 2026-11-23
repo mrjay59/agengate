@@ -1252,6 +1252,11 @@ pub struct BridgeCliProvider {
     /// When keep_alive is enabled, sessions are stored here instead of being closed.
     /// Using Arc to allow cloning and sharing sessions across requests.
     persistent_sessions: Arc<RwLock<HashMap<String, Arc<dyn crate::provider::bridge::BridgeSession>>>>,
+    /// Cache of OpenCode CLI conversation session ids (e.g. `ses_...`) captured
+    /// from CLI events, keyed by the agentgate session id. Used to resume the
+    /// same CLI conversation via `--session` on the next spawn (cross-turn
+    /// session reuse for keep_alive flows).
+    persistent_opencode_sessions: Arc<RwLock<HashMap<String, String>>>,
     /// Limits for prompt rendering
     max_prompt_chars: usize,
     max_result_bytes: usize,
@@ -1300,6 +1305,7 @@ impl BridgeCliProvider {
             isolation_config,
             limits,
             persistent_sessions: Arc::new(RwLock::new(HashMap::new())),
+            persistent_opencode_sessions: Arc::new(RwLock::new(HashMap::new())),
             max_prompt_chars,
             max_result_bytes,
         })
@@ -1322,10 +1328,45 @@ impl BridgeCliProvider {
         }
     }
 
+    /// Look up a previously captured OpenCode CLI conversation session id
+    /// (e.g. `ses_...`) for an agentgate session key. Used to resume the same
+    /// CLI conversation via `--session` on the next spawn (cross-turn reuse).
+    async fn stored_opencode_session(&self, agentgate_session_id: &str) -> Option<String> {
+        self.persistent_opencode_sessions
+            .read()
+            .await
+            .get(agentgate_session_id)
+            .cloned()
+    }
+
+    /// Remember (or clear) the captured OpenCode CLI conversation session id for
+    /// an agentgate session key after a turn completes.
+    async fn remember_opencode_session(&self, agentgate_session_id: &str, opencode_session_id: Option<String>) {
+        match opencode_session_id {
+            Some(sid) if !sid.trim().is_empty() => {
+                self.persistent_opencode_sessions
+                    .write()
+                    .await
+                    .insert(agentgate_session_id.to_string(), sid);
+            }
+            _ => {
+                self.persistent_opencode_sessions
+                    .write()
+                    .await
+                    .remove(agentgate_session_id);
+            }
+        }
+    }
+
     /// Check if keep_alive (persistent session) is enabled for this provider.
     pub fn is_keep_alive(&self) -> bool {
+        // FIX-SESSION: `keep_alive` is a duration ("10m") or a boolean flag.
+        // Any non-empty, non-false value means persistent sessions are enabled.
         match &self.keep_alive {
-            Some(val) => val == "true" || val == "1",
+            Some(val) => {
+                let v = val.trim().to_ascii_lowercase();
+                !v.is_empty() && v != "false" && v != "0" && v != "off" && v != "none"
+            }
             None => false,
         }
     }
@@ -1532,6 +1573,10 @@ impl CliProvider for BridgeCliProvider {
                 .unwrap_or(8786);
             tracing::info!(target: "bridge.cli", bridge_port = bridge_port, "Using bridge port");
 
+            // FIX-SESSION: resume the captured OpenCode CLI conversation session
+            // (e.g. `ses_...`) when one was remembered for this agentgate session.
+            let resume_cli_sid = self.stored_opencode_session(&session_id).await;
+
             // FIX-PROMPT-01: Default strip system prompt — do not forward to CLI
             // System messages are skipped in render_conversation (see function)
             let bridge_config = BridgeConfig {
@@ -1547,6 +1592,7 @@ impl CliProvider for BridgeCliProvider {
                 transport: self.transport.clone(),
                 tools: tool_schemas_for_bridge,
                 isolation: Some(self.isolation_config.clone()),
+                cli_session_id: resume_cli_sid.clone(),
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider");
@@ -1627,6 +1673,14 @@ impl CliProvider for BridgeCliProvider {
                 return Err(anyhow::anyhow!("provider_error: bridge turn timed out"));
             }
         };
+
+        // FIX-SESSION: capture the CLI conversation session id (e.g. `ses_...`)
+        // reported by the adapter and remember it for cross-turn resume via
+        // `--session`. Only for keep_alive flows (fresh sessions are transient).
+        let captured_cli_sid = session.cli_session_id();
+        if keep_alive {
+            self.remember_opencode_session(&session_id, captured_cli_sid.clone()).await;
+        }
 
         // PR-S4: opencode continuation (capability-gated). If tool_calls returned and session can
         // continue after MCP hold resolve, keep session alive, register continuation, spawn producer.
@@ -1755,6 +1809,10 @@ impl CliProvider for BridgeCliProvider {
                 .unwrap_or(8786);
             tracing::info!(target: "bridge.cli", bridge_port = bridge_port, "Using bridge port");
 
+            // FIX-SESSION: resume the captured OpenCode CLI conversation session
+            // (e.g. `ses_...`) when one was remembered for this agentgate session.
+            let resume_cli_sid = self.stored_opencode_session(&session_id).await;
+
             // FIX-PROMPT-01: Default strip system prompt — do not forward to CLI
             // System messages are skipped in render_conversation (see function)
             let bridge_config = BridgeConfig {
@@ -1770,6 +1828,7 @@ impl CliProvider for BridgeCliProvider {
                 transport: self.transport.clone(),
                 tools: tool_schemas_for_bridge,
                 isolation: Some(self.isolation_config.clone()),
+                cli_session_id: resume_cli_sid.clone(),
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider (stream)");

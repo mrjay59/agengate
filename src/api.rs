@@ -113,7 +113,7 @@ async fn preflight_isolation_check(
 async fn metrics_endpoint() -> Response {
     (
         [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        crate::metrics::init_metrics().render_prometheus(),
+        crate::metrics::init_metrics().render_prometheus_full(),
     )
         .into_response()
 }
@@ -148,14 +148,19 @@ struct ChunkContext {
     id: String,
     created: i64,
     model: String,
+    /// FIX-TOOL-EXEC: names the client registered in this request. Used to
+    /// fail-closed at SSE emit so a raw built-in `execute` never leaks to
+    /// AionUI as an unknown tool.
+    tool_names: Vec<String>,
 }
 
 impl ChunkContext {
-    fn new(model: &str) -> Self {
+    fn new(model: &str, tool_names: Vec<String>) -> Self {
         Self {
             id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
             created: chrono::Utc::now().timestamp(),
             model: model.to_string(),
+            tool_names,
         }
     }
 
@@ -315,7 +320,12 @@ async fn chat_completions(
 
     if is_stream {
         let (tx, rx) = mpsc::channel::<Result<axum::response::sse::Event, axum::Error>>(128);
-        let ctx = ChunkContext::new(&resolved_model);
+        let client_tool_names: Vec<String> = request
+            .tools
+            .as_ref()
+            .map(|tools| tools.iter().map(|t| t.function.name.clone()).collect())
+            .unwrap_or_default();
+        let ctx = ChunkContext::new(&resolved_model, client_tool_names);
         let registry_clone = registry.clone();
         let activity_via_reasoning = reasoning_cfg.activity_via_reasoning;
         let response_cfg = reasoning_cfg.clone();
@@ -602,13 +612,11 @@ async fn chat_completions(
 fn add_reasoning_headers(
     res: &mut Response,
     format: ReasoningFormat,
-    cfg: &ReasoningConfig,
+    _cfg: &ReasoningConfig,
     granularity: &str,
 ) {
     let kind = if format == ReasoningFormat::None {
-        ReasoningKind::Raw
-    } else if cfg.activity_via_reasoning && cfg.fallback != "none" {
-        ReasoningKind::Activity
+        ReasoningKind::Omitted
     } else {
         ReasoningKind::Raw
     };
@@ -644,7 +652,7 @@ async fn emit_event(
     ctx: &ChunkContext,
     writer: &mut SseWriter,
     event: RunEvent,
-    activity_via_reasoning: bool,
+    _activity_via_reasoning: bool,
 ) {
     match event {
         RunEvent::Text { text } => {
@@ -663,14 +671,11 @@ async fn emit_event(
             }
         }
         RunEvent::Activity { label, .. } => {
-            if activity_via_reasoning {
-                for delta in writer.reasoning_deltas(&label) {
-                    send_delta(tx, ctx, delta).await;
-                }
-                for delta in writer.reasoning_end_deltas() {
-                    send_delta(tx, ctx, delta).await;
-                }
-            }
+            // Activity/tool-view is delivered on a SEPARATE channel (the
+            // `activity` field of the delta) and is never written into
+            // `reasoning_content`, so UIs cannot mistake a tool-view line
+            // (e.g. "📝 write → hello.txt") for model thinking.
+            send_delta(tx, ctx, serde_json::json!({ "activity": label })).await;
         }
         RunEvent::ToolCalls { calls } => {
             // `</think>` must be closed before tool_calls even without text.
@@ -681,8 +686,25 @@ async fn emit_event(
             // then Chunk 2+ with 512-byte argument slices. The terminal
             // `finish_reason:"tool_calls"` chunk is emitted by the stream
             // terminator to guarantee it is the last choice chunk before [DONE].
-            for (index, call) in calls.iter().enumerate() {
+            let mut emitted_index = 0usize;
+            for call in calls.iter() {
                 let name = call.function.name.clone();
+                // FIX-TOOL-EXEC: fail-closed. If the client declared tools,
+                // never emit a tool_call whose name is not registered by it.
+                // This prevents a raw opencode built-in `execute` from reaching
+                // AionUI (which only knows `execCommand`) as an unknown tool.
+                if !ctx.tool_names.is_empty()
+                    && !ctx.tool_names.iter().any(|n| n.eq_ignore_ascii_case(&name))
+                {
+                    tracing::warn!(
+                        tool = %name,
+                        "Dropping tool_call not registered by client (fail-closed)"
+                    );
+                    crate::metrics::init_metrics().record_guard_violation();
+                    continue;
+                }
+                let index = emitted_index;
+                emitted_index += 1;
                 // Chunk 1: empty arguments
                 send_delta(tx, ctx, serde_json::json!({
                     "tool_calls": [{

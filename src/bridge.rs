@@ -791,6 +791,11 @@ impl BridgeServer {
             let runs = self.runs.read().await;
             runs.values()
                 .filter(|r| !r.state.is_terminal())
+                // FIX-RUN-LIMIT: a Parked run is waiting for a client tool
+                // result, not consuming provider concurrency. Counting it here
+                // blocks every later request for the same model (max_runs_per_key
+                // = 1) and forces replay fallback. Exclude parked runs.
+                .filter(|r| !r.state.is_parked())
                 .filter(|r| {
                     let r_key = format!("{}:{}", r.workspace, r.model);
                     r_key == key

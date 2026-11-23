@@ -613,21 +613,32 @@ fn align_tool_arguments(
         }
     }
 
-    // bash/execute-style: map `command` -> `cmd` (opencode/bash uses `cmd`)
+    // bash/execute-style: align to the KEY THE CLIENT DECLARED. This function
+    // runs on the emit path (unalias_tool_calls), so forcing `cmd` here broke
+    // clients that registered `command` ("Missing required parameter: command").
     let is_bash = matches!(
         lower.as_str(),
         "bash" | "execute" | "shell" | "sh" | "terminal" | "exec_command" | "execcommand"
     );
     if is_bash {
-        if !obj.contains_key("cmd") {
-            let cands = &["command", "cmd", "command_line", "commandline", "code"];
-            let src_key = cands
-                .iter()
-                .find(|k| obj.contains_key(**k))
-                .map(|k| k.to_string());
-            if let Some(k) = src_key {
-                if let Some(v) = obj.remove(&k) {
-                    obj.insert("cmd".to_string(), v);
+        let canon = if has("command") {
+            Some("command")
+        } else if has("cmd") {
+            Some("cmd")
+        } else {
+            None
+        };
+        if let Some(canon) = canon {
+            if !obj.contains_key(canon) {
+                let cands = &["cmd", "command", "command_line", "commandline", "code"];
+                let src_key = cands
+                    .iter()
+                    .find(|k| obj.contains_key(**k) && **k != canon)
+                    .map(|k| k.to_string());
+                if let Some(k) = src_key {
+                    if let Some(v) = obj.remove(&k) {
+                        obj.insert(canon.to_string(), v);
+                    }
                 }
             }
         }
@@ -641,7 +652,7 @@ fn align_tool_arguments(
 /// `Provider::tool_schemas_from_request`. Keep in sync.
 pub fn canonical_tool_name(name: &str) -> String {
     match name.trim().to_lowercase().as_str() {
-        "shell" | "sh" | "terminal" | "execcommand" | "exec_command" => "bash".to_string(),
+        "shell" | "sh" | "terminal" | "execute" | "execcommand" | "exec_command" => "bash".to_string(),
         "cat" => "read".to_string(),
         other => other.to_string(),
     }
@@ -733,15 +744,10 @@ pub fn unalias_tool_calls(
         // its built-in "shell"/"bash" name, map back to client's registered name.
         // "execute" → canonical "bash" (opencode's built-in shell tool).
         let normalized_lower = match lower.as_str() {
-            "bash" | "shell" | "sh" => {
-                // Prefer "execute" if client registered it (AionUI code-mode style)
-                if by_lower.contains_key("execute") {
-                    // Return lowercase "execute" to match canonical_to_client key
-                    "execute".to_string()
-                } else {
-                    "bash".to_string()
-                }
-            }
+            // FIX-TOOL-EXEC: always normalize to the canonical `bash` key so
+            // `canonical_to_client` can resolve it back to whichever name the
+            // client actually registered (execute / execCommand / bash / Shell).
+            "bash" | "shell" | "sh" => "bash".to_string(),
             "cat" => "read".to_string(),
             other => other.to_string(),
         };

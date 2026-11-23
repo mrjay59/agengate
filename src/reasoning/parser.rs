@@ -493,15 +493,15 @@ impl ReasoningParser {
                 if tool_calls.is_empty() {
                     Vec::new()
                 } else {
-                    let mut events = self.ensure_reasoning_start(ReasoningKind::Summary);
+                    let mut events = Vec::new();
                     for c in &tool_calls {
                         let line = crate::reasoning::tool_view::format_tool_view_step(
                             &c.function.name,
                             &c.function.arguments,
                         );
-                        events.push(RunEvent::ReasoningDelta {
-                            block: self.current_block,
-                            text: format!("{}\n", line),
+                        events.push(RunEvent::Activity {
+                            kind: ActivityKind::ToolRequested,
+                            label: line,
                         });
                     }
                     events.push(RunEvent::ToolCalls { calls: tool_calls });
@@ -724,16 +724,10 @@ mod tests {
                 {"id":"call_2","type":"function","function":{"name":"glob","arguments":"{\"pattern\":\"**/*.rs\"}"}}
             ]}"#,
         );
-        // Should produce exactly 3 events: 1 ReasoningStart + 2 ReasoningDelta + 1 ToolCalls... 
-        // Actually: ensure_reasoning_start returns [ReasoningStart], then 2 ReasoningDelta, then ToolCalls = 4 events
-        assert!(out.len() >= 3, "expected at least 3 events, got {}: {:?}", out.len(), out);
-
-        // First event should be ReasoningStart
-        assert!(matches!(&out[0], RunEvent::ReasoningStart { .. }));
-
-        // Middle events should be ReasoningDelta with tool view steps
-        let deltas: Vec<&RunEvent> = out.iter().filter(|e| matches!(e, RunEvent::ReasoningDelta { .. })).collect();
-        assert!(deltas.len() >= 2, "expected at least 2 ReasoningDelta, got {}", deltas.len());
+        // Should produce Activity view steps + ToolCalls.
+        // First events should be Activity with tool view steps
+        let activities: Vec<&RunEvent> = out.iter().filter(|e| matches!(e, RunEvent::Activity { .. })).collect();
+        assert!(activities.len() >= 2, "expected at least 2 Activity, got {}", activities.len());
 
         // Last event should be ToolCalls
         assert!(matches!(&out[out.len() - 1], RunEvent::ToolCalls { .. }));
@@ -751,7 +745,7 @@ mod tests {
                 {"id":"call_1","type":"function","function":{"name":"shell","arguments":"{\"cmd\":\"ls\"}"}}
             ]}"#,
         );
-        assert!(matches!(&out1[0], RunEvent::ReasoningStart { .. }));
+        assert!(out1.iter().any(|e| matches!(e, RunEvent::Activity { .. })), "first batch should emit Activity");
 
         // Second batch should NOT start a new reasoning block (no ReasoningStart)
         let out2 = p.parse_line(
@@ -762,9 +756,9 @@ mod tests {
         // First event of second batch should NOT be ReasoningStart
         assert!(!out2.iter().any(|e| matches!(e, RunEvent::ReasoningStart { .. })),
             "second batch should not start new reasoning block");
-        // Should contain ReasoningDelta for the new tool view step
-        assert!(out2.iter().any(|e| matches!(e, RunEvent::ReasoningDelta { .. })),
-            "second batch should emit ReasoningDelta");
+        // Should contain Activity for the new tool view step
+        assert!(out2.iter().any(|e| matches!(e, RunEvent::Activity { .. })),
+            "second batch should emit Activity");
     }
 
     #[test]

@@ -179,8 +179,9 @@ impl ReasoningPipeline {
                 text: self.redactor.redact(&text),
             }],
             RunEvent::Activity { .. } => {
-                // Drop any synthetic/upstream activity; only CLI reasoning flows.
-                Vec::new()
+                // Pass activity/tool-view through on its own channel; it must
+                // never be fabricated into reasoning_content (L3).
+                vec![event]
             }
             RunEvent::ToolCalls { calls } => vec![RunEvent::ToolCalls { calls }],
             RunEvent::Usage {

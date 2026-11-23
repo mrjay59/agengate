@@ -462,6 +462,7 @@ pub async fn run_spike_bridge(config: SpikeConfig) -> Result<SpikeReport> {
             transport: Some("http".to_string()),
             tools: Vec::new(),
             isolation: None,
+            cli_session_id: None,
         },
     )
     .await?;
@@ -499,6 +500,7 @@ pub async fn run_spike_bridge(config: SpikeConfig) -> Result<SpikeReport> {
             transport: Some("http".to_string()),
             tools: Vec::new(),
             isolation: None,
+            cli_session_id: None,
         },
         &prompt,
         &mut report,

@@ -57,7 +57,8 @@ early_role_chunk = true
 # These keys belong to [bridge]; under [bridge.limits] they were silently ignored.
 max_runs_per_key = 1
 max_parked_runs = 2
-max_steps = 50
+# FIX-QUOTA-STEP: lower from 50 to bound free-tier provider calls per tool loop.
+max_steps = 25
 call_ttl_secs = 120
 park_ttl_secs = 120
 
@@ -67,8 +68,12 @@ park_ttl_secs = 120
 # strict: disable all built-in tools
 # off: no tool disabling
 mode = "selective"
-# Additional built-in tools to allow beyond the mode defaults
-allowed_builtins = ["execute"]
+# Additional built-in tools to allow beyond the mode defaults.
+# FIX-TOOL-EXEC: do NOT allow opencode built-in `execute` here — it competes
+# with the bridged MCP tool and emits a raw `execute` tool_call that AionUI
+# cannot resolve ("unknown tool"). The bridged tool is canonicalized to `bash`
+# and mapped back to the client-registered name (execCommand/execute).
+allowed_builtins = []
 # Override: explicitly disable these built-in tools
 disabled_builtins = []
 # FIX-FREELIMIT-01: When true (default), skip verbose permission block in opencode.json

@@ -56,6 +56,9 @@ pub struct Metrics {
     pub tool_injected_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
     /// Errors by component, error_type.
     pub errors_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Quota / free-limit errors (HTTP 429) by provider, model.
+    /// FIX-QUOTA-METRIC: makes free-tier exhaustion observable.
+    pub quota_errors_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
 }
 
 impl Metrics {
@@ -85,6 +88,7 @@ impl Metrics {
             model_cache_misses_total: std::sync::Mutex::new(std::collections::HashMap::new()),
             tool_injected_total: std::sync::Mutex::new(std::collections::HashMap::new()),
             errors_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            quota_errors_total: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -213,6 +217,12 @@ impl Metrics {
         Self::increment_map(&self.errors_total, &key);
     }
 
+    /// FIX-QUOTA-METRIC: record a provider.free-limit / HTTP 429 event.
+    pub fn record_quota_error(&self, provider: &str, model: &str) {
+        let key = format!("provider=\"{}\",model=\"{}\"", provider, model);
+        Self::increment_map(&self.quota_errors_total, &key);
+    }
+
     fn ms(v: u64) -> f64 {
         v as f64 / 1000.0
     }
@@ -306,6 +316,7 @@ impl Metrics {
         out.push_str(&self.render_map_metrics("agentgate_tool_injected_total", &self.tool_injected_total));
         out.push_str(&self.render_map_metrics("agentgate_provider_concurrency", &self.provider_concurrency));
         out.push_str(&self.render_map_metrics("agentgate_errors_total", &self.errors_total));
+        out.push_str(&self.render_map_metrics("agentgate_quota_errors_total", &self.quota_errors_total));
         out
     }
 }

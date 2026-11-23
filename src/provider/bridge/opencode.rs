@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -34,7 +34,7 @@ impl OpenCodeBridgeProvider {
                 name: "opencode".into(),
                 display_name: "OpenCode".into(),
                 binary: "opencode".into(),
-                args: vec!["run".into(), "--format".into(), "json".into()],
+                args: vec!["run".into(), "--format".into(), "json".into(), "--thinking".into()],
                 env: HashMap::new(),
                 mcp_config_template: Some(
                     r#"{"mcpServers":{"agentgate":{"type":"http","url":"http://127.0.0.1:{port}/_bridge/mcp/{session}","headers":{"Authorization":"Bearer {token}"}}}}"#
@@ -92,7 +92,34 @@ impl BridgeProviderV2 for OpenCodeBridgeProvider {
     ) -> Result<Box<dyn BridgeSession>> {
         let isolation = config.isolation.clone().unwrap_or_default();
         let tool_names: Vec<String> = config.tools.iter().map(|t| t.name.clone()).collect();
-        let session = OpenCodeSession::spawn(config, client, self.profile.clone(), self.build_tool_disable_config(&isolation), isolation, tool_names).await?;
+        let spawn = |cfg: BridgeConfig| {
+            let isolation = cfg.isolation.clone().unwrap_or_default();
+            let tool_names: Vec<String> = cfg.tools.iter().map(|t| t.name.clone()).collect();
+            OpenCodeSession::spawn(
+                cfg,
+                client.clone(),
+                self.profile.clone(),
+                self.build_tool_disable_config(&isolation),
+                isolation,
+                tool_names,
+            )
+        };
+        let session = match spawn(config.clone()).await {
+            Ok(s) => s,
+            // Fallback: if resuming via `--session` fails, degrade to a fresh
+            // session instead of surfacing the error (clear fallback path for
+            // unusable captured session ids).
+            Err(e) => {
+                info!(
+                    target: "bridge.opencode.spawn",
+                    error = %e,
+                    "OpenCode resume spawn failed; retrying without --session (fresh session fallback)"
+                );
+                let mut cfg = config.clone();
+                cfg.cli_session_id = None;
+                spawn(cfg).await?
+            }
+        };
         Ok(Box::new(session))
     }
 
@@ -122,9 +149,49 @@ struct OpenCodeSession {
     continuation_tx: Arc<Mutex<Option<oneshot::Sender<ContinuationOutput>>>>,
     /// Client-registered tool names for case-preserving lookup in parser.
     tool_names: Vec<String>,
+    /// OpenCode conversation session id (e.g. `ses_...`) captured from CLI
+    /// events. Used to resume the same CLI conversation via `--session` on the
+    /// next spawn (session reuse across turns).
+    opencode_session_id: Arc<RwLock<Option<String>>>,
 }
 
 impl OpenCodeSession {
+    /// Extract the original OpenCode CLI conversation session id from a raw
+    /// CLI event JSON value (e.g. `step_start` metadata carrying `sessionID`).
+    /// Tolerant: scans nested objects for session-ish keys with string values.
+    fn extract_opencode_session_id(value: &serde_json::Value) -> Option<String> {
+        fn visit(v: &serde_json::Value) -> Option<String> {
+            match v {
+                serde_json::Value::Object(map) => {
+                    for (k, val) in map {
+                        let lower = k.to_lowercase();
+                        if lower.contains("session") {
+                            if let serde_json::Value::String(s) = val {
+                                let t = s.trim().to_string();
+                                if !t.is_empty() && (t.starts_with("ses") || t.starts_with("session")) {
+                                    return Some(t);
+                                }
+                            }
+                        }
+                        if let Some(found) = visit(val) {
+                            return Some(found);
+                        }
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        if let Some(found) = visit(item) {
+                            return Some(found);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            None
+        }
+        visit(value)
+    }
+
     async fn spawn(
         config: BridgeConfig,
         client: Arc<BridgeClient>,
@@ -186,11 +253,18 @@ impl OpenCodeSession {
         // with: Expected a string starting with "ses" at ["sessionID"].
         // Only forward it when it is genuinely an OpenCode ID; otherwise let
         // opencode create its own `ses_...` session.
-        let opencode_session_id = session_id.starts_with("ses").then_some(session_id.as_str());
+        // Resolve the OpenCode conversation session to resume. `--session` only
+        // accepts real OpenCode session ids (starting with "ses"); agentgate's own
+        // MCP session uuid never qualifies, so a captured CLI session id must be
+        // carried through BridgeConfig.cli_session_id to enable cross-turn reuse.
+        let resume_cli_sid = config.cli_session_id.clone().filter(|s| s.starts_with("ses"));
+        let opencode_session_id: Option<String> = resume_cli_sid
+            .clone()
+            .or_else(|| session_id.starts_with("ses").then(|| session_id.clone()));
         if has_run {
             cmd.arg("run");
             cmd.arg("--model").arg(&config.model);
-            if let Some(sid) = opencode_session_id {
+            if let Some(sid) = &opencode_session_id {
                 cmd.arg("--session").arg(sid);
             }
             // FIX-PROMPT-01: strip system prompt by default — don't forward via --system
@@ -202,7 +276,7 @@ impl OpenCodeSession {
             }
         } else {
             cmd.arg("run").arg("--model").arg(&config.model);
-            if let Some(sid) = opencode_session_id {
+            if let Some(sid) = &opencode_session_id {
                 cmd.arg("--session").arg(sid);
             }
             cmd.arg("--format").arg("json").args(&profile.args);
@@ -459,6 +533,7 @@ impl OpenCodeSession {
             workdir,
             continuation_tx: Arc::new(Mutex::new(None)),
             tool_names,
+            opencode_session_id: Arc::new(RwLock::new(opencode_session_id)),
         };
 
         // Wait for MCP initialization
@@ -798,10 +873,19 @@ impl OpenCodeSession {
             (mcp, mcp_servers)
         };
 
+        // FIX-TOOL-EXEC: free models previously received NO tool block at all,
+        // so opencode's built-in `execute`/`bash` stayed active and competed with
+        // the bridged MCP tool. A minimal `tools` block (no permission block —
+        // permission denials are what trigger provider.free-limit) disables only
+        // only the conflicting built-in `execute` while leaving MCP tools intact
+        // (do not disable bash/write/edit — the bridged MCP tools share those names).
         let config = serde_json::json!({
             "$schema": "https://opencode.ai/config.json",
             "mcp": mcp_config,
             "mcpServers": mcp_servers_config,
+            "tools": {
+                "execute": false
+            }
         });
 
         config.to_string()
@@ -823,8 +907,15 @@ impl OpenCodeSession {
     /// Wait for the CLI to initialize and connect to MCP
     /// This is a best-effort wait; actual initialization happens asynchronously
     async fn wait_for_mcp_initialize(&self) -> Result<()> {
-        // Wait for the CLI to initialize and connect to MCP
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // FIX-LATENCY-01: the previous unconditional 500 ms sleep was paid on
+        // every spawn. The CLI/MCP handshake has no observable ready signal in
+        // this session yet, so keep a short bounded wait and make it tunable.
+        // Override with AGENTGATE_MCP_INIT_WAIT_MS if a slower environment needs it.
+        let wait_ms = std::env::var("AGENTGATE_MCP_INIT_WAIT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(150);
+        tokio::time::sleep(Duration::from_millis(wait_ms)).await;
         Ok(())
     }
 
@@ -900,6 +991,16 @@ impl BridgeSession for OpenCodeSession {
 
     fn provider_profile(&self) -> &BridgeProfile {
         &self.profile
+    }
+
+    /// Provider-specific CLI conversation session id (e.g. `ses_...`) captured
+    /// from CLI events. Lets the bridge provider resume the same CLI
+    /// conversation via `--session` on the next spawn (session reuse).
+    fn cli_session_id(&self) -> Option<String> {
+        self.opencode_session_id
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
     /// PR-S4: opencode MCP-hold flow can continue when the CLI process stays alive and
@@ -1037,6 +1138,13 @@ impl BridgeSession for OpenCodeSession {
             while let Some(event) = rx.recv().await {
                 let line = event.to_string();
                 let parsed_events = parser.parse_line(&line);
+                // Capture the original OpenCode CLI conversation session id from
+                // events (e.g. step_start metadata) so the next spawn can resume.
+                if let Some(sid) = Self::extract_opencode_session_id(&event) {
+                    if let Ok(mut guard) = self.opencode_session_id.write() {
+                        *guard = Some(sid);
+                    }
+                }
                 debug!(target: "agentgate.bridge.opencode", line = %line, "raw opencode event");
                 for parsed in &parsed_events {
                     debug!(target: "agentgate.bridge.opencode", event = ?parsed, "parsed run event");
@@ -1153,6 +1261,13 @@ impl BridgeSession for OpenCodeSession {
             while let Some(event) = rx.recv().await {
                 let line = event.to_string();
                 let parsed_events = parser.parse_line(&line);
+                // Capture the original OpenCode CLI conversation session id from
+                // events (e.g. step_start metadata) so the next spawn can resume.
+                if let Some(sid) = Self::extract_opencode_session_id(&event) {
+                    if let Ok(mut guard) = self.opencode_session_id.write() {
+                        *guard = Some(sid);
+                    }
+                }
                 for parsed in parsed_events {
                     match parsed {
                         RunEvent::Text { text } => {

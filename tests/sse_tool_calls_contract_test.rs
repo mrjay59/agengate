@@ -161,20 +161,20 @@ fn reasoning_grouping_multi_tool_calls_single_block() {
         ]}"#,
     );
     
-    // Should produce: ReasoningStart + 2 ReasoningDelta + ToolCalls = 4 events
-    assert_eq!(out.len(), 4, "Expected 4 events: {:?}", out);
+    // Now tool-view is emitted as Activity (separate channel), not as
+    // reasoning_content. Expect: 2 Activity + ToolCalls = 3 events.
+    assert_eq!(out.len(), 3, "Expected 3 events: {:?}", out);
     
-    // First event should be ReasoningStart
-    assert!(matches!(&out[0], RunEvent::ReasoningStart { .. }));
-    
-    // Middle events should be ReasoningDelta with tool view steps
-    let deltas: Vec<&RunEvent> = out.iter().filter(|e| matches!(e, RunEvent::ReasoningDelta { .. })).collect();
-    assert_eq!(deltas.len(), 2, "Expected 2 ReasoningDelta for 2 tools");
+    // Activity view steps (separate channel)
+    let activities: Vec<&RunEvent> = out.iter().filter(|e| matches!(e, RunEvent::Activity { .. })).collect();
+    assert_eq!(activities.len(), 2, "Expected 2 Activity for 2 tools");
     
     // Last event should be ToolCalls
-    assert!(matches!(&out[3], RunEvent::ToolCalls { calls } if calls.len() == 2));
+    assert!(matches!(&out[2], RunEvent::ToolCalls { calls } if calls.len() == 2));
     
-    // No ReasoningEnd between tool calls (grouping preserved)
+    // No ReasoningStart/ReasoningEnd (tool-view is not reasoning)
+    let starts: Vec<&RunEvent> = out.iter().filter(|e| matches!(e, RunEvent::ReasoningStart { .. })).collect();
+    assert!(starts.is_empty(), "No ReasoningStart for tool-view");
     let ends: Vec<&RunEvent> = out.iter().filter(|e| matches!(e, RunEvent::ReasoningEnd { .. })).collect();
     assert!(ends.is_empty(), "No ReasoningEnd should appear between tools");
 }
@@ -191,7 +191,8 @@ fn reasoning_grouping_repeated_batches_share_block() {
             {"id":"call_1","type":"function","function":{"name":"shell","arguments":"{\"cmd\":\"ls\"}"}}
         ]}"#,
     );
-    assert!(matches!(&out1[0], RunEvent::ReasoningStart { .. }));
+    assert!(out1.iter().any(|e| matches!(e, RunEvent::Activity { .. })),
+        "First batch should emit Activity: {:?}", out1);
     
     // Second batch should NOT start a new reasoning block
     let out2 = parser.parse_line(

@@ -56,6 +56,23 @@ fn provider_error_to_app_error(e: anyhow::Error) -> AppError {
     }
 }
 
+/// FIX-QUOTA-METRIC: detect provider.free-limit / HTTP 429 errors and record
+/// them so free-tier exhaustion is observable at /_metrics.
+fn is_quota_error(e: &str) -> bool {
+    let lower = e.to_lowercase();
+    lower.contains("provider.free-limit")
+        || lower.contains("free usage limit")
+        || lower.contains("http 429")
+        || lower.contains("status 429")
+        || lower.contains("\"status\":429")
+}
+
+fn record_quota_error_if_needed(e: &str, provider: &str, model: &str) {
+    if is_quota_error(e) {
+        crate::metrics::init_metrics().record_quota_error(provider, model);
+    }
+}
+
 /// RAII guard around a provider semaphore permit (spec §10.3).
 /// Updates the `agentgate_provider_concurrency` gauge when it is dropped.
 pub(crate) struct ProviderPermit {
@@ -602,7 +619,10 @@ impl ServiceRegistry {
             let limits = &self.bridge_config.limits;
             // FIX-QUOTA-04: Skip max_tools check for free models to avoid rejecting requests
             // before they reach the provider. Free models have their own quota limits.
-            let is_free_model = request.model.to_lowercase().contains("-free") || request.model.to_lowercase() == "free";
+            // FIX-QUOTA-FREE: align with provider.rs / opencode.rs suffix match
+            // so paid models that merely contain "free" are not misclassified.
+            let model_lower = request.model.to_lowercase();
+            let is_free_model = model_lower.ends_with("-free") || model_lower == "free";
             if !is_free_model && tools.len() > limits.max_tools {
                 return Err(AppError::ToolError(format!(
                     "too_many_tools ({} > {})",
@@ -742,26 +762,46 @@ impl ServiceRegistry {
         // version). Without a deadline the HTTP client waits until its own
         // timeout and reports "no response". Bound the whole call instead.
         let timeout_secs = provider_call_timeout_secs();
-        let response = match tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            provider.send_chat_completion(&model, request),
-        )
-        .await
-        {
-            Ok(result) => result.map_err(provider_error_to_app_error)?,
-            Err(_) => {
-                crate::metrics::init_metrics().record_cli_exit(false);
-                tracing::error!(model, provider_id = %provider_id, timeout_secs, "call_provider_native_with: provider call timed out");
-                return Err(AppError::ProviderError(format!(
-                    "provider '{}' produced no result within {}s (timed out)",
-                    provider_id, timeout_secs
-                )));
+        // FIX-QUOTA-RETRY: retry only quota/free-limit failures with bounded
+        // exponential backoff (1s, 2s, 4s). Other errors still fail fast.
+        const MAX_QUOTA_RETRIES: u32 = 3;
+        let mut attempt: u32 = 0;
+        let response = loop {
+            let call = tokio::time::timeout(
+                std::time::Duration::from_secs(timeout_secs),
+                provider.send_chat_completion(&model, request.clone()),
+            )
+            .await;
+            match call {
+                Ok(Ok(crate::provider::ProviderResponse::Error(ref e)))
+                    if is_quota_error(e) && attempt < MAX_QUOTA_RETRIES =>
+                {
+                    attempt += 1;
+                    let delay = Duration::from_secs(1u64 << (attempt - 1));
+                    tracing::warn!(
+                        model, provider_id = %provider_id, attempt,
+                        delay_ms = delay.as_millis(),
+                        "quota error, retrying with backoff"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Ok(result) => break result.map_err(provider_error_to_app_error)?,
+                Err(_) => {
+                    crate::metrics::init_metrics().record_cli_exit(false);
+                    tracing::error!(model, provider_id = %provider_id, timeout_secs, "call_provider_native_with: provider call timed out");
+                    return Err(AppError::ProviderError(format!(
+                        "provider '{}' produced no result within {}s (timed out)",
+                        provider_id, timeout_secs
+                    )));
+                }
             }
         };
         tracing::info!(model, provider_id = %provider_id, "call_provider_native_with: got response");
         match response {
             crate::provider::ProviderResponse::Success { content: text, reasoning, tool_calls, session_id, .. } => {
                 crate::metrics::init_metrics().record_cli_exit(true);
+                crate::metrics::init_metrics().record_provider_call(&provider_id, &model, true);
                 let has_tool_calls = tool_calls.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
                 let finish_reason = if has_tool_calls { "tool_calls" } else { "stop" };
                 Ok(ChatCompletionResponse {
@@ -791,6 +831,8 @@ impl ServiceRegistry {
             }
             crate::provider::ProviderResponse::Error(e) => {
                 crate::metrics::init_metrics().record_cli_exit(false);
+                crate::metrics::init_metrics().record_provider_call(&provider_id, &model, false);
+                record_quota_error_if_needed(&e, &provider_id, &model);
                 Err(AppError::ProviderError(e))
             }
         }
@@ -990,13 +1032,22 @@ impl ServiceRegistry {
             provider: provider_id.to_string(),
             workspace: "default".to_string(),
         }).collect();
-        let run = self.run_registry.create_run(
+        let run = match self.run_registry.create_run(
             "default".to_string(),
             request.model.clone(),
             request.messages.clone(),
             tool_schemas,
             crate::openai::ToolChoice::from_value(request.tool_choice.clone()).unwrap_or_default(),
-        ).await.ok();
+        ).await {
+            Ok(run) => Some(run),
+            Err(e) => {
+                // FIX-RUN-VISIBILITY: do not silently swallow run creation errors —
+                // they are the reason follow-ups fall back to Replay.
+                tracing::warn!(error = %e, provider_id, "new_bridge_run: failed to create Run; tool resume will be unavailable");
+                crate::metrics::init_metrics().record_error("run", "create_failed");
+                None
+            }
+        };
 
         // Spawn bridge process and get the single response (carries tool_calls)
         let providers = self.providers.read().await;
@@ -1005,17 +1056,36 @@ impl ServiceRegistry {
         let model = request.model.clone();
         let mut req_for_provider = request.clone();
         req_for_provider.agentgate_run_id = run.as_ref().map(|r| r.id.clone());
-        let response = match provider.send_chat_completion(&model, req_for_provider).await {
-            Ok(r) => r,
-            Err(e) => {
-                // Mark the run Failed so the sweeper reaps it after call_ttl
-                // instead of leaving it Pending until max_run_lifetime.
-                if let Some(mut r) = run {
-                    r.fail(e.to_string());
-                    self.bridge.runs().write().await.insert(r.id.clone(), r);
+        // FIX-QUOTA-RETRY: bounded exponential backoff for quota/free-limit
+        // responses on the bridge path too (native path is handled above).
+        const MAX_QUOTA_RETRIES: u32 = 3;
+        let mut quota_attempt: u32 = 0;
+        let response = loop {
+            match provider.send_chat_completion(&model, req_for_provider.clone()).await {
+                Ok(crate::provider::ProviderResponse::Error(ref e))
+                    if is_quota_error(e) && quota_attempt < MAX_QUOTA_RETRIES =>
+                {
+                    quota_attempt += 1;
+                    let delay = Duration::from_secs(1u64 << (quota_attempt - 1));
+                    tracing::warn!(
+                        provider_id, model = %model, attempt = quota_attempt,
+                        delay_ms = delay.as_millis(),
+                        "bridge quota error, retrying with backoff"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
                 }
-                drop(providers);
-                return Err(provider_error_to_app_error(e));
+                Ok(r) => break r,
+                Err(e) => {
+                    // Mark the run Failed so the sweeper reaps it after call_ttl
+                    // instead of leaving it Pending until max_run_lifetime.
+                    if let Some(mut r) = run {
+                        r.fail(e.to_string());
+                        self.bridge.runs().write().await.insert(r.id.clone(), r);
+                    }
+                    drop(providers);
+                    return Err(provider_error_to_app_error(e));
+                }
             }
         };
         drop(providers);
@@ -1023,6 +1093,7 @@ impl ServiceRegistry {
         match response {
             crate::provider::ProviderResponse::Success { content: text, reasoning, mut tool_calls, session_id, mcp_session_id } => {
                 crate::metrics::init_metrics().record_cli_exit(true);
+                crate::metrics::init_metrics().record_provider_call(provider_id, &request.model, true);
                 let has_tool_calls = tool_calls.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
                 let finish_reason = if has_tool_calls { "tool_calls" } else { "stop" };
 
@@ -1116,6 +1187,8 @@ impl ServiceRegistry {
             }
             crate::provider::ProviderResponse::Error(e) => {
                 crate::metrics::init_metrics().record_cli_exit(false);
+                crate::metrics::init_metrics().record_provider_call(provider_id, &request.model, false);
+                record_quota_error_if_needed(&e, provider_id, &request.model);
                 // Mark the run Failed so the sweeper reaps it after call_ttl.
                 if let Some(mut r) = run {
                     r.fail(e.clone());
@@ -1291,9 +1364,107 @@ impl ServiceRegistry {
             });
         } else if let Some(provider) = provider {
             let model = request.model.clone();
-            let req = request.clone();
+            let mut req = request.clone();
+
+            // FIX-STREAM-RUN: the stream path never created/parked a Run, so a
+            // tool-result follow-up was always classified as Replay (full
+            // transcript re-render + fresh CLI spawn per tool round). Mirror
+            // the non-stream lifecycle: create a Run, thread its id into the
+            // provider, then park it when tool_calls are emitted.
+            let run = if has_client_tools {
+                let tool_schemas: Vec<crate::bridge::ToolSchema> = req
+                    .tools
+                    .as_ref()
+                    .map(|tools| {
+                        tools
+                            .iter()
+                            .map(|t| crate::bridge::ToolSchema {
+                                name: t.function.name.clone(),
+                                description: t.function.description.clone().unwrap_or_default(),
+                                parameters: t.function.parameters.clone().unwrap_or_default(),
+                                provider: provider_id.to_string(),
+                                workspace: "default".to_string(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let created = self
+                    .run_registry
+                    .create_run(
+                        "default".to_string(),
+                        model.clone(),
+                        req.messages.clone(),
+                        tool_schemas,
+                        crate::openai::ToolChoice::from_value(req.tool_choice.clone())
+                            .unwrap_or_default(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        tracing::warn!(error = %e, provider_id, "stream_run_events: failed to create Run; tool resume unavailable");
+                        crate::metrics::init_metrics().record_error("run", "create_failed");
+                    })
+                    .ok();
+                if let Some(r) = &created {
+                    req.agentgate_run_id = Some(r.id.clone());
+                }
+                created
+            } else {
+                None
+            };
+            let bridge_for_park = self.bridge.clone();
+
             tokio::spawn(async move {
-                if let Err(err) = provider.send_chat_completion_stream(&model, req, tx.clone()).await {
+                // Proxy the event channel so we can park the Run at the exact
+                // moment tool_calls are emitted — BEFORE the chunk is forwarded
+                // to the client. The SSE handler terminates a tool turn as soon
+                // as it sees tool_calls, so parking after the stream finishes is
+                // too late: the client's tool-result request arrives first and
+                // is classified as Replay.
+                let (inner_tx, mut inner_rx) = mpsc::channel::<RunEvent>(128);
+                let outer_tx = tx.clone();
+                let mut run_for_park = run;
+                let forwarder = tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            maybe_event = inner_rx.recv() => {
+                                let Some(event) = maybe_event else { break };
+                                if let RunEvent::ToolCalls { calls } = &event {
+                                    if let Some(mut r) = run_for_park.take() {
+                                        r.messages.push(crate::types::ChatMessage {
+                                            role: crate::types::MessageRole::Assistant,
+                                            content: None,
+                                            reasoning_content: None,
+                                            tool_calls: Some(calls.clone()),
+                                            tool_call_id: None,
+                                            name: None,
+                                        });
+                                        r.park(calls[0].id.clone(), calls[0].function.name.clone());
+                                        r.pending_tool_call_ids = calls.iter().map(|c| c.id.clone()).collect();
+                                        bridge_for_park.runs().write().await.insert(r.id.clone(), r);
+                                        tracing::info!(event = "run.parked.from_stream", calls = calls.len());
+                                    }
+                                }
+                                if outer_tx.send(event).await.is_err() {
+                                    break;
+                                }
+                            }
+                            // Client disconnected: drop inner_rx so the provider
+                            // sees its channel close and kills the CLI child.
+                            _ = outer_tx.closed() => break,
+                        }
+                    }
+                    // FIX-RUN-COMPLETE: a stream Run without tool_calls must be
+                    // marked terminal, otherwise it stays Running forever and
+                    // blocks max_runs_per_key for every later request.
+                    if let Some(mut r) = run_for_park {
+                        let final_messages = r.messages.clone();
+                        r.complete(final_messages);
+                        bridge_for_park.runs().write().await.insert(r.id.clone(), r);
+                    }
+                });
+
+                let stream_result = provider.send_chat_completion_stream(&model, req, inner_tx).await;
+                if let Err(err) = stream_result {
                     tracing::error!("provider stream error: {}", err);
                     let _ = tx
                         .send(RunEvent::Error {
@@ -1304,6 +1475,7 @@ impl ServiceRegistry {
                 } else {
                     tracing::info!("provider stream DONE: model='{}'", model);
                 }
+                let _ = forwarder.await;
             });
         } else {
             let _ = tx
