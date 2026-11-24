@@ -1307,7 +1307,14 @@ struct PersistentSession {
 
 /// Maximum number of persistent provider sessions kept alive. Beyond this,
 /// the oldest sessions are closed to bound memory / child-process count.
-const MAX_PERSISTENT_SESSIONS: usize = 8;
+/// Override with AGENTGATE_MAX_PERSISTENT_SESSIONS for constrained nodes.
+fn max_persistent_sessions() -> usize {
+    std::env::var("AGENTGATE_MAX_PERSISTENT_SESSIONS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(4)
+}
 
 pub struct BridgeCliProvider {
     pub id: String,
@@ -1387,7 +1394,7 @@ impl BridgeCliProvider {
                 let _ = old.session.close().await;
             }
         }
-        while sessions.len() >= MAX_PERSISTENT_SESSIONS {
+        while sessions.len() >= max_persistent_sessions() {
             let oldest = sessions
                 .iter()
                 .min_by_key(|(_, p)| p.created_at)
@@ -1399,6 +1406,52 @@ impl BridgeCliProvider {
             }
         }
         sessions.insert(id, PersistentSession { session, created_at: now });
+    }
+
+    /// Sweep expired keep_alive sessions. Called periodically and on store.
+    async fn sweep_expired_persistent_sessions(&self) {
+        let mut sessions = self.persistent_sessions.write().await;
+        let now = std::time::Instant::now();
+        let expired: Vec<String> = sessions
+            .iter()
+            .filter(|(_, p)| now.duration_since(p.created_at) >= self.keep_alive_ttl)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in expired {
+            if let Some(old) = sessions.remove(&key) {
+                tracing::info!(target: "bridge.session", session = %key, "sweeping expired keep_alive session");
+                let _ = old.session.close().await;
+            }
+        }
+    }
+
+    fn spawn_persistent_session_sweeper(
+        persistent_sessions: std::sync::Weak<RwLock<HashMap<String, PersistentSession>>>,
+        keep_alive_ttl: std::time::Duration,
+    ) {
+        let interval_secs = std::cmp::max(30, (keep_alive_ttl.as_secs() / 2).max(30));
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+                loop {
+                    ticker.tick().await;
+                    let Some(sessions_arc) = persistent_sessions.upgrade() else { break; };
+                    let now = std::time::Instant::now();
+                    let mut sessions = sessions_arc.write().await;
+                    let expired: Vec<String> = sessions
+                        .iter()
+                        .filter(|(_, p)| now.duration_since(p.created_at) >= keep_alive_ttl)
+                        .map(|(k, _)| k.clone())
+                        .collect();
+                    for key in expired {
+                        if let Some(old) = sessions.remove(&key) {
+                            tracing::info!(target: "bridge.session", session = %key, "sweeping expired keep_alive session (bg)");
+                            let _ = old.session.close().await;
+                        }
+                    }
+                }
+            });
+        }
     }
 
     pub fn new(
@@ -1430,6 +1483,11 @@ impl BridgeCliProvider {
         let max_prompt_chars = limits.max_prompt_chars;
         let max_result_bytes = limits.max_result_bytes;
 
+        let keep_alive_ttl = parse_keep_alive_ttl(config.keep_alive.as_deref());
+        let persistent_sessions = Arc::new(RwLock::new(HashMap::new()));
+        if config.keep_alive.is_some() {
+            Self::spawn_persistent_session_sweeper(Arc::downgrade(&persistent_sessions), keep_alive_ttl);
+        }
         Some(Self {
             id: config.id,
             bin: config.bin.clone(),
@@ -1438,12 +1496,12 @@ impl BridgeCliProvider {
             factory,
             bridge,
             keep_alive: config.keep_alive.clone(),
-            keep_alive_ttl: parse_keep_alive_ttl(config.keep_alive.as_deref()),
+            keep_alive_ttl,
             prompt_tools_fallback: config.prompt_tools_fallback,
             transport: config.transport.clone(),
             isolation_config,
             limits,
-            persistent_sessions: Arc::new(RwLock::new(HashMap::new())),
+            persistent_sessions,
             persistent_opencode_sessions: Arc::new(RwLock::new(HashMap::new())),
             max_prompt_chars,
             max_result_bytes,
@@ -2374,7 +2432,7 @@ impl CliProvider for BridgeCliProvider {
                         let _ = old.session.close().await;
                     }
                 }
-                while sessions.len() >= MAX_PERSISTENT_SESSIONS {
+                while sessions.len() >= max_persistent_sessions() {
                     let oldest = sessions
                         .iter()
                         .min_by_key(|(_, p)| p.created_at)
