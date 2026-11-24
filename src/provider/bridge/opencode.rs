@@ -227,7 +227,9 @@ impl OpenCodeSession {
 
         // Resolve binary on Windows where PATHEXT matters (rust Command does not
         // search extensions automatically).
-        let mut binary = profile.binary.clone();
+        let mut binary = crate::provider::opencode_binary_from_env()
+            .or_else(|| Some(profile.binary.clone()))
+            .unwrap_or_else(|| "opencode".to_string());
         #[cfg(target_os = "windows")]
         {
             if !std::path::Path::new(&binary).exists() {

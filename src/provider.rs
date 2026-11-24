@@ -6,6 +6,72 @@ use crate::types::ChatCompletionRequest;
 use anyhow::Context;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::OnceLock;
+
+static PENDING_CLI_SESSIONS: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+static PENDING_CLI_BUSY: OnceLock<RwLock<HashMap<String, std::time::Instant>>> = OnceLock::new();
+static ACTIVE_CLI_SESSIONS: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+
+fn pending_sessions() -> &'static RwLock<HashMap<String, String>> {
+    PENDING_CLI_SESSIONS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+fn pending_busy() -> &'static RwLock<HashMap<String, std::time::Instant>> {
+    PENDING_CLI_BUSY.get_or_init(|| RwLock::new(HashMap::new()))
+}
+fn active_sessions() -> &'static RwLock<HashMap<String, String>> {
+    ACTIVE_CLI_SESSIONS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+pub async fn register_pending_cli_session(agentgate_session_id: &str, cli_session_id: Option<String>) {
+    let mut map = pending_sessions().write().await;
+    match cli_session_id {
+        Some(sid) if !sid.trim().is_empty() => {
+            map.insert(agentgate_session_id.to_string(), sid);
+        }
+        _ => {
+            map.remove(agentgate_session_id);
+        }
+    }
+}
+
+pub async fn mark_bridge_cli_session_busy(agentgate_session_id: &str) {
+    pending_busy().write().await.insert(agentgate_session_id.to_string(), std::time::Instant::now());
+}
+
+pub async fn mark_bridge_cli_session_active(agentgate_session_id: &str) {
+    if let Some(sid) = pending_sessions().read().await.get(agentgate_session_id).cloned() {
+        if !sid.trim().is_empty() {
+            active_sessions().write().await.insert(agentgate_session_id.to_string(), sid);
+        }
+    }
+    pending_busy().write().await.remove(agentgate_session_id);
+}
+
+pub async fn activate_busy_cli_session(agentgate_session_id: &str) {
+    mark_bridge_cli_session_active(agentgate_session_id).await;
+}
+
+pub async fn stored_chain_cli_session_id_for_next_turn(agentgate_session_id: &str) -> Option<String> {
+    if let Some(sid) = active_sessions().read().await.get(agentgate_session_id).cloned() {
+        if !sid.trim().is_empty() {
+            return Some(sid);
+        }
+    }
+    if let Some(sid) = pending_sessions().read().await.get(agentgate_session_id).cloned() {
+        if !sid.trim().is_empty() {
+            return Some(sid);
+        }
+    }
+    None
+}
+
+pub async fn stored_chain_cli_session_id() -> Option<String> {
+    stored_chain_cli_session_id_for_next_turn("").await
+}
+
+pub(crate) fn opencode_binary_from_env() -> Option<String> {
+    std::env::var("OPENCODE_BIN").ok().filter(|s| !s.trim().is_empty())
+}
 use std::process::Command;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
@@ -1620,7 +1686,10 @@ impl CliProvider for BridgeCliProvider {
         } else {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
-            let tool_schemas = self.tool_schemas_from_request(&request);
+            let mut tool_schemas = self.tool_schemas_from_request(&request);
+            // Inject agentgate built-in discovery tools (check_mcp_local, skill_local)
+            // so the model can inspect local MCP servers and skills.
+            tool_schemas.extend(crate::bridge::agentgate_builtin_tools());
             // Determine max_inject based on model type: free models (beam-free, etc.) get limited injection
               // to avoid provider.free-limit errors, while paid models get full tool access.
               let is_free_model = model.to_lowercase().ends_with("-free");
@@ -1752,11 +1821,27 @@ impl CliProvider for BridgeCliProvider {
         };
 
         // FIX-SESSION: capture the CLI conversation session id (e.g. `ses_...`)
-        // reported by the adapter and remember it for cross-turn resume via
-        // `--session`. Only for keep_alive flows (fresh sessions are transient).
+        // reported by the adapter. Only for keep_alive flows (fresh sessions are transient).
         let captured_cli_sid = session.cli_session_id();
         if keep_alive {
             self.remember_opencode_session(&session_id, captured_cli_sid.clone()).await;
+        }
+
+        // NEW: store CLI conversation session id in the global chain map keyed
+        // by the request's agentgate session_id (used to pass --session to the
+        // CLI on subsequent turns of the same chain).
+        let chain_agentgate_sid = request.session_id.clone().unwrap_or_else(|| session_id.clone());
+        register_pending_cli_session(&chain_agentgate_sid, captured_cli_sid.clone()).await;
+        if let Some(sid) = captured_cli_sid.as_ref() {
+            tracing::info!(event = "bridge.cli_session.captured", provider_id = %self.id,
+                 session_id = %session_id, cli_session_id = %sid,
+                 tool_calls = output.tool_calls.as_ref().is_some_and(|c| !c.is_empty()),
+                 "Captured CLI conversation session id");
+        }
+        if !output.tool_calls.as_ref().is_some_and(|c| !c.is_empty()) {
+            mark_bridge_cli_session_active(&chain_agentgate_sid).await;
+            tracing::info!(event = "bridge.cli_session.committed", provider_id = %self.id,
+                 session_id = %chain_agentgate_sid, "CLI session marked active for next turn");
         }
 
         // PR-S4: opencode continuation (capability-gated). If tool_calls returned and session can
@@ -1858,7 +1943,10 @@ impl CliProvider for BridgeCliProvider {
         } else {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
-            let tool_schemas = self.tool_schemas_from_request(&request);
+            let mut tool_schemas = self.tool_schemas_from_request(&request);
+            // Inject agentgate built-in discovery tools (check_mcp_local, skill_local)
+            // so the model can inspect local MCP servers and skills.
+            tool_schemas.extend(crate::bridge::agentgate_builtin_tools());
             // Determine max_inject based on model type: free models (beam-free, etc.) get limited injection
               // to avoid provider.free-limit errors, while paid models get full tool access.
               let is_free_model = model.to_lowercase().ends_with("-free");

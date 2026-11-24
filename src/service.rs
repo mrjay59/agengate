@@ -11,9 +11,23 @@ use crate::types::{AddProviderRequest, ChatCompletionRequest, ChatCompletionResp
 use futures::future::join_all;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, mpsc, Semaphore};
+use tokio::sync::{RwLock, mpsc, Mutex, Semaphore};
 use tracing::info;
+
+static GLOBAL_DONE_TIMEOUT_BLOCK: AtomicU64 = AtomicU64::new(0);
+static GLOBAL_DONE_TIMEOUT_COUNT: AtomicU64 = AtomicU64::new(0);
+static GLOBAL_ABORTED_DONE_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
+static GLOBAL_BLOCK_SHOWN: AtomicU64 = AtomicU64::new(0);
+
+fn ms_since_epoch() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+fn parse_turn_index(messages: &[crate::types::ChatMessage]) -> u32 {
+    messages.iter().filter(|m| m.role == crate::types::MessageRole::Tool).count() as u32 + 1
+}
 
 /// Serial-mode gate (spec §10.3, `parallel_tool_calls: false`): keep at most
 /// one tool call per assistant turn. The client then executes them one at a
@@ -119,6 +133,14 @@ pub struct ServiceRegistry {
     /// Applied in the HTTP handler only for non-stream requests so SSE streams
     /// and valid tool loops are never cut (B7).
     pub request_timeout: Duration,
+    /// Deadline (seconds) applied to each *turn's* provider call. With
+    /// `AGENTGATE_BRIDGE_TIMEOUT_SECS=120`, a final turn that ends in text or a
+    /// bridge `done` event was previously never even noticed past 120 s, so a
+    /// hung CLI produced "bridge turn timed out" on a perfectly healthy final
+    /// turn. Timeout turns still trigger the replay-retry ladder.
+    pub turn_timeout: Duration,
+    /// Exponential backoff (ms) between timeout-retry attempts.
+    pub timeout_retry_backoff_ms: Vec<u64>,
     /// Deadline for the first provider event on a streaming request
     /// (`[defaults] first_token_timeout_secs`, default 120 s).
     pub first_token_timeout: Duration,
@@ -162,6 +184,8 @@ impl ServiceRegistry {
                 defaults.first_token_timeout_secs
             }),
             request_timeout: Duration::from_secs(600),
+            turn_timeout: Duration::from_secs(120),
+            timeout_retry_backoff_ms: vec![50, 100, 200, 400, 800],
             model_cache: RwLock::new(HashMap::new()),
             model_negative_cache: RwLock::new(HashMap::new()),
             model_cache_ttl: Duration::from_secs(if defaults.model_cache_ttl_secs == 0 {
@@ -202,6 +226,22 @@ impl ServiceRegistry {
         &self.reasoning
     }
 
+    /// Wire the per-turn timeout applied to each provider call (bridge path).
+    pub fn with_turn_timeout(mut self, timeout: Duration) -> Self {
+        if timeout.as_secs() > 0 {
+            self.turn_timeout = timeout;
+        }
+        self
+    }
+
+    /// Wire the exponential backoff ladder (ms) used between bridge-turn retries.
+    pub fn with_timeout_retry_backoff_ms(mut self, backoff_ms: Vec<u64>) -> Self {
+        if !backoff_ms.is_empty() {
+            self.timeout_retry_backoff_ms = backoff_ms;
+        }
+        self
+    }
+    
     /// Select CLI bridge for Ollama instead of the HTTP native proxy.
     pub fn with_ollama_cli_mode(mut self, enabled: bool) -> Self {
         self.ollama_cli_mode = enabled;
@@ -806,12 +846,17 @@ impl ServiceRegistry {
             }
             crate::run::Classified::Replay { history } => {
                 tracing::warn!(event = "replay_fallback", provider = %provider_id, reason = "unknown_tool_call_id");
+                request.agentgate_multi_turn = false;
                 self.replay_run(&provider_id, history, request).await
             }
             crate::run::Classified::NewBridge { tools } => {
-                self.new_bridge_run(&provider_id, tools, request).await
+                let turn_index = parse_turn_index(&request.messages);
+                let t0 = Instant::now();
+                let gateway_deadline = Some(tokio::time::Instant::now() + self.request_timeout);
+                self.new_bridge_run(&provider_id, tools, request, Some(turn_index), t0, gateway_deadline).await
             }
             crate::run::Classified::NewChatOnly => {
+                request.agentgate_multi_turn = false;
                 self.chat_only_run(&provider_id, request).await
             }
         }
@@ -827,16 +872,15 @@ impl ServiceRegistry {
     async fn call_provider_native_with(&self, provider: Arc<dyn CliProvider + Send + Sync>, request: ChatCompletionRequest) -> Result<ChatCompletionResponse, AppError> {
         let model = request.model.clone();
         let provider_id = provider.id().to_string();
-        tracing::info!(model, provider_id = %provider_id, "call_provider_native_with: calling send_chat_completion");
-        // Fail fast: a CLI agent can hang forever (missing model → auto-pull,
-        // upstream quota error that never terminates the process, broken
-        // version). Without a deadline the HTTP client waits until its own
-        // timeout and reports "no response". Bound the whole call instead.
         let timeout_secs = provider_call_timeout_secs();
+        let gateway_deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+        tracing::info!(model, provider_id = %provider_id, timeout_secs, "call_provider_native_with: calling send_chat_completion");
+        let _ = &gateway_deadline;
         // FIX-QUOTA-RETRY: retry only quota/free-limit failures with bounded
         // exponential backoff (1s, 2s, 4s). Other errors still fail fast.
         const MAX_QUOTA_RETRIES: u32 = 3;
         let mut attempt: u32 = 0;
+        let mut request = request;
         let response = loop {
             let call = tokio::time::timeout(
                 std::time::Duration::from_secs(timeout_secs),
@@ -857,7 +901,49 @@ impl ServiceRegistry {
                     tokio::time::sleep(delay).await;
                     continue;
                 }
-                Ok(result) => break result.map_err(provider_error_to_app_error)?,
+                Ok(result) => {
+                // If a native provider signals the tail was processed and more
+                // turns remain, reprocess them before returning to the caller
+                // so no logical turn is skipped.
+                if request.agentgate_native_tail_reprocess {
+                    if let Ok(crate::provider::ProviderResponse::Success {
+                        ref content,
+                        ref tool_calls,
+                        ..
+                    }) = result {
+                        info!(event = "native.tail_reprocess", provider_id = %provider_id,
+                             model = %model, has_tools = tool_calls.as_ref().is_some_and(|t| !t.is_empty()),
+                             content_len = content.len());
+                        let mut reprocessed_request = request.clone();
+                        reprocessed_request.messages.push(crate::types::ChatMessage {
+                            role: crate::types::MessageRole::Assistant,
+                            content: Some(content.clone()),
+                            reasoning_content: None,
+                            tool_calls: tool_calls.clone(),
+                            tool_call_id: None,
+                            name: None,
+                        });
+                        if let Some(ids) = &tool_calls {
+                            if !ids.is_empty() {
+                                for id in ids.iter().map(|c| c.id.clone()) {
+                                    reprocessed_request.messages.push(crate::types::ChatMessage {
+                                        role: crate::types::MessageRole::Tool,
+                                        content: Some(String::new()),
+                                        reasoning_content: None,
+                                        tool_calls: None,
+                                        tool_call_id: Some(id),
+                                        name: None,
+                                    });
+                                }
+                            }
+                        }
+                        reprocessed_request.agentgate_native_tail_reprocess = false;
+                        request = reprocessed_request;
+                        continue;
+                    }
+                }
+                break result.map_err(provider_error_to_app_error)?
+            }
                 Err(_) => {
                     crate::metrics::init_metrics().record_cli_exit(false);
                     tracing::error!(model, provider_id = %provider_id, timeout_secs, "call_provider_native_with: provider call timed out");
@@ -990,8 +1076,30 @@ impl ServiceRegistry {
                     },
                 };
                 if let Some(cont) = cont {
-                    let timeout = crate::provider::bridge_turn_timeout();
-                    match tokio::time::timeout(timeout, cont.rx).await {
+                    // Budget the continuation wait against the caller's HTTP
+                    // deadline as well as the bridge turn timeout, so a
+                    // healthy-but-slow final answer isn't cut by the gateway
+                    // while a real stall still triggers replay fallback.
+                    let gateway_now = tokio::time::Instant::now();
+                    let gateway_deadline: Option<tokio::time::Instant> = Some(gateway_now + self.request_timeout);
+                    let effective_timeout = if request.agentgate_multi_turn {
+                        let from_gateway = gateway_deadline.map(|d| {
+                            if d <= gateway_now { std::time::Duration::ZERO } else { d.saturating_duration_since(gateway_now) }
+                        }).unwrap_or_else(crate::provider::bridge_turn_timeout);
+                        if from_gateway < crate::provider::bridge_turn_timeout() { from_gateway } else { crate::provider::bridge_turn_timeout() }
+                    } else {
+                        let full = crate::provider::bridge_turn_timeout();
+                        gateway_deadline.map(|d| {
+                            if d <= gateway_now { full } else { d.saturating_duration_since(gateway_now).max(full) }
+                        }).unwrap_or(full)
+                    };
+                    let turn_index = parse_turn_index(&request.messages);
+                    let turn_t0 = Instant::now();
+                    info!(event = "resume.continuation_timeout_config", provider_id = %provider_id,
+                         run_id = %run_id, turn_index, timeout_ms = effective_timeout.as_millis(),
+                         multi_turn = request.agentgate_multi_turn);
+                    let retry_guard = Duration::from_secs(1);
+                    match tokio::time::timeout(effective_timeout + retry_guard, cont.rx).await {
                         Ok(Ok(out)) => {
                             tracing::info!(event = "resume.live_continuation.ok", provider = %provider_id, run_id = %run_id);
                             let has_tool_calls = out.tool_calls.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
@@ -1058,7 +1166,10 @@ impl ServiceRegistry {
             // PR-S5: rotate session on replay fallback (avoid stale CLI/persistent session reuse).
             request.session_id = None;
             request.agentgate_run_id = None;
-            self.new_bridge_run(provider_id, tools, request).await
+            let turn_index = parse_turn_index(&request.messages);
+            let turn_t0 = std::time::Instant::now();
+            let replay_deadline = Some(tokio::time::Instant::now() + self.request_timeout);
+            self.new_bridge_run(provider_id, tools, request, Some(turn_index), turn_t0, replay_deadline).await
         } else {
             let reason = session_lost_reason.unwrap_or("parked_session_lost");
             // Best-effort: release any MCP holds for these tool_call_ids to avoid leaks on replay.
@@ -1069,8 +1180,11 @@ impl ServiceRegistry {
             // PR-S5: rotate session on replay fallback.
             request.session_id = None;
             request.agentgate_run_id = None;
+            let turn_index = parse_turn_index(&request.messages);
+            let turn_t0 = std::time::Instant::now();
+            let replay_deadline = Some(tokio::time::Instant::now() + self.request_timeout);
             let tools = request.tools.take().unwrap_or_default();
-            self.new_bridge_run(provider_id, tools, request).await
+            self.new_bridge_run(provider_id, tools, request, Some(turn_index), turn_t0, replay_deadline).await
         }
     }
 
@@ -1087,11 +1201,14 @@ impl ServiceRegistry {
         // PR-S5: force fresh session/CLI context on replay.
         new_request.session_id = None;
         new_request.agentgate_run_id = None;
+        let turn_index = parse_turn_index(&new_request.messages);
+        let t0 = Instant::now();
+        let gateway_deadline = Some(tokio::time::Instant::now() + self.request_timeout);
         let tools = new_request.tools.take().unwrap_or_default();
-        self.new_bridge_run(provider_id, tools, new_request).await
+        self.new_bridge_run(provider_id, tools, new_request, Some(turn_index), t0, gateway_deadline).await
     }
 
-    async fn new_bridge_run(&self, provider_id: &str, tools: Vec<crate::types::ToolDefinition>, request: ChatCompletionRequest) -> Result<ChatCompletionResponse, AppError> {
+    async fn new_bridge_run(&self, provider_id: &str, tools: Vec<crate::types::ToolDefinition>, mut request: ChatCompletionRequest, turn_index: Option<u32>, turn_t0: std::time::Instant, gateway_deadline: Option<tokio::time::Instant>) -> Result<ChatCompletionResponse, AppError> {
         // Acquire provider semaphore to limit concurrent runs per provider (spec §10.3)
         let permit = self.acquire_provider_permit(provider_id).await?;
 
@@ -1120,6 +1237,29 @@ impl ServiceRegistry {
             }
         };
 
+        // Compute the effective timeout for this provider call. Bridge CLI agents
+        // that emit no tool calls should complete within a bounded turn window;
+        // budget the caller's time instead of polling until the HTTP timeout.
+        let effective_timeout: Duration = {
+            let full = crate::provider::bridge_turn_timeout();
+            let from_gateway = gateway_deadline
+                .map(|d| d.saturating_duration_since(tokio::time::Instant::now()))
+                .unwrap_or(full);
+            if request.tools.as_ref().is_some_and(|t| !t.is_empty()) && !request.agentgate_multi_turn {
+                // Turn-1 with tools is supposed to park in this session; poll
+                // until CLI exit (after turn timeout). Poll interval keeps the
+                // first tool-call event surfacing early.
+                full
+            } else {
+                // Replayed/chain/resumed contexts, or tool-free final turns:
+                // the CLI must emit text/done promptly after turn timeout.
+                if from_gateway < full { from_gateway } else { full }
+            }
+        };
+        info!(event = "bridge.call_timeout", provider_id = %provider_id, model = %request.model,
+             turn_index, timeout_ms = effective_timeout.as_millis(), tools = request.tools.as_ref().is_some_and(|t| !t.is_empty()),
+             multi_turn = request.agentgate_multi_turn);
+
         // Spawn bridge process and get the single response (carries tool_calls)
         let providers = self.providers.read().await;
         let provider = providers.get(provider_id).ok_or(AppError::ProviderNotFound(provider_id.to_string()))?;
@@ -1131,38 +1271,89 @@ impl ServiceRegistry {
         // responses on the bridge path too (native path is handled above).
         const MAX_QUOTA_RETRIES: u32 = 3;
         let mut quota_attempt: u32 = 0;
-        let response = loop {
-            match provider.send_chat_completion(&model, req_for_provider.clone()).await {
-                Ok(crate::provider::ProviderResponse::Error(ref e))
-                    if is_quota_error(e) && quota_attempt < MAX_QUOTA_RETRIES =>
+        let mut effective_timeout = effective_timeout;
+        let mut response: Result<crate::provider::ProviderResponse, anyhow::Error>;
+        loop {
+            // Wall-clock guard for the provider call: polling a hung bridge
+            // child can keep a healthy final turn blocked past the configured
+            // bridge timeout. Retry ladder stays available for real timeouts.
+            if quota_attempt > 0 {
+                let now = tokio::time::Instant::now();
+                let call_budget = effective_timeout + self.turn_timeout;
+                match tokio::time::timeout(call_budget, provider.send_chat_completion(&model, req_for_provider.clone()))
+                    .await
                 {
-                    quota_attempt += 1;
-                    let delay = Duration::from_secs(1u64 << (quota_attempt - 1));
-                    tracing::warn!(
-                        provider_id, model = %model, attempt = quota_attempt,
-                        delay_ms = delay.as_millis(),
-                        "bridge quota error, retrying with backoff"
-                    );
-                    tokio::time::sleep(delay).await;
-                    continue;
-                }
-                Ok(r) => break r,
-                Err(e) => {
-                    // Mark the run Failed so the sweeper reaps it after call_ttl
-                    // instead of leaving it Pending until max_run_lifetime.
-                    if let Some(mut r) = run {
-                        r.fail(e.to_string());
-                        self.bridge.runs().write().await.insert(r.id.clone(), r);
+                    Ok(res) => response = res,
+                    Err(_) => {
+                        info!(event = "bridge.timeout.retry_guard_fired", provider_id = %provider_id, model = %model,
+                             turn_index, attempt = quota_attempt, timeout_ms = call_budget.as_millis());
+                        if let Some(mut r) = run.clone() {
+                            r.fail(format!("provider_error: bridge turn timed out (retry guard, attempt={})", quota_attempt + 1));
+                            let _ = self.bridge.runs().write().await.insert(r.id.clone(), r);
+                        }
+                        if quota_attempt >= MAX_QUOTA_RETRIES {
+                            return Err(AppError::ProviderError(format!(
+                                "provider_error: bridge turn timed out after {} attempts (retry guard)",
+                                quota_attempt + 1
+                            )));
+                        }
+                        let backoff_ms = self.timeout_retry_backoff_ms
+                            .get((quota_attempt as usize).saturating_sub(1))
+                            .copied()
+                            .unwrap_or(400);
+                        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                        continue;
                     }
-                    drop(providers);
-                    return Err(provider_error_to_app_error(e));
+                }
+            } else {
+                match tokio::time::timeout(effective_timeout + self.turn_timeout, provider.send_chat_completion(&model, req_for_provider.clone())).await {
+                    Ok(res) => response = res,
+                    Err(_) => {
+                        info!(event = "bridge.timeout.retry_guard_fired", provider_id = %provider_id, model = %model,
+                             turn_index, attempt = 1, timeout_ms = (effective_timeout + self.turn_timeout).as_millis());
+                        if let Some(mut r) = run.clone() {
+                            r.fail("provider_error: bridge turn timed out (retry guard, attempt=1)".to_string());
+                            let _ = self.bridge.runs().write().await.insert(r.id.clone(), r);
+                        }
+                        quota_attempt = 1;
+                        let backoff_ms = self.timeout_retry_backoff_ms
+                            .get(0)
+                            .copied()
+                            .unwrap_or(400);
+                        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                        continue;
+                    }
                 }
             }
-        };
-        drop(providers);
+            if turn_t0.elapsed() > effective_timeout {
+                // The provider call succeeded but the polling budget was crossed
+                // while it ran; the caller is still owed the result, so report
+                // success rather than "timed out" for a healthy final turn.
+                tracing::warn!(event = "bridge.timeout.budget_crossed_after_ok", provider_id = %provider_id,
+                               model = %model, turn_index, elapsed_ms = turn_t0.elapsed().as_millis(),
+                               timeout_ms = effective_timeout.as_millis(), "Provider succeeded after polling budget; reporting success");
+                effective_timeout = effective_timeout.saturating_add(self.turn_timeout);
+            }
+            break;
+        }
 
         match response {
-            crate::provider::ProviderResponse::Success { content: text, reasoning, mut tool_calls, session_id, mcp_session_id } => {
+            Ok(crate::provider::ProviderResponse::Success { content: text, reasoning, mut tool_calls, session_id, mcp_session_id, .. }) => {
+                // CLI-provided session id for the next turn (auto-resume chain).
+                let next_cli_sid = session_id.clone().filter(|s| !s.is_empty());
+                let has_tool_calls = tool_calls.as_ref().map(|c| !c.is_empty()).unwrap_or(false);
+                if let Some(sid) = next_cli_sid.clone() {
+                    if has_tool_calls {
+                        crate::provider::register_pending_cli_session(&req_for_provider.session_id.clone().unwrap_or_default(), Some(sid.clone())).await;
+                        info!(event = "bridge.cli_session.captured", provider_id = %provider_id,
+                             cli_session_id = %sid, "CLI session captured for next turn (tool calls pending)");
+                    } else {
+                        crate::provider::register_pending_cli_session(&req_for_provider.session_id.clone().unwrap_or_default(), Some(sid.clone())).await;
+                        crate::provider::mark_bridge_cli_session_active(&req_for_provider.session_id.clone().unwrap_or_default()).await;
+                        info!(event = "bridge.cli_session.committed", provider_id = %provider_id,
+                             cli_session_id = %sid, "CLI session committed for next turn (final turn)");
+                    }
+                }
                 crate::metrics::init_metrics().record_cli_exit(true);
                 crate::metrics::init_metrics().record_provider_call(provider_id, &request.model, true);
                 let has_tool_calls = tool_calls.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
@@ -1186,6 +1377,9 @@ impl ServiceRegistry {
                 }
 
                 let tool_calls = batched_tool_calls;
+                // Serial-mode: only the first tool call is returned as pending.
+                let has_tool_calls = tool_calls.as_ref().map(|c| !c.is_empty()).unwrap_or(false);
+                let final_tool_calls_for_response = tool_calls.clone();
 
                 // Persist the assistant turn (including tool_calls) so a follow-up
                 // request carrying role:"tool" can be classified as Resume.
@@ -1256,7 +1450,7 @@ impl ServiceRegistry {
                     session_id,
                 })
             }
-            crate::provider::ProviderResponse::Error(e) => {
+            Ok(crate::provider::ProviderResponse::Error(e)) => {
                 crate::metrics::init_metrics().record_cli_exit(false);
                 crate::metrics::init_metrics().record_provider_call(provider_id, &request.model, false);
                 record_quota_error_if_needed(&e, provider_id, &request.model);
@@ -1266,6 +1460,17 @@ impl ServiceRegistry {
                     self.bridge.runs().write().await.insert(r.id.clone(), r);
                 }
                 Err(AppError::ProviderError(e))
+            }
+            Err(e) => {
+                crate::metrics::init_metrics().record_cli_exit(false);
+                crate::metrics::init_metrics().record_provider_call(provider_id, &request.model, false);
+                let msg = e.to_string();
+                record_quota_error_if_needed(&msg, provider_id, &request.model);
+                if let Some(mut r) = run {
+                    r.fail(msg.clone());
+                    self.bridge.runs().write().await.insert(r.id.clone(), r);
+                }
+                Err(AppError::ProviderError(msg))
             }
         }
     }

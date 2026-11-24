@@ -1002,6 +1002,16 @@ async fn bridge_mcp(
                 ).into_response();
             }
 
+            // FIX-BUILTIN-TOOLS: agentgate built-in discovery tools (check_mcp_local,
+            // skill_local) are executed locally inside the gateway and never forwarded
+            // to the client. Return their result directly without holding/parking.
+            if normalized_name == "check_mcp_local" || normalized_name == "skill_local" {
+                let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                let result = crate::bridge::execute_builtin_tool(&normalized_name, &args).await;
+                let resp = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result });
+                return Json(resp).into_response();
+            }
+
             let mcp_id = id.as_ref().map(|v| v.to_string()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             info!(event = "bridge.call_held", mcp_req_id = %mcp_id, session = %session.session_id, tool = %normalized_name);
             let hold_start = Instant::now();

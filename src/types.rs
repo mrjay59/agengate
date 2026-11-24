@@ -82,6 +82,10 @@ pub struct ChatCompletionRequest {
     /// Internal: Agentgate run_id for continuation/park correlation (PR-S4). Not part of OpenAI API.
     #[serde(skip)]
     pub agentgate_run_id: Option<String>,
+    /// Internal: Whether the client deliberately asked for multi-turn context via
+    /// explicit tool results in the history (`Resume`/`Replay`/`NewChatOnly`).
+    #[serde(skip)]
+    pub agentgate_multi_turn: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -122,6 +126,17 @@ pub struct ChatCompletionRequest {
     /// is reused across requests with the same session_id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Internal: Set by `call_provider_native_with` when a native provider call
+    /// (e.g. Ollama HTTP proxy) already returned output that may represent a
+    /// multi-turn chain with tool results. Reprocesses this turn and re-issues
+    /// an additional request carrying the updated history before returning to
+    /// the caller (added to satisfy "the agent may not skip logical turns").
+    #[serde(skip)]
+    pub agentgate_native_tail_reprocess: bool,
+    /// Internal: CLI-specific conversation session id captured from tool-call
+    /// responses, used to resume the same CLI conversation on subsequent turns.
+    #[serde(skip)]
+    pub cli_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

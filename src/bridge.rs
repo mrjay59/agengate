@@ -1435,6 +1435,448 @@ pub async fn generate_tool_schemas() -> Result<Vec<ToolSchema>> {
     Ok(Vec::new())
 }
 
+/// AgentGate built-in tool schemas: discovery tools that run locally
+/// within the gateway (not forwarded to the client). These let the model
+/// inspect what MCP servers and skills are available in the local
+/// environment, mirroring AionUI's "list MCP" capability.
+pub fn agentgate_builtin_tools() -> Vec<ToolSchema> {
+    vec![
+        ToolSchema {
+            name: "check_mcp_local".to_string(),
+            description: "List locally configured MCP servers. Reads opencode.json (`mcp`/`mcpServers`) and AionUI's backend database, returning each server's name, transport type, tool count/names, enabled flag and connection status. Use `filter` to narrow a long list. Use this to discover which MCP servers exist on this machine before searching for their tools.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "filter": {
+                        "type": "string",
+                        "description": "Optional substring filter to match MCP server names"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of servers to return (default 50, max 500)"
+                    }
+                },
+                "required": []
+            }),
+            provider: "agentgate".to_string(),
+            workspace: "default".to_string(),
+        },
+        ToolSchema {
+            name: "skill_local".to_string(),
+            description: "List locally available skills. Scans agent skill directories (~/.agents/skills, ~/.config/opencode/skills, project skills) and AionUI's skills database, returning each skill's name, description, source and path. Use `filter` to narrow the list (the database can hold hundreds of skills).".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "filter": {
+                        "type": "string",
+                        "description": "Optional substring filter to match skill names"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of skills to return (default 50, max 500)"
+                    }
+                },
+                "required": []
+            }),
+            provider: "agentgate".to_string(),
+            workspace: "default".to_string(),
+        },
+    ]
+}
+
+/// Candidate locations for AionUI's SQLite backend database.
+/// AionUI is an Electron app, so its live data lives under the platform
+/// config/data dir (e.g. `%APPDATA%\AionUi\aionui` on Windows), not the
+/// legacy `~/data` path that older builds used.
+fn aionui_db_candidates() -> Vec<std::path::PathBuf> {
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+
+    for base in [dirs::config_dir(), dirs::data_dir()].into_iter().flatten() {
+        paths.push(base.join("AionUi").join("aionui").join("aionui-backend.db"));
+        paths.push(base.join("aionui").join("aionui-backend.db"));
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        paths.push(home.join(".config").join("AionUi").join("aionui").join("aionui-backend.db"));
+        paths.push(home.join(".config").join("aionui").join("aionui-backend.db"));
+        paths.push(home.join(".local").join("share").join("AionUi").join("aionui").join("aionui-backend.db"));
+        paths.push(home.join(".local").join("share").join("aionui").join("aionui-backend.db"));
+        // Legacy location written by older AionUI builds.
+        paths.push(home.join("data").join("aionui-backend.db"));
+    }
+    paths.push(std::path::PathBuf::from("data").join("aionui-backend.db"));
+
+    // De-duplicate while preserving order.
+    let mut seen = std::collections::HashSet::new();
+    paths.retain(|p| seen.insert(p.clone()));
+    paths
+}
+
+/// Extract a human-readable description from a SKILL.md file.
+/// Skills declare `description:` in YAML frontmatter; older files may only
+/// start with a Markdown heading, so fall back to the first body line.
+fn extract_skill_description(content: &str) -> String {
+    let mut lines = content.lines().peekable();
+
+    if lines.peek().map(|l| l.trim()) == Some("---") {
+        lines.next();
+        let mut in_block = false;
+        let mut block_lines: Vec<String> = Vec::new();
+        let mut desc = String::new();
+
+        for line in lines {
+            let trimmed = line.trim_end();
+            if trimmed.trim() == "---" {
+                break;
+            }
+            if in_block {
+                if line.starts_with(' ') || line.starts_with('\t') {
+                    block_lines.push(trimmed.trim().to_string());
+                    continue;
+                }
+                break;
+            }
+            if let Some(rest) = trimmed.strip_prefix("description:") {
+                let value = rest.trim();
+                if matches!(value, "|" | ">" | "|-" | ">-" | "|+" | ">+") {
+                    in_block = true;
+                } else {
+                    desc = value.trim_matches(|c| c == '"' || c == '\'').to_string();
+                }
+            }
+        }
+
+        if !block_lines.is_empty() {
+            desc = block_lines.join(" ");
+        }
+        if !desc.trim().is_empty() {
+            return desc.trim().to_string();
+        }
+    }
+
+    for line in content.lines() {
+        let t = line.trim();
+        if t.is_empty() || t == "---" || t.starts_with('#') {
+            continue;
+        }
+        return t.to_string();
+    }
+    String::new()
+}
+
+/// Execute an agentgate built-in tool locally and return its result as JSON text.
+pub async fn execute_builtin_tool(name: &str, args: &serde_json::Value) -> serde_json::Value {
+    let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("");
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(50)
+        .clamp(1, 500) as usize;
+
+    match name {
+        "check_mcp_local" => {
+            let mut servers: Vec<serde_json::Value> = Vec::new();
+            // Read opencode.json from standard locations
+            let mut config_paths = Vec::new();
+            if let Some(home) = dirs::home_dir() {
+                config_paths.push(home.join(".config").join("opencode").join("opencode.json"));
+            }
+            if let Some(cfg) = dirs::config_dir() {
+                config_paths.push(cfg.join("opencode").join("opencode.json"));
+            }
+            // Also check current directory
+            config_paths.push(std::path::PathBuf::from("opencode.json"));
+
+            let mut found = false;
+            for path in &config_paths {
+                if path.exists() {
+                    found = true;
+                    if let Ok(content) = tokio::fs::read_to_string(path).await {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                            // opencode uses "mcp"; other clients use "mcpServers".
+                            let mcp_value = json.get("mcp").or_else(|| json.get("mcpServers"));
+                            if let Some(mcp) = mcp_value {
+                                if let Some(obj) = mcp.as_object() {
+                                    // Some configs wrap entries under "servers",
+                                    // e.g. {"mcp": {"servers": {"vps": {...}}}}.
+                                    let entries: Vec<(&String, &serde_json::Value)> = obj
+                                        .iter()
+                                        .flat_map(|(k, v)| {
+                                            if (k == "servers" || k == "mcpServers") && v.is_object() {
+                                                v.as_object()
+                                                    .map(|m| m.iter().collect::<Vec<_>>())
+                                                    .unwrap_or_default()
+                                            } else {
+                                                vec![(k, v)]
+                                            }
+                                        })
+                                        .collect();
+
+                                    for (name, cfg) in entries {
+                                        if !filter.is_empty() && !name.to_lowercase().contains(&filter.to_lowercase()) {
+                                            continue;
+                                        }
+                                        let mut entry = serde_json::json!({
+                                            "name": name,
+                                            "type": cfg.get("type").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                                            "enabled": cfg.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+                                        });
+                                        if let Some(url) = cfg.get("url").and_then(|v| v.as_str()) {
+                                            entry["url"] = serde_json::json!(url);
+                                        }
+                                        if let Some(cmd) = cfg.get("command") {
+                                            entry["command"] = cmd.clone();
+                                        }
+                                        if let Some(env) = cfg.get("environment") {
+                                            entry["environment"] = env.clone();
+                                        }
+                                        servers.push(entry);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    break; // Use first found config
+                }
+            }
+
+            // A missing opencode.json is not fatal: AionUI's DB may still list
+            // MCP servers, so defer the "nothing found" decision until after
+            // both sources have been scanned.
+
+            // Also check AionUI's MCP database (mcp_servers table).
+            // Several backend DBs can exist (including a stale legacy one), so
+            // scan every candidate and merge results instead of stopping at the
+            // first existing file.
+            let aionui_db_paths = aionui_db_candidates();
+            let mut aionui_dbs_used: Vec<String> = Vec::new();
+            let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            for db_path in &aionui_db_paths {
+                if !db_path.exists() {
+                    continue;
+                }
+                let conn = match rusqlite::Connection::open_with_flags(
+                    db_path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                ) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let mut stmt = match conn.prepare(
+                    "SELECT name, description, enabled, transport_type, tools, last_test_status FROM mcp_servers WHERE deleted_at IS NULL",
+                ) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let rows = stmt.query_map([], |row| {
+                    // Summarize the cached tool list: the raw JSON can be huge
+                    // (tens of KB per server) and would bloat model context.
+                    let tools_raw: Option<String> = row.get(4).unwrap_or(None);
+                    let tool_names: Vec<String> = tools_raw
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                        .and_then(|v| v.as_array().cloned())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|t| {
+                                    t.get("name")
+                                        .and_then(|n| n.as_str())
+                                        .map(|s| s.to_string())
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Ok(serde_json::json!({
+                        "name": row.get::<_, String>(0).unwrap_or_default(),
+                        "description": row.get::<_, Option<String>>(1).unwrap_or(None),
+                        "enabled": row.get::<_, i32>(2).unwrap_or(1) != 0,
+                        "transport_type": row.get::<_, Option<String>>(3).unwrap_or(None),
+                        "tool_count": tool_names.len(),
+                        "tool_names": tool_names,
+                        "last_test_status": row.get::<_, Option<String>>(5).unwrap_or(None),
+                        "source": "aionui",
+                        "db_path": db_path.to_string_lossy().to_string()
+                    }))
+                });
+                if let Ok(rows) = rows {
+                    for row in rows.flatten() {
+                        let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        if !filter.is_empty() && !name.to_lowercase().contains(&filter.to_lowercase()) {
+                            continue;
+                        }
+                        if !seen_names.insert(name) {
+                            continue;
+                        }
+                        servers.push(row);
+                    }
+                    aionui_dbs_used.push(db_path.to_string_lossy().to_string());
+                }
+            }
+
+            servers.sort_by(|a, b| {
+                let ae = a.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                let be = b.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                be.cmp(&ae).then_with(|| {
+                    let an = a.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                    let bn = b.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                    an.cmp(&bn)
+                })
+            });
+            let matched = servers.len();
+            servers.truncate(limit);
+            let returned = servers.len();
+
+            if !found && aionui_dbs_used.is_empty() {
+                return serde_json::json!({
+                    "content": [{ "type": "text", "text": serde_json::to_string_pretty(&serde_json::json!({
+                        "config_found": false,
+                        "error": "No opencode.json or AionUI backend database found",
+                        "searched_paths": config_paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                        "aionui_db_paths": aionui_db_paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>()
+                    })).unwrap_or_default() }],
+                    "isError": true
+                });
+            }
+
+            let result = serde_json::json!({
+                "config_found": found,
+                "sources_checked": ["opencode.json", "aionui-backend.db"],
+                "aionui_db_paths": aionui_dbs_used,
+                "mcp_servers": servers,
+                "total": matched,
+                "returned": returned,
+                "truncated": matched > returned
+            });
+            serde_json::json!({
+                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default() }],
+                "isError": false
+            })
+        }
+        "skill_local" => {
+            let mut skills: Vec<serde_json::Value> = Vec::new();
+            let mut skill_dirs = Vec::new();
+            if let Some(home) = dirs::home_dir() {
+                skill_dirs.push(home.join(".agents").join("skills"));
+                skill_dirs.push(home.join(".config").join("opencode").join("skills"));
+                skill_dirs.push(home.join(".config").join("opencode").join("skill"));
+                skill_dirs.push(home.join(".opencode").join("skills"));
+            }
+            // Also check current directory
+            skill_dirs.push(std::path::PathBuf::from("skills"));
+            skill_dirs.push(std::path::PathBuf::from(".opencode").join("skills"));
+
+            for dir in &skill_dirs {
+                if !dir.exists() {
+                    continue;
+                }
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            let skill_md = path.join("SKILL.md");
+                            if skill_md.exists() {
+                                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                if !filter.is_empty() && !name.to_lowercase().contains(&filter.to_lowercase()) {
+                                    continue;
+                                }
+                                let description = std::fs::read_to_string(&skill_md)
+                                    .map(|content| extract_skill_description(&content))
+                                    .unwrap_or_default();
+                                skills.push(serde_json::json!({
+                                    "name": name,
+                                    "path": skill_md.to_string_lossy().to_string(),
+                                    "description": description,
+                                    "source_dir": dir.to_string_lossy().to_string()
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Also check AionUI's skills database. Scan every candidate DB and
+            // merge results so a stale legacy DB cannot mask the active one.
+            let aionui_db_paths = aionui_db_candidates();
+            let mut aionui_dbs_used: Vec<String> = Vec::new();
+            let mut seen_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            for db_path in &aionui_db_paths {
+                if !db_path.exists() {
+                    continue;
+                }
+                let conn = match rusqlite::Connection::open_with_flags(
+                    db_path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                ) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let mut stmt = match conn.prepare(
+                    "SELECT name, description, path, source, enabled FROM skills WHERE deleted_at IS NULL",
+                ) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let rows = stmt.query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "name": row.get::<_, String>(0).unwrap_or_default(),
+                        "description": row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default(),
+                        "path": row.get::<_, Option<String>>(2).unwrap_or(None).unwrap_or_default(),
+                        "source": row.get::<_, Option<String>>(3).unwrap_or(None).unwrap_or_else(|| "aionui".to_string()),
+                        "enabled": row.get::<_, i32>(4).unwrap_or(1) != 0,
+                        "origin": "aionui_db",
+                        "db_path": db_path.to_string_lossy().to_string()
+                    }))
+                });
+                if let Ok(rows) = rows {
+                    for row in rows.flatten() {
+                        let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        if !filter.is_empty() && !name.to_lowercase().contains(&filter.to_lowercase()) {
+                            continue;
+                        }
+                        if !seen_skills.insert(name) {
+                            continue;
+                        }
+                        skills.push(row);
+                    }
+                    aionui_dbs_used.push(db_path.to_string_lossy().to_string());
+                }
+            }
+
+            skills.sort_by(|a, b| {
+                let ae = a.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                let be = b.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                be.cmp(&ae).then_with(|| {
+                    let an = a.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                    let bn = b.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                    an.cmp(&bn)
+                })
+            });
+            let matched = skills.len();
+            skills.truncate(limit);
+            let returned = skills.len();
+
+            let result = serde_json::json!({
+                "skill_directories_scanned": skill_dirs.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                "aionui_db_paths": aionui_dbs_used,
+                "skills": skills,
+                "total": matched,
+                "returned": returned,
+                "truncated": matched > returned
+            });
+            serde_json::json!({
+                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default() }],
+                "isError": false
+            })
+        }
+        _ => serde_json::json!({
+            "content": [{ "type": "text", "text": format!("Unknown builtin tool: {}", name) }],
+            "isError": true
+        }),
+    }
+}
+
 /// Merge tool schemas with client-provided tools (for Bridge mode)
 pub fn merge_tool_schemas(
     agentgate_schemas: Vec<ToolSchema>,
@@ -1779,3 +2221,63 @@ impl Run {
 
 
 
+
+#[cfg(test)]
+mod builtin_tests {
+    use super::*;
+
+    #[test]
+    fn skill_description_parses_yaml_frontmatter() {
+        assert_eq!(
+            extract_skill_description("---\nname: demo\ndescription: Widget builder.\n---\n\n# Demo\nbody"),
+            "Widget builder."
+        );
+        assert_eq!(
+            extract_skill_description("---\ndescription: \"Quoted text\"\n---\n"),
+            "Quoted text"
+        );
+    }
+
+    #[test]
+    fn skill_description_parses_block_scalar() {
+        assert_eq!(
+            extract_skill_description("---\nname: demo\ndescription: |\n  First line.\n  Second line.\n---\n"),
+            "First line. Second line."
+        );
+    }
+
+    #[test]
+    fn skill_description_falls_back_to_first_body_line() {
+        assert_eq!(
+            extract_skill_description("# Heading\n\nPlain description line.\n"),
+            "Plain description line."
+        );
+    }
+
+    #[test]
+    fn skill_description_never_returns_frontmatter_marker() {
+        assert_ne!(
+            extract_skill_description("---\nname: demo\ndescription: Real description\n---\n"),
+            "---"
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_tools_return_valid_json_payload() {
+        for tool in ["check_mcp_local", "skill_local"] {
+            let out = execute_builtin_tool(tool, &serde_json::json!({ "filter": "zz-no-such-entry" })).await;
+            let text = out
+                .pointer("/content/0/text")
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| panic!("{tool}: missing text payload"));
+            let parsed: serde_json::Value =
+                serde_json::from_str(text).unwrap_or_else(|_| panic!("{tool}: payload is not JSON"));
+            let is_error = out.get("isError").and_then(|v| v.as_bool()).unwrap_or(false);
+            if is_error {
+                assert_eq!(parsed.get("config_found").and_then(|v| v.as_bool()), Some(false));
+            } else {
+                assert_eq!(parsed.get("total").and_then(|v| v.as_u64()), Some(0), "{tool}: filter should match nothing");
+            }
+        }
+    }
+}
