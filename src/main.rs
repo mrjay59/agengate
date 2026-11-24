@@ -105,7 +105,15 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(
             |_| "agentgate=debug,axum=debug,tower_http=debug".into(),
         ))
-        .with(tracing_subscriber::fmt::layer())
+        // FIX-MCP-STDOUT: never write logs / ANSI escapes to stdout. The
+        // `mcp-shim` subcommand uses stdout as a JSON-RPC pipe; any log line
+        // (or ESC sequence) there corrupts the MCP stream and makes opencode
+        // close the connection, which surfaces as a stuck tool turn.
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_ansi(false),
+        )
         .init();
 
     let args = Args::parse();
