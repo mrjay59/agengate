@@ -102,4 +102,4 @@ default_workspace = "default"
 # Model alias mapping handled in code defaults (service.rs resolve_model_alias)
 # FIX-TEST-MODEL: 9router is an upstream aggregator, not a local provider, so
 # map its model names to a locally registered free model for testing.
-model_aliases = { "9router/free_forever" = "agg/opencode/beam-free", "agg/9router/free_forever" = "agg/opencode/beam-free", "free_forever" = "agg/opencode/beam-free" }
+model_aliases = { "9router/free_forever" = "opencode/9router/free-forever", "agg/9router/free_forever" = "opencode/9router/free-forever", "free_forever" = "opencode/9router/free-forever" }

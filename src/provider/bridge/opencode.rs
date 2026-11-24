@@ -271,9 +271,17 @@ impl OpenCodeSession {
         let opencode_session_id: Option<String> = resume_cli_sid
             .clone()
             .or_else(|| session_id.starts_with("ses").then(|| session_id.clone()));
+        // Normalize agentgate-namespaced custom provider models for opencode CLI:
+        // "opencode/9router/free-forever" -> "9router/free-forever", but keep
+        // "opencode/beam-free" as-is.
+        let cli_model = if let Some(rest) = config.model.strip_prefix("opencode/") {
+            if rest.contains('/') { rest.to_string() } else { config.model.clone() }
+        } else {
+            config.model.clone()
+        };
         if has_run {
             cmd.arg("run");
-            cmd.arg("--model").arg(&config.model);
+            cmd.arg("--model").arg(&cli_model);
             if let Some(sid) = &opencode_session_id {
                 cmd.arg("--session").arg(sid);
             }
@@ -285,7 +293,7 @@ impl OpenCodeSession {
                 }
             }
         } else {
-            cmd.arg("run").arg("--model").arg(&config.model);
+            cmd.arg("run").arg("--model").arg(&cli_model);
             if let Some(sid) = &opencode_session_id {
                 cmd.arg("--session").arg(sid);
             }
@@ -1149,7 +1157,21 @@ impl BridgeSession for OpenCodeSession {
                     .await;
             }
             let _ = child.kill().await;
-            let _ = child.wait().await;
+            // Bound wait so close() cannot hang on a stuck child/MCP tree.
+            match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                Ok(_) => {}
+                Err(_) => {
+                    #[cfg(unix)]
+                    if let Some(pid) = pid {
+                        let _ = tokio::process::Command::new("kill")
+                            .args(["-KILL", &format!("-{}", pid)])
+                            .output()
+                            .await;
+                    }
+                    let _ = child.start_kill();
+                    let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+                }
+            }
             info!(target: "bridge.opencode.close", session_id = %self.session_id, child_pid = ?pid, "opencode child reaped");
         }
 
@@ -1248,13 +1270,28 @@ impl BridgeSession for OpenCodeSession {
         // an MCP server is attached). Once stdout reached EOF the turn is over.
         let mut child_guard = self.child.lock().await;
         if let Some(mut child) = child_guard.take() {
+            let pid = child.id();
             match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
                 Ok(Ok(status)) => debug!("OpenCode process exited with status: {}", status),
                 Ok(Err(e)) => warn!("OpenCode process wait failed: {}", e),
                 Err(_) => {
                     warn!("OpenCode process did not exit after stdout EOF; killing it");
+                    #[cfg(unix)]
+                    if let Some(pid) = pid {
+                        let _ = tokio::process::Command::new("kill").args(["-TERM", &format!("-{}", pid)]).output().await;
+                    }
                     let _ = child.kill().await;
-                    let _ = child.wait().await;
+                    match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                        Ok(_) => {}
+                        Err(_) => {
+                            #[cfg(unix)]
+                            if let Some(pid) = pid {
+                                let _ = tokio::process::Command::new("kill").args(["-KILL", &format!("-{}", pid)]).output().await;
+                            }
+                            let _ = child.start_kill();
+                            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+                        }
+                    }
                 }
             }
         }
@@ -1358,13 +1395,28 @@ impl BridgeSession for OpenCodeSession {
         // Wait for process exit (CLI should exit after sending continuation output)
         let mut child_guard = self.child.lock().await;
         if let Some(mut child) = child_guard.take() {
+            let pid = child.id();
             match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
                 Ok(Ok(status)) => debug!("OpenCode process exited with status: {}", status),
                 Ok(Err(e)) => warn!("OpenCode process wait failed: {}", e),
                 Err(_) => {
                     warn!("OpenCode process did not exit after continuation; killing it");
+                    #[cfg(unix)]
+                    if let Some(pid) = pid {
+                        let _ = tokio::process::Command::new("kill").args(["-TERM", &format!("-{}", pid)]).output().await;
+                    }
                     let _ = child.kill().await;
-                    let _ = child.wait().await;
+                    match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                        Ok(_) => {}
+                        Err(_) => {
+                            #[cfg(unix)]
+                            if let Some(pid) = pid {
+                                let _ = tokio::process::Command::new("kill").args(["-KILL", &format!("-{}", pid)]).output().await;
+                            }
+                            let _ = child.start_kill();
+                            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+                        }
+                    }
                 }
             }
         }

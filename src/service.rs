@@ -81,6 +81,15 @@ fn is_quota_error(e: &str) -> bool {
         || lower.contains("\"status\":429")
 }
 
+fn is_opencode_quota_failover_candidate(provider_id: &str, model: &str) -> bool {
+    let is_opencode = provider_id == "opencode"
+        || model.starts_with("opencode/")
+        || model.starts_with("agg/opencode/");
+    let already_failover = model.contains("9router/free-forever")
+        || model.contains("9router/free_forever");
+    is_opencode && !already_failover
+}
+
 fn record_quota_error_if_needed(e: &str, provider: &str, model: &str) {
     if is_quota_error(e) {
         crate::metrics::init_metrics().record_quota_error(provider, model);
@@ -870,7 +879,7 @@ impl ServiceRegistry {
     }
 
     async fn call_provider_native_with(&self, provider: Arc<dyn CliProvider + Send + Sync>, request: ChatCompletionRequest) -> Result<ChatCompletionResponse, AppError> {
-        let model = request.model.clone();
+        let mut model = request.model.clone();
         let provider_id = provider.id().to_string();
         let timeout_secs = provider_call_timeout_secs();
         let gateway_deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
@@ -881,6 +890,7 @@ impl ServiceRegistry {
         const MAX_QUOTA_RETRIES: u32 = 3;
         let mut attempt: u32 = 0;
         let mut request = request;
+        let mut failed_over_to_9router = false;
         let response = loop {
             let call = tokio::time::timeout(
                 std::time::Duration::from_secs(timeout_secs),
@@ -888,6 +898,22 @@ impl ServiceRegistry {
             )
             .await;
             match call {
+                Ok(Ok(crate::provider::ProviderResponse::Error(ref e)))
+                    if is_quota_error(e) && !failed_over_to_9router && is_opencode_quota_failover_candidate(&provider_id, &model) =>
+                {
+                    failed_over_to_9router = true;
+                    let from_model = model.clone();
+                    model = "opencode/9router/free-forever".to_string();
+                    request.model = model.clone();
+                    tracing::warn!(
+                        provider_id = %provider_id,
+                        from_model = %from_model,
+                        to_model = %model,
+                        "quota/free-limit on opencode model; failing over to 9router/free-forever"
+                    );
+                    crate::metrics::init_metrics().record_quota_error(&provider_id, &from_model);
+                    continue;
+                }
                 Ok(Ok(crate::provider::ProviderResponse::Error(ref e)))
                     if is_quota_error(e) && attempt < MAX_QUOTA_RETRIES =>
                 {
@@ -1264,13 +1290,14 @@ impl ServiceRegistry {
         let providers = self.providers.read().await;
         let provider = providers.get(provider_id).ok_or(AppError::ProviderNotFound(provider_id.to_string()))?;
         tracing::info!(provider_id = %provider_id, provider_type = %std::any::type_name_of_val(&*provider), is_bridge = %provider.is_bridge(), "new_bridge_run: calling provider");
-        let model = request.model.clone();
+        let mut model = request.model.clone();
         let mut req_for_provider = request.clone();
         req_for_provider.agentgate_run_id = run.as_ref().map(|r| r.id.clone());
         // FIX-QUOTA-RETRY: bounded exponential backoff for quota/free-limit
         // responses on the bridge path too (native path is handled above).
         const MAX_QUOTA_RETRIES: u32 = 3;
         let mut quota_attempt: u32 = 0;
+        let mut failed_over_to_9router = false;
         let mut effective_timeout = effective_timeout;
         let mut response: Result<crate::provider::ProviderResponse, anyhow::Error>;
         loop {
@@ -1333,6 +1360,28 @@ impl ServiceRegistry {
                                model = %model, turn_index, elapsed_ms = turn_t0.elapsed().as_millis(),
                                timeout_ms = effective_timeout.as_millis(), "Provider succeeded after polling budget; reporting success");
                 effective_timeout = effective_timeout.saturating_add(self.turn_timeout);
+            }
+            // Failover opencode quota/limit errors to 9router/free-forever once.
+            let quota_err = match &response {
+                Ok(crate::provider::ProviderResponse::Error(e)) if is_quota_error(e) => Some(e.clone()),
+                Err(e) if is_quota_error(&e.to_string()) => Some(e.to_string()),
+                _ => None,
+            };
+            if let Some(qe) = quota_err {
+                if !failed_over_to_9router && is_opencode_quota_failover_candidate(provider_id, &model) {
+                    failed_over_to_9router = true;
+                    let from_model = model.clone();
+                    model = "opencode/9router/free-forever".to_string();
+                    req_for_provider.model = model.clone();
+                    tracing::warn!(
+                        provider_id = %provider_id,
+                        from_model = %from_model,
+                        to_model = %model,
+                        "quota/free-limit on opencode bridge model; failing over to 9router/free-forever"
+                    );
+                    crate::metrics::init_metrics().record_quota_error(provider_id, &from_model);
+                    continue;
+                }
             }
             break;
         }
