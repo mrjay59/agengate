@@ -1116,6 +1116,21 @@ impl BridgeSession for OpenCodeSession {
         let mut child_guard = self.child.lock().await;
         if let Some(mut child) = child_guard.take() {
             let pid = child.id();
+            let my_pid = std::process::id();
+            let my_pgid = {
+                #[cfg(unix)]
+                { unsafe { libc::getpgrp() as u32 } }
+                #[cfg(not(unix))]
+                { 0u32 }
+            };
+            info!(
+                target: "bridge.opencode.close",
+                session_id = %self.session_id,
+                child_pid = ?pid,
+                agentgate_pid = my_pid,
+                agentgate_pgid = my_pgid,
+                "closing opencode session"
+            );
             // Drop stdin explicitly before killing to ensure clean pipe closure if process still reads
             drop(self.stdin.lock().await.take());
             #[cfg(windows)]
@@ -1135,10 +1150,12 @@ impl BridgeSession for OpenCodeSession {
             }
             let _ = child.kill().await;
             let _ = child.wait().await;
+            info!(target: "bridge.opencode.close", session_id = %self.session_id, child_pid = ?pid, "opencode child reaped");
         }
 
         // Clean up workdir
         let _ = fs::remove_dir_all(&self.workdir).await;
+        info!(target: "bridge.opencode.close", session_id = %self.session_id, "workdir cleaned");
 
         info!("OpenCode session {} closed", self.session_id);
         Ok(())

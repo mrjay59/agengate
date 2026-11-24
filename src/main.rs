@@ -267,7 +267,12 @@ async fn main() -> Result<()> {
             }
             tracing::info!("Starting server on {}", bind_addr);
             let listener = TcpListener::bind(bind_addr.as_str()).await?;
-            axum::serve(listener, app).await?;
+            let serve_result = axum::serve(listener, app).await;
+            match &serve_result {
+                Ok(()) => tracing::error!("axum::serve returned Ok(()) unexpectedly - server loop exited"),
+                Err(e) => tracing::error!(error = %e, "axum::serve returned error"),
+            }
+            serve_result?;
         }
         Commands::Models { provider } => {
             let mut registry = ServiceRegistry::with_config(

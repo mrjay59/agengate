@@ -2091,7 +2091,11 @@ impl CliProvider for BridgeCliProvider {
                             Ok((sid, value)) if sid == session_key => {
                                 if merged_tx.send(value).is_err() { break; }
                             }
-                            Ok(_) | Err(_) => {}
+                            Ok(_) => {}
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!(target: "bridge.stream", skipped = n, "tool event broadcast lagged");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         },
                     }
                 }
