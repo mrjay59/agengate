@@ -1620,7 +1620,10 @@ impl CliProvider for BridgeCliProvider {
         } else {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
-            let tool_schemas = self.tool_schemas_from_request(&request);
+            let mut tool_schemas = self.tool_schemas_from_request(&request);
+            // Inject agentgate built-in discovery tools (check_mcp_local, skill_local)
+            // so the model can inspect local MCP servers and skills.
+            tool_schemas.extend(crate::bridge::agentgate_builtin_tools());
             // Determine max_inject based on model type: free models (beam-free, etc.) get limited injection
               // to avoid provider.free-limit errors, while paid models get full tool access.
               let is_free_model = model.to_lowercase().ends_with("-free");
@@ -1858,7 +1861,10 @@ impl CliProvider for BridgeCliProvider {
         } else {
             // Register the MCP session before spawning so /_bridge/mcp/{id} is known
             // to the bridge server (spec §9.2).
-            let tool_schemas = self.tool_schemas_from_request(&request);
+            let mut tool_schemas = self.tool_schemas_from_request(&request);
+            // Inject agentgate built-in discovery tools (check_mcp_local, skill_local)
+            // so the model can inspect local MCP servers and skills.
+            tool_schemas.extend(crate::bridge::agentgate_builtin_tools());
             // Determine max_inject based on model type: free models (beam-free, etc.) get limited injection
               // to avoid provider.free-limit errors, while paid models get full tool access.
               let is_free_model = model.to_lowercase().ends_with("-free");
