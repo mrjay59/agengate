@@ -1435,6 +1435,184 @@ pub async fn generate_tool_schemas() -> Result<Vec<ToolSchema>> {
     Ok(Vec::new())
 }
 
+/// AgentGate built-in tool schemas: discovery tools that run locally
+/// within the gateway (not forwarded to the client). These let the model
+/// inspect what MCP servers and skills are available in the local
+/// environment, mirroring AionUI's "list MCP" capability.
+pub fn agentgate_builtin_tools() -> Vec<ToolSchema> {
+    vec![
+        ToolSchema {
+            name: "check_mcp_local".to_string(),
+            description: "List all locally configured MCP servers from the opencode configuration file (~/.config/opencode/opencode.json). Returns server names, types, URLs, and enabled status. Use this to discover what MCP servers are available locally before searching for tools.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "filter": {
+                        "type": "string",
+                        "description": "Optional substring filter to match MCP server names"
+                    }
+                },
+                "required": []
+            }),
+            provider: "agentgate".to_string(),
+            workspace: "default".to_string(),
+        },
+        ToolSchema {
+            name: "skill_local".to_string(),
+            description: "List all locally available skills from skills directories (~/.agents/skills/, ~/.config/opencode/skills/, ~/.config/opencode/skill/). Returns skill names, descriptions, and file paths. Use this to discover what skills are available locally.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "filter": {
+                        "type": "string",
+                        "description": "Optional substring filter to match skill names"
+                    }
+                },
+                "required": []
+            }),
+            provider: "agentgate".to_string(),
+            workspace: "default".to_string(),
+        },
+    ]
+}
+
+/// Execute an agentgate built-in tool locally and return its result as JSON text.
+pub async fn execute_builtin_tool(name: &str, args: &serde_json::Value) -> serde_json::Value {
+    let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("");
+
+    match name {
+        "check_mcp_local" => {
+            let mut servers: Vec<serde_json::Value> = Vec::new();
+            // Read opencode.json from standard locations
+            let mut config_paths = Vec::new();
+            if let Some(home) = dirs::home_dir() {
+                config_paths.push(home.join(".config").join("opencode").join("opencode.json"));
+            }
+            if let Some(cfg) = dirs::config_dir() {
+                config_paths.push(cfg.join("opencode").join("opencode.json"));
+            }
+            // Also check current directory
+            config_paths.push(std::path::PathBuf::from("opencode.json"));
+
+            let mut found = false;
+            for path in &config_paths {
+                if path.exists() {
+                    found = true;
+                    if let Ok(content) = tokio::fs::read_to_string(path).await {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Some(mcp) = json.get("mcp") {
+                                if let Some(obj) = mcp.as_object() {
+                                    for (name, cfg) in obj {
+                                        if !filter.is_empty() && !name.to_lowercase().contains(&filter.to_lowercase()) {
+                                            continue;
+                                        }
+                                        let mut entry = serde_json::json!({
+                                            "name": name,
+                                            "type": cfg.get("type").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                                            "enabled": cfg.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+                                        });
+                                        if let Some(url) = cfg.get("url").and_then(|v| v.as_str()) {
+                                            entry["url"] = serde_json::json!(url);
+                                        }
+                                        if let Some(cmd) = cfg.get("command") {
+                                            entry["command"] = cmd.clone();
+                                        }
+                                        if let Some(env) = cfg.get("environment") {
+                                            entry["environment"] = env.clone();
+                                        }
+                                        servers.push(entry);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    break; // Use first found config
+                }
+            }
+
+            if !found {
+                return serde_json::json!({
+                    "content": [{ "type": "text", "text": serde_json::to_string_pretty(&serde_json::json!({
+                        "error": "opencode.json not found",
+                        "searched_paths": config_paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>()
+                    })).unwrap_or_default() }],
+                    "isError": true
+                });
+            }
+
+            let result = serde_json::json!({
+                "config_found": true,
+                "mcp_servers": servers,
+                "total": servers.len()
+            });
+            serde_json::json!({
+                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default() }],
+                "isError": false
+            })
+        }
+        "skill_local" => {
+            let mut skills: Vec<serde_json::Value> = Vec::new();
+            let mut skill_dirs = Vec::new();
+            if let Some(home) = dirs::home_dir() {
+                skill_dirs.push(home.join(".agents").join("skills"));
+                skill_dirs.push(home.join(".config").join("opencode").join("skills"));
+                skill_dirs.push(home.join(".config").join("opencode").join("skill"));
+                skill_dirs.push(home.join(".opencode").join("skills"));
+            }
+            // Also check current directory
+            skill_dirs.push(std::path::PathBuf::from("skills"));
+            skill_dirs.push(std::path::PathBuf::from(".opencode").join("skills"));
+
+            for dir in &skill_dirs {
+                if !dir.exists() {
+                    continue;
+                }
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            let skill_md = path.join("SKILL.md");
+                            if skill_md.exists() {
+                                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                if !filter.is_empty() && !name.to_lowercase().contains(&filter.to_lowercase()) {
+                                    continue;
+                                }
+                                let mut description = String::new();
+                                if let Ok(content) = std::fs::read_to_string(&skill_md) {
+                                    // Extract first line as description
+                                    if let Some(first_line) = content.lines().next() {
+                                        description = first_line.trim_start_matches('#').trim().to_string();
+                                    }
+                                }
+                                skills.push(serde_json::json!({
+                                    "name": name,
+                                    "path": skill_md.to_string_lossy().to_string(),
+                                    "description": description,
+                                    "source_dir": dir.to_string_lossy().to_string()
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+
+            let result = serde_json::json!({
+                "skill_directories_scanned": skill_dirs.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                "skills": skills,
+                "total": skills.len()
+            });
+            serde_json::json!({
+                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default() }],
+                "isError": false
+            })
+        }
+        _ => serde_json::json!({
+            "content": [{ "type": "text", "text": format!("Unknown builtin tool: {}", name) }],
+            "isError": true
+        }),
+    }
+}
+
 /// Merge tool schemas with client-provided tools (for Bridge mode)
 pub fn merge_tool_schemas(
     agentgate_schemas: Vec<ToolSchema>,
