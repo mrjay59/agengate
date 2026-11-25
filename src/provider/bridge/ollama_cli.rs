@@ -12,9 +12,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Child;
 use tokio::sync::Mutex;
+use tracing::warn;
 
 /// Ollama CLI bridge provider (V2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,6 +265,11 @@ impl OllamaCliSession {
     async fn spawn_process(&self) -> Result<Child> {
         let args = build_run_args(&self.profile, &self.config);
         let mut cmd = tokio::process::Command::new(&self.profile.binary);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         cmd.args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -331,8 +338,28 @@ impl BridgeSession for OllamaCliSession {
                     .output()
                     .await;
             }
+            #[cfg(unix)]
+            if let Some(pid) = pid {
+                let _ = tokio::process::Command::new("kill")
+                    .args(["-TERM", &format!("-{}", pid)])
+                    .output()
+                    .await;
+            }
             let _ = child.kill().await;
-            let _ = child.wait().await;
+            match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                Ok(_) => {}
+                Err(_) => {
+                    #[cfg(unix)]
+                    if let Some(pid) = pid {
+                        let _ = tokio::process::Command::new("kill")
+                            .args(["-KILL", &format!("-{}", pid)])
+                            .output()
+                            .await;
+                    }
+                    let _ = child.start_kill();
+                    let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+                }
+            }
         }
         Ok(())
     }
@@ -386,7 +413,29 @@ impl BridgeSession for OllamaCliSession {
         }
 
         // Wait for process to exit
-        let _ = child.wait().await;
+        let pid = child.id();
+        match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+            Ok(_) => {}
+            Err(_) => {
+                warn!("Ollama CLI process did not exit; killing it");
+                #[cfg(unix)]
+                if let Some(pid) = pid {
+                    let _ = tokio::process::Command::new("kill").args(["-TERM", &format!("-{}", pid)]).output().await;
+                }
+                let _ = child.kill().await;
+                match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                    Ok(_) => {}
+                    Err(_) => {
+                        #[cfg(unix)]
+                        if let Some(pid) = pid {
+                            let _ = tokio::process::Command::new("kill").args(["-KILL", &format!("-{}", pid)]).output().await;
+                        }
+                        let _ = child.start_kill();
+                        let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+                    }
+                }
+            }
+        }
 
         // Get stderr
         let err_output = stderr_task.await.unwrap_or_default();

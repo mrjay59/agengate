@@ -265,6 +265,11 @@ impl GeminiSession {
         // P1-AUDIT seq3: Resolve binary with .cmd/PATHEXT handling on Windows.
         let resolved_binary = resolve_binary_path(&profile.binary)?;
         let mut cmd = Command::new(resolved_binary);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
         cmd.args(&profile.args);
 
         // Resume Gemini conversation session via `--session-id` if we have a captured
@@ -644,8 +649,28 @@ impl BridgeSession for GeminiSession {
                     .output()
                     .await;
             }
+            #[cfg(unix)]
+            if let Some(pid) = pid {
+                let _ = tokio::process::Command::new("kill")
+                    .args(["-TERM", &format!("-{}", pid)])
+                    .output()
+                    .await;
+            }
             let _ = child.kill().await;
-            let _ = child.wait().await;
+            match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                Ok(_) => {}
+                Err(_) => {
+                    #[cfg(unix)]
+                    if let Some(pid) = pid {
+                        let _ = tokio::process::Command::new("kill")
+                            .args(["-KILL", &format!("-{}", pid)])
+                            .output()
+                            .await;
+                    }
+                    let _ = child.start_kill();
+                    let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+                }
+            }
         }
 
         let _ = fs::remove_dir_all(&self.workdir).await;
@@ -722,8 +747,30 @@ impl BridgeSession for GeminiSession {
         // Wait for process to exit
         let mut child_guard = self.child.lock().await;
         if let Some(mut child) = child_guard.take() {
-            let status = child.wait().await?;
-            debug!("Gemini process exited with status: {}", status);
+            let pid = child.id();
+            match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
+                Ok(Ok(status)) => debug!("Gemini process exited with status: {}", status),
+                Ok(Err(e)) => warn!("Gemini process wait failed: {}", e),
+                Err(_) => {
+                    warn!("Gemini process did not exit; killing it");
+                    #[cfg(unix)]
+                    if let Some(pid) = pid {
+                        let _ = tokio::process::Command::new("kill").args(["-TERM", &format!("-{}", pid)]).output().await;
+                    }
+                    let _ = child.kill().await;
+                    match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                        Ok(_) => {}
+                        Err(_) => {
+                            #[cfg(unix)]
+                            if let Some(pid) = pid {
+                                let _ = tokio::process::Command::new("kill").args(["-KILL", &format!("-{}", pid)]).output().await;
+                            }
+                            let _ = child.start_kill();
+                            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+                        }
+                    }
+                }
+            }
         }
 
         Ok(SessionOutput {
