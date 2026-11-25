@@ -53,6 +53,15 @@ fn parser_usage_event() {
 }
 
 #[test]
+fn parser_ignores_deactivated_event() {
+    // opencode CLI emits a "deactivated" event on clean shutdown.
+    // This should be silently ignored (no RunEvent emitted).
+    let mut p = ReasoningParser::new();
+    let out = p.parse_line(r#"{"type":"deactivated","message":"Deactivated successfully"}"#);
+    assert!(out.is_empty(), "deactivated event should produce no RunEvents: {:?}", out);
+}
+
+#[test]
 fn coalescer_flushes_reasoning_before_text() {
     let mut c = Coalescer::with_settings(CoalescerSettings {
         flush_ms: 60_000,

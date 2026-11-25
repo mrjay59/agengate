@@ -506,7 +506,14 @@ impl OpenCodeSession {
                     continue;
                 }
                 if let Ok(json) = serde_json::from_str::<Value>(&line) {
-                    if event_tx_stdout.send(json).is_err() {
+                    // Filter out "deactivated" events emitted by opencode on clean shutdown
+                    // to avoid unnecessary channel traffic and parser processing.
+                    if json.get("type").and_then(|v| v.as_str()) == Some("deactivated") {
+                        debug!(
+                            target: "agentgate.bridge.opencode.stdout",
+                            "Filtered out deactivated event"
+                        );
+                    } else if event_tx_stdout.send(json).is_err() {
                         break; // Receiver dropped
                     }
                 } else {

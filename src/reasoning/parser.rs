@@ -258,7 +258,7 @@ impl ReasoningParser {
                     Vec::new()
                 }
             }
-            "message_start" | "message_delta" | "message_stop" | "ping" | "init" | "step_start" => Vec::new(),
+            "message_start" | "message_delta" | "message_stop" | "ping" | "init" | "step_start" | "deactivated" => Vec::new(),
 
             // Gemini: a `thought` carries reasoning text.
             "thought" => {
@@ -440,7 +440,7 @@ impl ReasoningParser {
                 // OpenCode style: {"type":"tool_use","part":{"type":"tool","id":"...","tool":"shell","state":{"input":{...}}}}
                 let opencode_call = value.get("part").and_then(|p| {
                     let tool_name = p.get("tool").and_then(|t| t.as_str())?;
-                    let id = p.get("id").and_then(|i| i.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string()).unwrap_or_else(|| crate::openai::TOOL_CALL_ID_GENERATOR.lock().unwrap().generate());
+                    let id = p.get("id").and_then(|i| i.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string()).unwrap_or_else(|| crate::openai::TOOL_CALL_ID_GENERATOR.lock().unwrap_or_else(|e| e.into_inner()).generate());
                     let input = p.get("state").and_then(|s| s.get("input")).cloned().unwrap_or(serde_json::json!({}));
                     let arguments = serde_json::to_string(&input).unwrap_or_default();
                     Some(super::event::ToolCall {
@@ -466,7 +466,7 @@ impl ReasoningParser {
                         .iter()
                         .filter_map(|c| {
                             Some(super::event::ToolCall {
-                                id: c.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string()).unwrap_or_else(|| crate::openai::TOOL_CALL_ID_GENERATOR.lock().unwrap().generate()),
+                                id: c.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string()).unwrap_or_else(|| crate::openai::TOOL_CALL_ID_GENERATOR.lock().unwrap_or_else(|e| e.into_inner()).generate()),
                                 r#type: c
                                     .get("type")
                                     .and_then(|v| v.as_str())

@@ -3,7 +3,7 @@ use crate::provider::bridge::BridgeSession as ProviderBridgeSession;
 use crate::reasoning::parser::ReasoningParser;
 use crate::reasoning::{FinishReason, ReasoningKind, RunEvent};
 use crate::types::ChatCompletionRequest;
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -390,7 +390,7 @@ impl CliProvider for CliProviderImpl {
             tracing::warn!(provider = %self.id, "{}", msg);
             return Ok(ProviderResponse::Error(msg));
         }
-        if let Err(e) = read_result.unwrap() {
+        if let Err(e) = read_result.unwrap_or_else(|e| Err(e.into())) {
             return Err(e.into());
         }
         let status = child.wait().await?;
@@ -1804,10 +1804,11 @@ impl CliProvider for BridgeCliProvider {
             let provider = self.factory.create(bridge_config.clone()).await?;
 
             // Create bridge client with bridge reference for PR-S4 continuation
+            let bridge = self.bridge.as_ref().ok_or_else(|| anyhow!("bridge required for bridge provider"))?.clone();
             let client = Arc::new(BridgeClient::new_with_bridge(
                 "127.0.0.1".to_string(),
                 bridge_port,
-                self.bridge.as_ref().expect("bridge required for bridge provider").clone(),
+                bridge,
             ));
 
             // Start bridge session (spawns CLI with MCP config)
@@ -2061,10 +2062,11 @@ impl CliProvider for BridgeCliProvider {
             let provider = self.factory.create(bridge_config.clone()).await?;
 
             // Create bridge client with bridge reference for PR-S4 continuation
+            let bridge = self.bridge.as_ref().ok_or_else(|| anyhow!("bridge required for bridge provider"))?.clone();
             let client = Arc::new(BridgeClient::new_with_bridge(
                 "127.0.0.1".to_string(),
                 bridge_port,
-                self.bridge.as_ref().expect("bridge required for bridge provider").clone(),
+                bridge,
             ));
 
             // Start bridge session

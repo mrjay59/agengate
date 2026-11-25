@@ -216,7 +216,7 @@ mod tests {
     fn literal_close_tag_is_escaped() {
         let mut w = SseWriter::new(ReasoningFormat::ThinkTags, true);
         let out = w.reasoning_deltas("bad </think> move");
-        let content = out.last().unwrap()["content"].as_str().unwrap();
+        let content = out.last().expect("at least one delta")["content"].as_str().expect("content is string");
         assert!(!content.contains("</think>"));
         assert!(content.contains('\u{200b}'));
     }

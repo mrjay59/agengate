@@ -194,7 +194,7 @@ impl RunRegistry {
         _tool_choice: ToolChoice,
     ) -> Result<crate::bridge::Run> {
         let run_id = {
-            let mut gen = self.tool_choice_generator.lock().unwrap();
+            let mut gen = self.tool_choice_generator.lock().unwrap_or_else(|e| e.into_inner());
             gen.generate()
         };
         let max_steps = self.config.max_steps;
@@ -305,23 +305,32 @@ impl RunRegistry {
         let start = std::time::Instant::now();
         let (version, supports_mcp, supports_streaming) = match provider_id {
             "opencode" => {
-                let output = tokio::process::Command::new("opencode")
-                    .arg("--version")
-                    .output().await?;
+                let mut cmd = tokio::process::Command::new("opencode");
+                #[cfg(unix)]
+                {
+                    cmd.process_group(0);
+                }
+                let output = cmd.arg("--version").output().await?;
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 (version, true, true)
             }
             "gemini" => {
-                let output = tokio::process::Command::new("gemini")
-                    .arg("--version")
-                    .output().await?;
+                let mut cmd = tokio::process::Command::new("gemini");
+                #[cfg(unix)]
+                {
+                    cmd.process_group(0);
+                }
+                let output = cmd.arg("--version").output().await?;
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 (version, true, true)
             }
             "claude" => {
-                let output = tokio::process::Command::new("claude")
-                    .arg("--version")
-                    .output().await?;
+                let mut cmd = tokio::process::Command::new("claude");
+                #[cfg(unix)]
+                {
+                    cmd.process_group(0);
+                }
+                let output = cmd.arg("--version").output().await?;
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 (version, true, true)
             }

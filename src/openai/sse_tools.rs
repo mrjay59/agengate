@@ -120,7 +120,8 @@ impl ToolCallBuffer {
         let call = StreamingToolCall::new(id, name, self.current_index);
         self.calls.push_back(call);
         self.current_index += 1;
-        self.calls.back_mut().unwrap()
+        // Safe: we just pushed an element
+        self.calls.back_mut().expect("just pushed element")
     }
 
     /// Append arguments to current call
@@ -162,9 +163,10 @@ pub fn tool_result_to_chunk(result: &ToolResult) -> ChatCompletionChunk {
     ChatCompletionChunk {
         id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
         object: "chat.completion.chunk".to_string(),
-        usage: None,        created: std::time::SystemTime::now()
+        usage: None,
+        created: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs(),
         model: "agentgate".to_string(),
         choices: vec![ChatCompletionChunkChoice {
@@ -187,9 +189,9 @@ pub fn tool_event_to_inline_chunk(event: &ToolActivityEvent) -> Option<ChatCompl
             Some(ChatCompletionChunk {
                 id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
                 object: "chat.completion.chunk".to_string(),
-        usage: None,                created: std::time::SystemTime::now()
+                usage: None,                created: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs(),
                 model: "agentgate".to_string(),
                 choices: vec![ChatCompletionChunkChoice {
@@ -219,7 +221,7 @@ pub fn tool_event_to_inline_chunk(event: &ToolActivityEvent) -> Option<ChatCompl
                 object: "chat.completion.chunk".to_string(),
         usage: None,                created: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs(),
                 model: "agentgate".to_string(),
                 choices: vec![ChatCompletionChunkChoice {
@@ -240,7 +242,7 @@ pub fn tool_event_to_inline_chunk(event: &ToolActivityEvent) -> Option<ChatCompl
                 object: "chat.completion.chunk".to_string(),
         usage: None,                created: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs(),
                 model: "agentgate".to_string(),
                 choices: vec![ChatCompletionChunkChoice {

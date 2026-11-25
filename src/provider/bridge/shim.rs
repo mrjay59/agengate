@@ -520,6 +520,13 @@ pub async fn spawn_stdio_shim(
     
     // We use the same binary with a special subcommand
     let mut cmd = Command::new(current_exe);
+    // FIX: isolate shim in its own process group so it can't be killed by
+    // kill(0, SIGTERM) from CLI child processes
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     cmd.arg("mcp-shim")
         .arg("--session")
         .arg(&session_id)

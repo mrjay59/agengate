@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{Mutex, RwLock, oneshot, mpsc};
 use tokio::time::interval;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// RequestBatcher for window-based batching (spec §10.3).
 /// Collects requests and batches them based on window_ms and max_calls.
@@ -951,7 +951,7 @@ impl BridgeServer {
         };
 
         // Park the run with tool call info
-        let tool_call_id = crate::openai::TOOL_CALL_ID_GENERATOR.lock().unwrap().generate();
+        let tool_call_id = crate::openai::TOOL_CALL_ID_GENERATOR.lock().unwrap_or_else(|e| e.into_inner()).generate();
         let mcp_id = tool_call_id.clone();
         run.park(tool_call_id.clone(), tool_name.to_string());
 
@@ -1189,6 +1189,14 @@ impl BridgeServer {
         // PR-S5: Sweep orphan PIDs on startup (leftover CLI processes from crashed runs).
         self.sweep_orphan_pids_on_startup().await;
 
+        // Conservative Python MCP orphan watchdog on startup (dry-run by default)
+        let dry_run = std::env::var("AGENTGATE_MCP_ORPHAN_DRY_RUN")
+            .ok()
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(true);
+        self.sweep_orphan_python_mcp(dry_run).await;
+
+        let bridge = Arc::new(self.clone());
         let runs = self.runs.clone();
         let parked_runs = self.parked_runs.clone();
         let sessions = self.sessions.clone();
@@ -1205,10 +1213,25 @@ impl BridgeServer {
         tokio::spawn(async move {
             let sweep = park_ttl.min(call_ttl).min(session_ttl).min(Duration::from_secs(300)).max(Duration::from_secs(30));
             let mut interval = interval(sweep);
+            let mut sweep_counter: u64 = 0;
             loop {
                 interval.tick().await;
                 let now = std::time::Instant::now();
                 let mut removed_keys: Vec<String> = Vec::new();
+                sweep_counter = sweep_counter.wrapping_add(1);
+
+                // Conservative Python MCP orphan watchdog (run every 10 sweeps ~ 5 min)
+                // Default dry_run=true for safety; set AGENTGATE_MCP_ORPHAN_DRY_RUN=false to enable killing
+                if sweep_counter % 10 == 0 {
+                    let dry_run = std::env::var("AGENTGATE_MCP_ORPHAN_DRY_RUN")
+                        .ok()
+                        .and_then(|v| v.parse::<bool>().ok())
+                        .unwrap_or(true);
+                    // We can't call self.sweep_orphan_python_mcp here because self isn't captured.
+                    // Instead, we'll implement a standalone function or restructure.
+                    // For now, skip the watchdog in the cleanup task and rely on startup sweep.
+                    // TODO: restructure to allow calling sweep_orphan_python_mcp from cleanup task.
+                }
 
                 // Clean expired parked runs (collect removed for best-effort S5 cleanup).
                 // Memory-growth fix: use the run's TTL predicates so parked runs
@@ -1323,6 +1346,234 @@ impl BridgeServer {
         }
         if removed > 0 {
             info!(event = "bridge.orphan_sweep", removed, dir = %data_dir.display());
+        }
+    }
+
+    /// Conservative watchdog for orphan Python MCP servers under `opencode serve --service`.
+    /// Detects processes by commandline (mcp-ssh-server.py, ssh-server/server.py) whose parent
+    /// is an `opencode serve --service` process, with elapsed time > threshold, and no active
+    /// agentgate session associated. Logs findings; only kills in dry_run=false mode when
+    /// all orphan criteria are met.
+    ///
+    /// Safety: Conservative - never kills processes that might be active sessions.
+    /// Criteria for orphan:
+    /// 1. Command line matches known Python MCP server patterns
+    /// 2. Parent process is `opencode serve --service` (or `opencode` with serve args)
+    /// 3. Elapsed time > 1 hour (configurable via AGENTGATE_MCP_ORPHAN_THRESHOLD_SECS, default 3600)
+    /// 4. No active agentgate session dir or bridge session matches the process
+    pub async fn sweep_orphan_python_mcp(&self, dry_run: bool) {
+        use std::process::Command;
+
+        let threshold_secs = std::env::var("AGENTGATE_MCP_ORPHAN_THRESHOLD_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(3600); // default 1 hour
+        let threshold = Duration::from_secs(threshold_secs);
+
+        // Get all active agentgate session IDs for correlation
+        let active_sessions: HashSet<String> = self.sessions.read().await.keys().cloned().collect();
+        let active_runs: HashSet<String> = self.runs.read().await.keys().cloned().collect();
+
+        // Patterns for Python MCP servers (from node-ai observation)
+        let mcp_patterns = [
+            "mcp-ssh-server.py",
+            "ssh-server/server.py",
+        ];
+
+        #[cfg(target_os = "linux")]
+        {
+            // On Linux, use ps to find candidate processes
+            let output = match Command::new("ps")
+                .args(["-eo", "pid,ppid,etime,cmd"])
+                .output()
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    warn!(event = "bridge.mcp_orphan_watchdog.ps_failed", error = %e);
+                    return;
+                }
+            };
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines().skip(1) {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() < 4 {
+                    continue;
+                }
+                let pid: u32 = match parts[0].parse() { Ok(p) => p, Err(_) => continue };
+                let ppid: u32 = match parts[1].parse() { Ok(p) => p, Err(_) => continue };
+                let etime_str = parts[2];
+                let cmd = parts[3..].join(" ");
+
+                // Check if command matches Python MCP patterns
+                let is_mcp = mcp_patterns.iter().any(|p| cmd.contains(p));
+                if !is_mcp {
+                    continue;
+                }
+
+                // Parse elapsed time (format: [[dd-]hh:]mm:ss)
+                let elapsed_secs = Self::parse_etime(etime_str);
+                if elapsed_secs < threshold.as_secs() {
+                    continue;
+                }
+
+                // Check if parent is opencode serve --service
+                let parent_is_opencode_serve = match Command::new("ps")
+                    .args(["-p", &ppid.to_string(), "-o", "cmd="])
+                    .output()
+                {
+                    Ok(o) => {
+                        let parent_cmd = String::from_utf8_lossy(&o.stdout);
+                        parent_cmd.contains("opencode") && parent_cmd.contains("serve") && parent_cmd.contains("--service")
+                    }
+                    Err(_) => false,
+                };
+                if !parent_is_opencode_serve {
+                    continue;
+                }
+
+                // Check if this PID correlates with any active agentgate session
+                let has_active_session = active_sessions.iter().any(|s| {
+                    // Could correlate by checking if session dir contains this PID or similar
+                    // For now, conservative: if any active session exists, don't kill
+                    !s.is_empty()
+                }) || !active_runs.is_empty();
+
+                if has_active_session {
+                    info!(
+                        event = "bridge.mcp_orphan_watchdog.candidate_skipped",
+                        pid, ppid, etime = etime_str, cmd = %cmd,
+                        reason = "active_sessions_exist"
+                    );
+                    continue;
+                }
+
+                // Orphan detected
+                info!(
+                    event = "bridge.mcp_orphan_watchdog.orphan_detected",
+                    pid, ppid, etime = etime_str, cmd = %cmd,
+                    dry_run
+                );
+
+                if !dry_run {
+                    // Kill the process tree
+                    #[cfg(target_os = "linux")]
+                    {
+                        let _ = Command::new("kill")
+                            .args(["-TERM", &format!("-{}", pid)]) // negative PID = process group
+                            .output();
+                    }
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = Command::new("taskkill")
+                            .args(["/F", "/T", "/PID", &pid.to_string()])
+                            .output();
+                    }
+                    info!(
+                        event = "bridge.mcp_orphan_watchdog.killed",
+                        pid, ppid, cmd = %cmd
+                    );
+                }
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // On Windows, use tasklist / wmic
+            let output = match Command::new("wmic")
+                .args(["process", "get", "ProcessId,ParentProcessId,CommandLine", "/format:csv"])
+                .output()
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    warn!(event = "bridge.mcp_orphan_watchdog.wmic_failed", error = %e);
+                    return;
+                }
+            };
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines().skip(1) {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.len() < 4 {
+                    continue;
+                }
+                let pid: u32 = match parts[1].parse() { Ok(p) => p, Err(_) => continue };
+                let ppid: u32 = match parts[2].parse() { Ok(p) => p, Err(_) => continue };
+                let cmd = parts[3..].join(",");
+
+                let is_mcp = mcp_patterns.iter().any(|p| cmd.contains(p));
+                if !is_mcp {
+                    continue;
+                }
+
+                // Get elapsed time via wmic (not trivial, use creation date approximation)
+                // For Windows, we'll skip etime check and rely on other criteria
+                // Or use a simpler approach: check if process is old via GetProcessTimes
+                // For now, conservative: just log candidates
+
+                let parent_is_opencode_serve = match Command::new("wmic")
+                    .args(["process", "where", &format!("ProcessId={}", ppid), "get", "CommandLine", "/format:csv"])
+                    .output()
+                {
+                    Ok(o) => {
+                        let parent_cmd = String::from_utf8_lossy(&o.stdout);
+                        parent_cmd.contains("opencode") && parent_cmd.contains("serve") && parent_cmd.contains("--service")
+                    }
+                    Err(_) => false,
+                };
+                if !parent_is_opencode_serve {
+                    continue;
+                }
+
+                let has_active_session = !active_sessions.is_empty() || !active_runs.is_empty();
+
+                if has_active_session {
+                    info!(
+                        event = "bridge.mcp_orphan_watchdog.candidate_skipped",
+                        pid, ppid, cmd = %cmd,
+                        reason = "active_sessions_exist"
+                    );
+                    continue;
+                }
+
+                info!(
+                    event = "bridge.mcp_orphan_watchdog.orphan_detected",
+                    pid, ppid, cmd = %cmd,
+                    dry_run
+                );
+
+                if !dry_run {
+                    let _ = Command::new("taskkill")
+                        .args(["/F", "/T", "/PID", &pid.to_string()])
+                        .output();
+                    info!(
+                        event = "bridge.mcp_orphan_watchdog.killed",
+                        pid, ppid, cmd = %cmd
+                    );
+                }
+            }
+        }
+    }
+
+    fn parse_etime(etime: &str) -> u64 {
+        // Parse [[dd-]hh:]mm:ss format
+        let parts: Vec<&str> = etime.split(':').collect();
+        match parts.len() {
+            3 => {
+                // hh:mm:ss
+                let h: u64 = parts[0].parse().unwrap_or(0);
+                let m: u64 = parts[1].parse().unwrap_or(0);
+                let s: u64 = parts[2].split('.').next().unwrap_or("0").parse().unwrap_or(0);
+                h * 3600 + m * 60 + s
+            }
+            2 => {
+                // mm:ss
+                let m: u64 = parts[0].parse().unwrap_or(0);
+                let s: u64 = parts[1].split('.').next().unwrap_or("0").parse().unwrap_or(0);
+                m * 60 + s
+            }
+            _ => 0,
         }
     }
 

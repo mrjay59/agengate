@@ -1019,7 +1019,7 @@ async fn bridge_mcp(
             // stream. Previously this path only held the call and waited for
             // /_bridge/resolve, but the client never received a tool_calls
             // chunk (and had no way to learn the mcp_id), so the turn hung.
-            let tool_call_id = crate::openai::TOOL_CALL_ID_GENERATOR.lock().unwrap().generate();
+            let tool_call_id = crate::openai::TOOL_CALL_ID_GENERATOR.lock().unwrap_or_else(|e| e.into_inner()).generate();
             registry.bridge.emit_tool_call_event(
                 &session.session_id,
                 serde_json::json!({

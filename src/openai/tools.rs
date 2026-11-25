@@ -174,7 +174,7 @@ pub fn extract_tool_calls(message: &Message) -> Vec<ToolCall> {
                         v.get("arguments"),
                     ) {
                         Some(ToolCall {
-                            id: TOOL_CALL_ID_GENERATOR.lock().unwrap().generate(),
+                            id: TOOL_CALL_ID_GENERATOR.lock().unwrap_or_else(|e| e.into_inner()).generate(),
                             r#type: "function".to_string(),
                             function: FunctionCall {
                                 name: name.to_string(),

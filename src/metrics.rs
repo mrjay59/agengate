@@ -159,7 +159,7 @@ impl Metrics {
 
     pub fn record_provider_concurrency(&self, provider: &str, delta: i64) {
         let key = format!("provider=\"{}\"", provider);
-        let mut map = self.provider_concurrency.lock().unwrap();
+        let mut map = self.provider_concurrency.lock().unwrap_or_else(|e| e.into_inner());
         let v = map.entry(key).or_insert(0);
         *v = (*v as i64 + delta).max(0) as u64;
     }
@@ -170,7 +170,7 @@ impl Metrics {
 
     // New granular metrics methods
     fn increment_map(map: &std::sync::Mutex<std::collections::HashMap<String, u64>>, key: &str) {
-        map.lock().unwrap().entry(key.to_string()).and_modify(|v| *v += 1).or_insert(1);
+        map.lock().unwrap_or_else(|e| e.into_inner()).entry(key.to_string()).and_modify(|v| *v += 1).or_insert(1);
     }
 
     pub fn record_http_request(&self, method: &str, path: &str, status: u16) {
@@ -294,7 +294,7 @@ impl Metrics {
 
     fn render_map_metrics(&self, name: &str, map: &std::sync::Mutex<std::collections::HashMap<String, u64>>) -> String {
         let mut out = String::new();
-        for (key, value) in map.lock().unwrap().iter() {
+        for (key, value) in map.lock().unwrap_or_else(|e| e.into_inner()).iter() {
             out.push_str(name);
             out.push('{');
             out.push_str(key);

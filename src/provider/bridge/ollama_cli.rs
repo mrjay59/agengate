@@ -545,7 +545,7 @@ mod tests {
     #[test]
     fn parses_openai_style_tool_calls() {
         let raw = r#"{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"a.txt\"}"}}]}"#;
-        let (content, calls) = parse_tool_call_output(raw).expect("tool calls");
+        let (content, calls) = parse_tool_call_output(raw).expect("tool calls parse");
         assert!(content.is_empty());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].id, "call_1");
@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn parses_compact_and_fenced_tool_calls() {
         let raw = "Saya akan menulis file.\n```json\n{\"tool_calls\":[{\"name\":\"write_file\",\"arguments\":{\"path\":\"a.txt\"}}]}\n```";
-        let (content, calls) = parse_tool_call_output(raw).expect("tool calls");
+        let (content, calls) = parse_tool_call_output(raw).expect("tool calls parse");
         assert_eq!(content, "Saya akan menulis file.");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.name, "write_file");
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn parses_bare_tool_call_object() {
         let raw = r#"{"name":"read_file","parameters":{"path":"b.txt"}}"#;
-        let (_, calls) = parse_tool_call_output(raw).expect("tool call");
+        let (_, calls) = parse_tool_call_output(raw).expect("tool call parse");
         assert_eq!(calls[0].function.name, "read_file");
         assert_eq!(calls[0].function.arguments, r#"{"path":"b.txt"}"#);
     }

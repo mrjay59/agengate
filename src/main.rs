@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use agentgate::api::api;
 use agentgate::config::load_config;
@@ -8,7 +9,9 @@ use agentgate::types::{ChatCompletionRequest, ChatMessage, MessageRole};
 use agentgate::provider::bridge::spike::{run_spike_bridge, SpikeConfig};
 use agentgate::provider::bridge::shim::run_stdio_shim;
 use anyhow::Result;
+use axum::serve::Serve;
 use clap::{Parser, Subcommand};
+use tokio::signal;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser, Debug)]
@@ -267,10 +270,44 @@ async fn main() -> Result<()> {
             }
             tracing::info!("Starting server on {}", bind_addr);
             let listener = TcpListener::bind(bind_addr.as_str()).await?;
-            let serve_result = axum::serve(listener, app).await;
+
+            // Graceful shutdown on SIGTERM/SIGINT.
+            // FIX-SIGTERM: handle SIGTERM explicitly so external stop/signal doesn't
+            // kill the process abruptly and drop in-flight SSE streams.
+            let graceful = async {
+                let ctrl_c = async {
+                    signal::ctrl_c().await.ok();
+                };
+
+                #[cfg(unix)]
+                let terminate = async {
+                    match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+                        Ok(mut sig) => {
+                            sig.recv().await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to install SIGTERM handler");
+                            std::future::pending::<()>().await;
+                        }
+                    }
+                };
+
+                #[cfg(not(unix))]
+                let terminate = std::future::pending::<()>();
+
+                tokio::select! {
+                    _ = ctrl_c => { tracing::info!("Received SIGINT/Ctrl-C, starting graceful shutdown"); }
+                    _ = terminate => { tracing::info!("Received SIGTERM, starting graceful shutdown"); }
+                }
+            };
+
+            let serve_result = axum::serve(listener, app)
+                .with_graceful_shutdown(graceful)
+                .await;
+
             match &serve_result {
-                Ok(()) => tracing::error!("axum::serve returned Ok(()) unexpectedly - server loop exited"),
-                Err(e) => tracing::error!(error = %e, "axum::serve returned error"),
+                Ok(()) => tracing::info!("Server shutdown completed gracefully"),
+                Err(e) => tracing::error!(error = %e, "Server returned error"),
             }
             serve_result?;
         }
