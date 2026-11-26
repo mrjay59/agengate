@@ -1334,6 +1334,7 @@ pub struct BridgeCliProvider {
     passthrough_host_mcp: bool,
     passthrough_mcp_allowlist: Vec<String>,
     passthrough_mcp_denylist: Vec<String>,
+    allow_client_mcp: bool,
     /// Tool injection limits (QUOTA-01)
     limits: crate::config::LimitsConfig,
     /// Cache of persistent sessions (keyed by session_id) for keep_alive mode.
@@ -1484,6 +1485,7 @@ impl BridgeCliProvider {
         let passthrough_host_mcp = bridge_config.map(|bc| bc.passthrough_host_mcp).unwrap_or(false);
         let passthrough_mcp_allowlist = bridge_config.map(|bc| bc.passthrough_mcp_allowlist.clone()).unwrap_or_default();
         let passthrough_mcp_denylist = bridge_config.map(|bc| bc.passthrough_mcp_denylist.clone()).unwrap_or_default();
+        let allow_client_mcp = bridge_config.map(|bc| bc.allow_client_mcp).unwrap_or(false);
 
         // Get limits config, defaulting to default LimitsConfig
         let limits = limits.cloned().unwrap_or_default();
@@ -1510,6 +1512,7 @@ impl BridgeCliProvider {
             passthrough_host_mcp,
             passthrough_mcp_allowlist,
             passthrough_mcp_denylist,
+            allow_client_mcp,
             limits,
             persistent_sessions,
             persistent_opencode_sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -1810,6 +1813,8 @@ impl CliProvider for BridgeCliProvider {
                 passthrough_host_mcp: self.passthrough_host_mcp,
                 passthrough_mcp_allowlist: self.passthrough_mcp_allowlist.clone(),
                 passthrough_mcp_denylist: self.passthrough_mcp_denylist.clone(),
+                allow_client_mcp: self.allow_client_mcp,
+                client_mcp_servers: request.mcp_servers.clone(),
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider");
@@ -2071,6 +2076,8 @@ impl CliProvider for BridgeCliProvider {
                 passthrough_host_mcp: self.passthrough_host_mcp,
                 passthrough_mcp_allowlist: self.passthrough_mcp_allowlist.clone(),
                 passthrough_mcp_denylist: self.passthrough_mcp_denylist.clone(),
+                allow_client_mcp: self.allow_client_mcp,
+                client_mcp_servers: request.mcp_servers.clone(),
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider (stream)");

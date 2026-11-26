@@ -257,6 +257,10 @@ pub struct BridgeConfig {
     /// Host MCP server names to never merge.
     #[serde(default)]
     pub passthrough_mcp_denylist: Vec<String>,
+    /// Allow client-advertised MCP servers (request.mcp_servers / mcpServers) to be merged
+    /// into the bridge-injected opencode config. Default false for safety.
+    #[serde(default)]
+    pub allow_client_mcp: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -313,6 +317,7 @@ impl Default for BridgeConfig {
             passthrough_host_mcp: false,
             passthrough_mcp_allowlist: Vec::new(),
             passthrough_mcp_denylist: Vec::new(),
+            allow_client_mcp: false,
         }
     }
 }

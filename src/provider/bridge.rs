@@ -81,6 +81,12 @@ pub struct BridgeConfig {
     pub passthrough_mcp_allowlist: Vec<String>,
     #[serde(default)]
     pub passthrough_mcp_denylist: Vec<String>,
+    /// Allow client-advertised MCP servers to be merged into injected config.
+    #[serde(default)]
+    pub allow_client_mcp: bool,
+    /// Client-advertised MCP servers from request (mcp_servers / mcpServers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_mcp_servers: Option<HashMap<String, serde_json::Value>>,
 }
 
 fn default_data_dir() -> Option<PathBuf> {
@@ -106,6 +112,8 @@ impl Default for BridgeConfig {
             passthrough_host_mcp: false,
             passthrough_mcp_allowlist: Vec::new(),
             passthrough_mcp_denylist: Vec::new(),
+            allow_client_mcp: false,
+            client_mcp_servers: None,
         }
     }
 }

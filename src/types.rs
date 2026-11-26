@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum MessageRole {
@@ -126,6 +127,10 @@ pub struct ChatCompletionRequest {
     /// is reused across requests with the same session_id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Client-advertised MCP servers (AionUI/client-side). Merged into bridge-injected
+    /// opencode config only when bridge.allow_client_mcp is enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "mcpServers")]
+    pub mcp_servers: Option<HashMap<String, serde_json::Value>>,
     /// Internal: Set by `call_provider_native_with` when a native provider call
     /// (e.g. Ollama HTTP proxy) already returned output that may represent a
     /// multi-turn chain with tool results. Reprocesses this turn and re-issues

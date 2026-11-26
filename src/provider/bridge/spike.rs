@@ -466,6 +466,8 @@ pub async fn run_spike_bridge(config: SpikeConfig) -> Result<SpikeReport> {
             passthrough_host_mcp: false,
             passthrough_mcp_allowlist: Vec::new(),
             passthrough_mcp_denylist: Vec::new(),
+            allow_client_mcp: false,
+            client_mcp_servers: None,
         },
     )
     .await?;
@@ -507,6 +509,8 @@ pub async fn run_spike_bridge(config: SpikeConfig) -> Result<SpikeReport> {
             passthrough_host_mcp: false,
             passthrough_mcp_allowlist: Vec::new(),
             passthrough_mcp_denylist: Vec::new(),
+            allow_client_mcp: false,
+            client_mcp_servers: None,
         },
         &prompt,
         &mut report,
