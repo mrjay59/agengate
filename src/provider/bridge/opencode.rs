@@ -396,22 +396,47 @@ impl OpenCodeSession {
             cmd.env(key, value);
         }
 
-        // Spawn process
-        let mut child = cmd
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                anyhow!(
-                    "Failed to spawn opencode process: binary={} cwd={} config_bytes={} error={}",
-                    binary,
-                    workdir.display(),
-                    mcp_config_json.len(),
-                    e
-                )
-            })?;
+        // Spawn process (retry on transient spawn failures: EAGAIN/os error 11, EPERM/os error 1)
+        let mut spawn_attempt = 0u32;
+        let mut child = loop {
+            spawn_attempt += 1;
+            match cmd
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+            {
+                Ok(child) => break child,
+                Err(e) => {
+                    let raw = e.raw_os_error().unwrap_or(0);
+                    let transient = raw == 11 /*EAGAIN*/ || raw == 1 /*EPERM*/
+                        || e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::PermissionDenied;
+                    if transient && spawn_attempt < 4 {
+                        let backoff_ms = 250u64 * (spawn_attempt as u64);
+                        warn!(
+                            target: "bridge.opencode.spawn",
+                            session_id = %session_id,
+                            attempt = spawn_attempt,
+                            raw_os_error = raw,
+                            backoff_ms,
+                            "Transient opencode spawn failure, retrying: {}",
+                            e
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        continue;
+                    }
+                    return Err(anyhow!(
+                        "Failed to spawn opencode process: binary={} cwd={} config_bytes={} error={}",
+                        binary,
+                        workdir.display(),
+                        mcp_config_json.len(),
+                        e
+                    ));
+                }
+            }
+        };
 
         info!(
             target: "agentgate.bridge.opencode.spawn",

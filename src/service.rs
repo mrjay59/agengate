@@ -81,6 +81,19 @@ fn is_quota_error(e: &str) -> bool {
         || lower.contains("\"status\":429")
 }
 
+/// Transient opencode/bridge errors worth one retry when no meaningful output was emitted.
+fn is_transient_bridge_error(e: &str) -> bool {
+    let lower = e.to_lowercase();
+    lower.contains("broken pipe")
+        || lower.contains("os error 32")
+        || lower.contains("resource temporarily unavailable")
+        || lower.contains("os error 11")
+        || lower.contains("standalone server exited before reporting readiness")
+        || lower.contains("failed to spawn opencode process")
+        || lower.contains("connection reset")
+        || lower.contains("connection refused")
+}
+
 fn is_opencode_quota_failover_candidate(provider_id: &str, model: &str) -> bool {
     let is_opencode = provider_id == "opencode"
         || model.starts_with("opencode/")
@@ -1750,6 +1763,7 @@ impl ServiceRegistry {
                 use std::sync::atomic::{AtomicBool, Ordering};
                 let had_meaningful_output = Arc::new(AtomicBool::new(false));
                 let mut failed_over_to_9router = false;
+                let mut transient_retries: u32 = 0;
                 let mut model = model;
                 let mut req = req;
                 let mut run_for_park = run;
@@ -1771,10 +1785,12 @@ impl ServiceRegistry {
                     let can_failover = !failed_over_to_9router
                         && !had_meaningful_output.load(Ordering::Relaxed)
                         && is_opencode_quota_failover_candidate(&provider_id, &model);
+                    let can_transient_retry = transient_retries < 1
+                        && !had_meaningful_output.load(Ordering::Relaxed);
                     let forwarder = tokio::spawn(async move {
                         let mut run_for_park = run_for_park_this;
                         let bridge_for_park = bridge_for_park_clone;
-                        let mut suppressed_quota_error: Option<String> = None;
+                        let mut suppressed_retry_error: Option<String> = None;
                         loop {
                             tokio::select! {
                                 maybe_event = inner_rx.recv() => {
@@ -1784,9 +1800,15 @@ impl ServiceRegistry {
                                             had_output.store(true, Ordering::Relaxed);
                                         }
                                         RunEvent::Error { message, .. } => {
-                                            if can_failover && !had_output.load(Ordering::Relaxed) && is_quota_error(message) {
-                                                suppressed_quota_error = Some(message.clone());
-                                                continue; // don't forward; let caller failover
+                                            if !had_output.load(Ordering::Relaxed) {
+                                                if can_failover && is_quota_error(message) {
+                                                    suppressed_retry_error = Some(message.clone());
+                                                    continue; // don't forward; let caller failover
+                                                }
+                                                if can_transient_retry && is_transient_bridge_error(message) {
+                                                    suppressed_retry_error = Some(message.clone());
+                                                    continue; // don't forward; let caller retry
+                                                }
                                             }
                                         }
                                         _ => {}
@@ -1816,9 +1838,9 @@ impl ServiceRegistry {
                                 _ = outer_tx.closed() => break,
                             }
                         }
-                        if let Some(msg) = suppressed_quota_error {
+                        if let Some(msg) = suppressed_retry_error {
                             *failover_capture_fw.lock().await = Some(msg);
-                            // Return run so caller can retry; do not mark complete.
+                            // Return run so caller can retry/failover; do not mark complete.
                             return run_for_park;
                         }
                         // FIX-RUN-COMPLETE: a stream Run without tool_calls must be
@@ -1836,46 +1858,57 @@ impl ServiceRegistry {
                     let returned_run = forwarder.await.ok().flatten();
                     let captured_failover = failover_capture.lock().await.clone();
 
-                    // Prefer explicit quota error event captured by forwarder; fall back to Err.
-                    let quota_failover_reason = if let Some(msg) = captured_failover {
+                    // Prefer explicit error event captured by forwarder; fall back to Err.
+                    let captured_or_err = if let Some(msg) = captured_failover.clone() {
                         Some(msg)
                     } else if let Err(ref err) = stream_result {
-                        let err_str = err.to_string();
-                        if is_quota_error(&err_str)
-                            && !failed_over_to_9router
-                            && !had_meaningful_output.load(Ordering::Relaxed)
-                            && is_opencode_quota_failover_candidate(&provider_id, &model)
-                        {
-                            Some(err_str)
-                        } else {
-                            None
-                        }
+                        Some(err.to_string())
                     } else {
                         None
                     };
 
-                    if let Some(_qe) = quota_failover_reason {
-                        failed_over_to_9router = true;
-                        let from_model = model.clone();
-                        model = "opencode/9router/free-forever".to_string();
-                        req.model = model.clone();
-                        tracing::warn!(
-                            provider_id = %provider_id,
-                            from_model = %from_model,
-                            to_model = %model,
-                            "quota/free-limit on opencode stream; failing over to 9router/free-forever"
-                        );
-                        crate::metrics::init_metrics().record_quota_error(&provider_id, &from_model);
-                        run_for_park = returned_run; // reuse run if forwarder gave it back
-                        had_meaningful_output.store(false, Ordering::Relaxed);
-                        continue;
-                    }
-
-                    if let Err(err) = stream_result {
-                        tracing::error!("provider stream error: {}", err);
+                    if let Some(err_str) = captured_or_err {
+                        let quota = is_quota_error(&err_str)
+                            && !failed_over_to_9router
+                            && !had_meaningful_output.load(Ordering::Relaxed)
+                            && is_opencode_quota_failover_candidate(&provider_id, &model);
+                        if quota {
+                            failed_over_to_9router = true;
+                            let from_model = model.clone();
+                            model = "opencode/9router/free-forever".to_string();
+                            req.model = model.clone();
+                            tracing::warn!(
+                                provider_id = %provider_id,
+                                from_model = %from_model,
+                                to_model = %model,
+                                "quota/free-limit on opencode stream; failing over to 9router/free-forever"
+                            );
+                            crate::metrics::init_metrics().record_quota_error(&provider_id, &from_model);
+                            run_for_park = returned_run;
+                            had_meaningful_output.store(false, Ordering::Relaxed);
+                            continue;
+                        }
+                        if transient_retries < 1
+                            && !had_meaningful_output.load(Ordering::Relaxed)
+                            && is_transient_bridge_error(&err_str)
+                        {
+                            transient_retries += 1;
+                            tracing::warn!(
+                                provider_id = %provider_id,
+                                model = %model,
+                                attempt = transient_retries,
+                                error = %err_str,
+                                "transient bridge/CLI error with no output; retrying once"
+                            );
+                            run_for_park = returned_run;
+                            had_meaningful_output.store(false, Ordering::Relaxed);
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            continue;
+                        }
+                        tracing::error!("provider stream error: {}", err_str);
                         let _ = tx
                             .send(RunEvent::Error {
-                                message: err.to_string(),
+                                message: err_str,
                                 code: Some("provider_error".to_string()),
                             })
                             .await;
