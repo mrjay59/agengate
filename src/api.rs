@@ -406,18 +406,11 @@ async fn chat_completions(
                                     ttft_recorded = true;
                                 }
                                 let is_tool_calls = matches!(event, RunEvent::ToolCalls { .. });
-                                if is_tool_calls {
-                                    tool_calls_finished = true;
-                                }
-                                // An explicit provider error is terminal for the
-                                // client: forward the chunk, then stop waiting
-                                // for a CLI that may never exit (this is exactly
-                                // the opencode quota-error case, which used to
-                                // hang for ~2 minutes).
                                 let is_error = matches!(event, RunEvent::Error { .. });
+                                let mut emitted_tool_calls: usize = 0;
                                 for processed in pipeline.process(event) {
                                     for coalesced in coalescer.add_event(processed) {
-                                        emit_event(&tx, &ctx, &mut writer, coalesced, activity_via_reasoning).await;
+                                        emitted_tool_calls += emit_event(&tx, &ctx, &mut writer, coalesced, activity_via_reasoning).await;
                                     }
                                 }
                                 if is_error {
@@ -427,12 +420,17 @@ async fn chat_completions(
                                         .await;
                                     break;
                                 }
-                                // A tool-calling turn is complete once tool_calls are
-                                // emitted (client executes tools and sends results in a
-                                // follow-up request). Stop the stream to avoid trailing
-                                // events confusing OpenAI-compatible clients/UIs.
                                 if is_tool_calls {
-                                    break;
+                                    if emitted_tool_calls > 0 {
+                                        tool_calls_finished = true;
+                                        break;
+                                    } else {
+                                        terminated_by_error = true;
+                                        let _ = tx
+                                            .send(Ok(axum::response::sse::Event::default().data("[DONE]")))
+                                            .await;
+                                        break;
+                                    }
                                 }
                             }
                             None => break,
@@ -651,52 +649,48 @@ async fn send_delta(
     let _ = send_sse(tx, &ctx.chunk(delta, None)).await;
 }
 
+/// Emits a single `RunEvent` as SSE chunks. Returns the number of tool calls
+/// actually emitted to the client (0 for non-ToolCalls events). Callers use
+/// this to avoid terminating a stream with `finish_reason:"tool_calls"` when
+/// every tool call was dropped by fail-closed filtering.
 async fn emit_event(
     tx: &mpsc::Sender<Result<axum::response::sse::Event, axum::Error>>,
     ctx: &ChunkContext,
     writer: &mut SseWriter,
     event: RunEvent,
     _activity_via_reasoning: bool,
-) {
+) -> usize {
     match event {
         RunEvent::Text { text } => {
             for delta in writer.text_deltas(&text) {
                 send_delta(tx, ctx, delta).await;
             }
+            0
         }
         RunEvent::ReasoningDelta { text, .. } => {
             for delta in writer.reasoning_deltas(&text) {
                 send_delta(tx, ctx, delta).await;
             }
+            0
         }
         RunEvent::ReasoningEnd { .. } => {
             for delta in writer.reasoning_end_deltas() {
                 send_delta(tx, ctx, delta).await;
             }
+            0
         }
         RunEvent::Activity { label, .. } => {
-            // Activity/tool-view is delivered on a SEPARATE channel (the
-            // `activity` field of the delta) and is never written into
-            // `reasoning_content`, so UIs cannot mistake a tool-view line
-            // (e.g. "📝 write → hello.txt") for model thinking.
             send_delta(tx, ctx, serde_json::json!({ "activity": label })).await;
+            0
         }
         RunEvent::ToolCalls { calls } => {
-            // `</think>` must be closed before tool_calls even without text.
             for delta in writer.close_think() {
                 send_delta(tx, ctx, delta).await;
             }
-            // SSE §7.4: emit per-tool-call chunks — Chunk 1 with empty arguments,
-            // then Chunk 2+ with 512-byte argument slices. The terminal
-            // `finish_reason:"tool_calls"` chunk is emitted by the stream
-            // terminator to guarantee it is the last choice chunk before [DONE].
             let mut emitted_index = 0usize;
+            let mut dropped: Vec<String> = Vec::new();
             for call in calls.iter() {
                 let name = call.function.name.clone();
-                // FIX-TOOL-EXEC: fail-closed. If the client declared tools,
-                // never emit a tool_call whose name is not registered by it.
-                // This prevents a raw opencode built-in `execute` from reaching
-                // AionUI (which only knows `execCommand`) as an unknown tool.
                 if !ctx.tool_names.is_empty()
                     && !ctx.tool_names.iter().any(|n| n.eq_ignore_ascii_case(&name))
                 {
@@ -705,74 +699,67 @@ async fn emit_event(
                         "Dropping tool_call not registered by client (fail-closed)"
                     );
                     crate::metrics::init_metrics().record_guard_violation();
+                    dropped.push(name);
                     continue;
                 }
                 let index = emitted_index;
                 emitted_index += 1;
-                // Chunk 1: empty arguments
                 send_delta(tx, ctx, serde_json::json!({
                     "tool_calls": [{
                         "index": index,
                         "id": call.id,
                         "type": call.r#type,
-                        "function": {
-                            "name": name,
-                            "arguments": ""
-                        }
+                        "function": { "name": name, "arguments": "" }
                     }]
                 })).await;
-                // Chunk 2+: 512-byte argument slices (continuation: no id/type/name)
                 let args = call.function.arguments.as_str();
-                let args_bytes = args.as_bytes();
-                for chunk in args_bytes.chunks(512) {
+                for chunk in args.as_bytes().chunks(512) {
                     send_delta(tx, ctx, serde_json::json!({
                         "tool_calls": [{
                             "index": index,
-                            "function": {
-                                "arguments": std::str::from_utf8(chunk).unwrap_or("")
-                            }
+                            "function": { "arguments": std::str::from_utf8(chunk).unwrap_or("") }
                         }]
                     })).await;
                 }
             }
+            if emitted_index == 0 && !dropped.is_empty() {
+                let msg = format!(
+                    "Agent requested tool(s) not registered by client: {}. Configure the client to expose these tools, or enable bridge.passthrough_host_mcp with an allowlist.",
+                    dropped.join(", ")
+                );
+                tracing::error!(
+                    dropped_tools = %dropped.join(","),
+                    "All tool calls dropped by fail-closed filter; terminating stream with error"
+                );
+                let _ = send_sse(tx, &ctx.chunk(serde_json::json!({
+                    "content": format!("\n\n⚠️ Error: {}", msg)
+                }), None)).await;
+            }
+            emitted_index
         }
-        RunEvent::Usage {
-            prompt_tokens,
-            completion_tokens,
-            total_tokens,
-        } => {
+        RunEvent::Usage { prompt_tokens, completion_tokens, total_tokens, .. } => {
             let chunk = serde_json::json!({
                 "id": ctx.id,
                 "object": "chat.completion.chunk",
                 "created": ctx.created,
                 "model": ctx.model,
                 "choices": [],
-                "usage": {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens
-                }
+                "usage": { "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": total_tokens }
             });
             let _ = send_sse(tx, &chunk.to_string()).await;
+            0
         }
-        RunEvent::Error { message, code } => {
-            let chunk = serde_json::json!({
-                "id": ctx.id,
-                "object": "chat.completion.chunk",
-                "created": ctx.created,
-                "model": ctx.model,
-                "choices": [{ "index": 0, "delta": {}, "finish_reason": "error" }],
-                "error": { "message": message, "code": code }
-            });
-            let _ = send_sse(tx, &chunk.to_string()).await;
+        RunEvent::Error { message, .. } => {
+            let _ = send_sse(tx, &ctx.chunk(serde_json::json!({
+                "content": format!("\n\n⚠️ Error: {}", message)
+            }), None)).await;
+            let _ = send_sse(tx, &ctx.chunk(serde_json::json!({}), Some("error"))).await;
+            0
         }
-        // ReasoningStart carries no client-visible payload and Done is emitted
-        // by the stream terminator.
-        RunEvent::ReasoningStart { .. } | RunEvent::Done { .. } => {}
+        RunEvent::ReasoningStart { .. } | RunEvent::Done { .. } => 0,
     }
 }
 
-/// Apply `reasoning.format` to a non-streaming OpenAI response.
 fn apply_non_stream_format(
     response: crate::types::ChatCompletionResponse,
     format: ReasoningFormat,
