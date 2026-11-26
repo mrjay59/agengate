@@ -79,6 +79,12 @@ max_steps = 25
 call_ttl_secs = 120
 park_ttl_secs = 120
 
+# Merge host opencode.json MCP servers into the injected bridge config.
+# Default false for isolation/safety. Enable when child opencode needs host/AionUI MCP tools.
+# passthrough_host_mcp = false
+# passthrough_mcp_allowlist = ["vps-mcp", "aionui-team"]
+# passthrough_mcp_denylist = []
+
 [bridge.isolation]
 # mode = "selective" | "strict" | "off"
 # selective: disable conflicting built-ins (read, write, bash/execute, glob, list, patch), allow grep, webfetch, todo*, task

@@ -74,6 +74,13 @@ pub struct BridgeConfig {
     /// Isolation config for selective tool disabling (TB-TOOL-02)
     #[serde(default)]
     pub isolation: Option<crate::config::IsolationConfig>,
+    /// Merge host opencode.json MCP servers into injected bridge config.
+    #[serde(default)]
+    pub passthrough_host_mcp: bool,
+    #[serde(default)]
+    pub passthrough_mcp_allowlist: Vec<String>,
+    #[serde(default)]
+    pub passthrough_mcp_denylist: Vec<String>,
 }
 
 fn default_data_dir() -> Option<PathBuf> {
@@ -96,6 +103,9 @@ impl Default for BridgeConfig {
             tools: Vec::new(),
             isolation: None,
             cli_session_id: None,
+            passthrough_host_mcp: false,
+            passthrough_mcp_allowlist: Vec::new(),
+            passthrough_mcp_denylist: Vec::new(),
         }
     }
 }

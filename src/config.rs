@@ -247,6 +247,16 @@ pub struct BridgeConfig {
     ///   - "off": no tool disabling
     #[serde(default)]
     pub isolation: IsolationConfig,
+    /// Merge host opencode.json MCP servers into injected bridge config.
+    /// Default false for isolation/safety. Enable only when child CLI needs host MCP tools (e.g. AionUI/team MCP).
+    #[serde(default)]
+    pub passthrough_host_mcp: bool,
+    /// If non-empty, only these host MCP server names are merged.
+    #[serde(default)]
+    pub passthrough_mcp_allowlist: Vec<String>,
+    /// Host MCP server names to never merge.
+    #[serde(default)]
+    pub passthrough_mcp_denylist: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -300,6 +310,9 @@ impl Default for BridgeConfig {
             limits: LimitsConfig::default(),
             guard: GuardConfig::default(),
             isolation: IsolationConfig::default(),
+            passthrough_host_mcp: false,
+            passthrough_mcp_allowlist: Vec::new(),
+            passthrough_mcp_denylist: Vec::new(),
         }
     }
 }

@@ -1330,6 +1330,10 @@ pub struct BridgeCliProvider {
     transport: Option<String>,
     /// Isolation config for selective tool disabling (TB-TOOL-02)
     isolation_config: crate::config::IsolationConfig,
+    /// Merge host opencode.json MCP servers into injected bridge config.
+    passthrough_host_mcp: bool,
+    passthrough_mcp_allowlist: Vec<String>,
+    passthrough_mcp_denylist: Vec<String>,
     /// Tool injection limits (QUOTA-01)
     limits: crate::config::LimitsConfig,
     /// Cache of persistent sessions (keyed by session_id) for keep_alive mode.
@@ -1477,6 +1481,9 @@ impl BridgeCliProvider {
         let isolation_config = bridge_config
             .map(|bc| bc.isolation.clone())
             .unwrap_or_default();
+        let passthrough_host_mcp = bridge_config.map(|bc| bc.passthrough_host_mcp).unwrap_or(false);
+        let passthrough_mcp_allowlist = bridge_config.map(|bc| bc.passthrough_mcp_allowlist.clone()).unwrap_or_default();
+        let passthrough_mcp_denylist = bridge_config.map(|bc| bc.passthrough_mcp_denylist.clone()).unwrap_or_default();
 
         // Get limits config, defaulting to default LimitsConfig
         let limits = limits.cloned().unwrap_or_default();
@@ -1500,6 +1507,9 @@ impl BridgeCliProvider {
             prompt_tools_fallback: config.prompt_tools_fallback,
             transport: config.transport.clone(),
             isolation_config,
+            passthrough_host_mcp,
+            passthrough_mcp_allowlist,
+            passthrough_mcp_denylist,
             limits,
             persistent_sessions,
             persistent_opencode_sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -1797,6 +1807,9 @@ impl CliProvider for BridgeCliProvider {
                 tools: tool_schemas_for_bridge,
                 isolation: Some(self.isolation_config.clone()),
                 cli_session_id: resume_cli_sid.clone(),
+                passthrough_host_mcp: self.passthrough_host_mcp,
+                passthrough_mcp_allowlist: self.passthrough_mcp_allowlist.clone(),
+                passthrough_mcp_denylist: self.passthrough_mcp_denylist.clone(),
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider");
@@ -2055,6 +2068,9 @@ impl CliProvider for BridgeCliProvider {
                 tools: tool_schemas_for_bridge,
                 isolation: Some(self.isolation_config.clone()),
                 cli_session_id: resume_cli_sid.clone(),
+                passthrough_host_mcp: self.passthrough_host_mcp,
+                passthrough_mcp_allowlist: self.passthrough_mcp_allowlist.clone(),
+                passthrough_mcp_denylist: self.passthrough_mcp_denylist.clone(),
             };
 
             tracing::info!(target: "bridge.cli", model = %model, "Creating bridge provider (stream)");

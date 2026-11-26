@@ -463,6 +463,9 @@ pub async fn run_spike_bridge(config: SpikeConfig) -> Result<SpikeReport> {
             tools: Vec::new(),
             isolation: None,
             cli_session_id: None,
+            passthrough_host_mcp: false,
+            passthrough_mcp_allowlist: Vec::new(),
+            passthrough_mcp_denylist: Vec::new(),
         },
     )
     .await?;
@@ -501,6 +504,9 @@ pub async fn run_spike_bridge(config: SpikeConfig) -> Result<SpikeReport> {
             tools: Vec::new(),
             isolation: None,
             cli_session_id: None,
+            passthrough_host_mcp: false,
+            passthrough_mcp_allowlist: Vec::new(),
+            passthrough_mcp_denylist: Vec::new(),
         },
         &prompt,
         &mut report,

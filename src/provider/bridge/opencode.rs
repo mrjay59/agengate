@@ -341,7 +341,7 @@ impl OpenCodeSession {
                 model = %config.model,
                 "Free model detected — injecting MINIMAL opencode.json (MCP only, no tools/permission blocks)"
             );
-            Self::build_minimal_mcp_config(&mcp_token, mcp_port, &session_id, &transport, config.host.as_str(), &config.tools)
+            Self::build_minimal_mcp_config(&mcp_token, mcp_port, &session_id, &transport, config.host.as_str(), &config.tools, config.passthrough_host_mcp, &config.passthrough_mcp_allowlist, &config.passthrough_mcp_denylist)
         } else {
             Self::build_opencode_config_json(
                 &mcp_token,
@@ -352,6 +352,9 @@ impl OpenCodeSession {
                 config.host.as_str(),
                 &config.tools,
                 &isolation_config,
+                config.passthrough_host_mcp,
+                &config.passthrough_mcp_allowlist,
+                &config.passthrough_mcp_denylist,
             )
         };
         let config_path = workdir.join("opencode.json");
@@ -733,6 +736,9 @@ impl OpenCodeSession {
         bridge_host: &str,
         tools: &[crate::bridge::ToolSchema],
         isolation_config: &IsolationConfig,
+        passthrough_host_mcp: bool,
+        passthrough_mcp_allowlist: &[String],
+        passthrough_mcp_denylist: &[String],
     ) -> String {
         let tools_json = serde_json::to_string(tools).unwrap_or_default();
         let agentgate_bin = std::env::current_exe()
@@ -747,7 +753,7 @@ impl OpenCodeSession {
             _ => Self::build_selective_disable_config(isolation_config), // default to selective
         };
 
-        let (mcp_config, mcp_servers_config) = if transport == "stdio_shim" {
+        let (mut mcp_config, mut mcp_servers_config) = if transport == "stdio_shim" {
             // Command-based MCP server (stdio shim). Include multiple field names
             // for compatibility across OpenCode config schema variants.
             let mcp = serde_json::json!({
@@ -806,6 +812,13 @@ impl OpenCodeSession {
             (mcp, mcp_servers)
         };
 
+        if passthrough_host_mcp {
+            let merged = Self::merge_host_mcp_servers(&mut mcp_config, &mut mcp_servers_config, passthrough_mcp_allowlist, passthrough_mcp_denylist);
+            if merged > 0 {
+                tracing::info!(target: "agentgate.bridge.opencode.config", session_id = %session_id, merged, "Host MCP passthrough enabled");
+            }
+        }
+
         // Include both `mcp` (spec/OpenCode style) and `mcpServers` for compatibility.
         // Also inject tool disable config (tools + permission) for selective/strict modes.
         let mut config = serde_json::json!({
@@ -838,6 +851,60 @@ impl OpenCodeSession {
         config.to_string()
     }
 
+    /// Read host opencode.json mcp/mcpServers and merge into injected config.
+    /// Only used when passthrough_host_mcp is enabled. "agentgate" is never overwritten.
+    fn merge_host_mcp_servers(
+        mcp_config: &mut Value,
+        mcp_servers_config: &mut Value,
+        allowlist: &[String],
+        denylist: &[String],
+    ) -> usize {
+        let mut config_paths = Vec::new();
+        if let Some(home) = dirs::home_dir() {
+            config_paths.push(home.join(".config").join("opencode").join("opencode.json"));
+        }
+        if let Ok(cfg) = std::env::var("XDG_CONFIG_HOME") {
+            config_paths.push(std::path::PathBuf::from(cfg).join("opencode").join("opencode.json"));
+        }
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            config_paths.push(std::path::PathBuf::from(appdata).join("opencode").join("opencode.json"));
+        }
+        config_paths.push(std::path::PathBuf::from("opencode.json"));
+
+        let mut merged = 0usize;
+        for path in config_paths {
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let parsed: Value = match serde_json::from_str(&content) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "agentgate.bridge.opencode.config", path = %path.display(), error = %e, "Failed to parse host opencode.json for MCP passthrough");
+                    continue;
+                }
+            };
+
+            for key in ["mcp", "mcpServers"] {
+                let Some(servers) = parsed.get(key).and_then(|v| v.as_object()) else { continue };
+                let target = if key == "mcp" { &mut *mcp_config } else { &mut *mcp_servers_config };
+                let Some(target_obj) = target.as_object_mut() else { continue };
+                for (name, cfg) in servers {
+                    if name == "agentgate" { continue; }
+                    if !denylist.is_empty() && denylist.iter().any(|d| d == name) { continue; }
+                    if !allowlist.is_empty() && !allowlist.iter().any(|a| a == name) { continue; }
+                    if target_obj.contains_key(name) { continue; }
+                    target_obj.insert(name.clone(), cfg.clone());
+                    merged += 1;
+                }
+            }
+        }
+        if merged > 0 {
+            tracing::info!(target: "agentgate.bridge.opencode.config", merged, "Merged host MCP servers into injected bridge config");
+        }
+        merged
+    }
+
     /// Build minimal MCP-only config for free models (FIX-FREELIMIT-04).
     /// Skips tools/permission/isolation blocks that trigger provider.free-limit.
     /// Only includes MCP connection config.
@@ -848,6 +915,9 @@ impl OpenCodeSession {
         transport: &str,
         bridge_host: &str,
         tools: &[crate::bridge::ToolSchema],
+        passthrough_host_mcp: bool,
+        passthrough_mcp_allowlist: &[String],
+        passthrough_mcp_denylist: &[String],
     ) -> String {
         let agentgate_bin = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
@@ -857,7 +927,7 @@ impl OpenCodeSession {
         // tools/list is empty, so the model never sees any bridged tool.
         let tools_json = serde_json::to_string(tools).unwrap_or_default();
 
-        let (mcp_config, mcp_servers_config) = if transport == "stdio_shim" {
+        let (mut mcp_config, mut mcp_servers_config) = if transport == "stdio_shim" {
             let mcp = serde_json::json!({
                 "agentgate": {
                     "type": "local",
@@ -904,6 +974,13 @@ impl OpenCodeSession {
             });
             (mcp, mcp_servers)
         };
+
+        if passthrough_host_mcp {
+            let merged = Self::merge_host_mcp_servers(&mut mcp_config, &mut mcp_servers_config, passthrough_mcp_allowlist, passthrough_mcp_denylist);
+            if merged > 0 {
+                tracing::info!(target: "agentgate.bridge.opencode.config", session_id = %session_id, merged, "Host MCP passthrough enabled (minimal config)");
+            }
+        }
 
         // FIX-TOOL-EXEC: free models previously received NO tool block at all,
         // so opencode's built-in `execute`/`bash` stayed active and competed with
