@@ -1399,6 +1399,13 @@ impl BridgeSession for OpenCodeSession {
                 Ok(Err(e)) => warn!("OpenCode process wait failed: {}", e),
                 Err(_) => {
                     warn!("OpenCode process did not exit after stdout EOF; killing it");
+                    #[cfg(windows)]
+                    if let Some(pid) = pid {
+                        let _ = tokio::process::Command::new("taskkill")
+                            .args(["/F", "/T", "/PID", &pid.to_string()])
+                            .output()
+                            .await;
+                    }
                     #[cfg(unix)]
                     if let Some(pid) = pid {
                         let _ = tokio::process::Command::new("kill").args(["-TERM", &format!("-{}", pid)]).output().await;
@@ -1407,6 +1414,13 @@ impl BridgeSession for OpenCodeSession {
                     match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
                         Ok(_) => {}
                         Err(_) => {
+                            #[cfg(windows)]
+                            if let Some(pid) = pid {
+                                let _ = tokio::process::Command::new("taskkill")
+                                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                                    .output()
+                                    .await;
+                            }
                             #[cfg(unix)]
                             if let Some(pid) = pid {
                                 let _ = tokio::process::Command::new("kill").args(["-KILL", &format!("-{}", pid)]).output().await;
@@ -1524,6 +1538,13 @@ impl BridgeSession for OpenCodeSession {
                 Ok(Err(e)) => warn!("OpenCode process wait failed: {}", e),
                 Err(_) => {
                     warn!("OpenCode process did not exit after continuation; killing it");
+                    #[cfg(windows)]
+                    if let Some(pid) = pid {
+                        let _ = tokio::process::Command::new("taskkill")
+                            .args(["/F", "/T", "/PID", &pid.to_string()])
+                            .output()
+                            .await;
+                    }
                     #[cfg(unix)]
                     if let Some(pid) = pid {
                         let _ = tokio::process::Command::new("kill").args(["-TERM", &format!("-{}", pid)]).output().await;
@@ -1532,6 +1553,13 @@ impl BridgeSession for OpenCodeSession {
                     match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
                         Ok(_) => {}
                         Err(_) => {
+                            #[cfg(windows)]
+                            if let Some(pid) = pid {
+                                let _ = tokio::process::Command::new("taskkill")
+                                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                                    .output()
+                                    .await;
+                            }
                             #[cfg(unix)]
                             if let Some(pid) = pid {
                                 let _ = tokio::process::Command::new("kill").args(["-KILL", &format!("-{}", pid)]).output().await;

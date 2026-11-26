@@ -1745,69 +1745,145 @@ impl ServiceRegistry {
             };
             let bridge_for_park = self.bridge.clone();
 
+            let provider_id_owned = provider_id.to_string();
             tokio::spawn(async move {
-                // Proxy the event channel so we can park the Run at the exact
-                // moment tool_calls are emitted — BEFORE the chunk is forwarded
-                // to the client. The SSE handler terminates a tool turn as soon
-                // as it sees tool_calls, so parking after the stream finishes is
-                // too late: the client's tool-result request arrives first and
-                // is classified as Replay.
-                let (inner_tx, mut inner_rx) = mpsc::channel::<RunEvent>(128);
-                let outer_tx = tx.clone();
+                use std::sync::atomic::{AtomicBool, Ordering};
+                let had_meaningful_output = Arc::new(AtomicBool::new(false));
+                let mut failed_over_to_9router = false;
+                let mut model = model;
+                let mut req = req;
                 let mut run_for_park = run;
-                let forwarder = tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            maybe_event = inner_rx.recv() => {
-                                let Some(event) = maybe_event else { break };
-                                if let RunEvent::ToolCalls { calls } = &event {
-                                    if let Some(mut r) = run_for_park.take() {
-                                        r.messages.push(crate::types::ChatMessage {
-                                            role: crate::types::MessageRole::Assistant,
-                                            content: None,
-                                            reasoning_content: None,
-                                            tool_calls: Some(calls.clone()),
-                                            tool_call_id: None,
-                                            name: None,
-                                        });
-                                        r.park(calls[0].id.clone(), calls[0].function.name.clone());
-                                        r.pending_tool_call_ids = calls.iter().map(|c| c.id.clone()).collect();
-                                        bridge_for_park.runs().write().await.insert(r.id.clone(), r);
-                                        tracing::info!(event = "run.parked.from_stream", calls = calls.len());
+                let provider_id = provider_id_owned;
+                loop {
+                    // Proxy the event channel so we can park the Run at the exact
+                    // moment tool_calls are emitted — BEFORE the chunk is forwarded
+                    // to the client. The SSE handler terminates a tool turn as soon
+                    // as it sees tool_calls, so parking after the stream finishes is
+                    // too late: the client's tool-result request arrives first and
+                    // is classified as Replay.
+                    let (inner_tx, mut inner_rx) = mpsc::channel::<RunEvent>(128);
+                    let outer_tx = tx.clone();
+                    let run_for_park_this = run_for_park.take();
+                    let bridge_for_park_clone = bridge_for_park.clone();
+                    let had_output = had_meaningful_output.clone();
+                    let failover_capture: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
+                    let failover_capture_fw = failover_capture.clone();
+                    let can_failover = !failed_over_to_9router
+                        && !had_meaningful_output.load(Ordering::Relaxed)
+                        && is_opencode_quota_failover_candidate(&provider_id, &model);
+                    let forwarder = tokio::spawn(async move {
+                        let mut run_for_park = run_for_park_this;
+                        let bridge_for_park = bridge_for_park_clone;
+                        let mut suppressed_quota_error: Option<String> = None;
+                        loop {
+                            tokio::select! {
+                                maybe_event = inner_rx.recv() => {
+                                    let Some(event) = maybe_event else { break };
+                                    match &event {
+                                        RunEvent::Text { .. } | RunEvent::ReasoningDelta { .. } | RunEvent::ToolCalls { .. } => {
+                                            had_output.store(true, Ordering::Relaxed);
+                                        }
+                                        RunEvent::Error { message, .. } => {
+                                            if can_failover && !had_output.load(Ordering::Relaxed) && is_quota_error(message) {
+                                                suppressed_quota_error = Some(message.clone());
+                                                continue; // don't forward; let caller failover
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                    if let RunEvent::ToolCalls { calls } = &event {
+                                        if let Some(mut r) = run_for_park.take() {
+                                            r.messages.push(crate::types::ChatMessage {
+                                                role: crate::types::MessageRole::Assistant,
+                                                content: None,
+                                                reasoning_content: None,
+                                                tool_calls: Some(calls.clone()),
+                                                tool_call_id: None,
+                                                name: None,
+                                            });
+                                            r.park(calls[0].id.clone(), calls[0].function.name.clone());
+                                            r.pending_tool_call_ids = calls.iter().map(|c| c.id.clone()).collect();
+                                            bridge_for_park.runs().write().await.insert(r.id.clone(), r);
+                                            tracing::info!(event = "run.parked.from_stream", calls = calls.len());
+                                        }
+                                    }
+                                    if outer_tx.send(event).await.is_err() {
+                                        break;
                                     }
                                 }
-                                if outer_tx.send(event).await.is_err() {
-                                    break;
-                                }
+                                // Client disconnected: drop inner_rx so the provider
+                                // sees its channel close and kills the CLI child.
+                                _ = outer_tx.closed() => break,
                             }
-                            // Client disconnected: drop inner_rx so the provider
-                            // sees its channel close and kills the CLI child.
-                            _ = outer_tx.closed() => break,
                         }
-                    }
-                    // FIX-RUN-COMPLETE: a stream Run without tool_calls must be
-                    // marked terminal, otherwise it stays Running forever and
-                    // blocks max_runs_per_key for every later request.
-                    if let Some(mut r) = run_for_park {
-                        let final_messages = r.messages.clone();
-                        r.complete(final_messages);
-                        bridge_for_park.runs().write().await.insert(r.id.clone(), r);
-                    }
-                });
+                        if let Some(msg) = suppressed_quota_error {
+                            *failover_capture_fw.lock().await = Some(msg);
+                            // Return run so caller can retry; do not mark complete.
+                            return run_for_park;
+                        }
+                        // FIX-RUN-COMPLETE: a stream Run without tool_calls must be
+                        // marked terminal, otherwise it stays Running forever and
+                        // blocks max_runs_per_key for every later request.
+                        if let Some(mut r) = run_for_park {
+                            let final_messages = r.messages.clone();
+                            r.complete(final_messages);
+                            bridge_for_park.runs().write().await.insert(r.id.clone(), r);
+                        }
+                        None
+                    });
 
-                let stream_result = provider.send_chat_completion_stream(&model, req, inner_tx).await;
-                if let Err(err) = stream_result {
-                    tracing::error!("provider stream error: {}", err);
-                    let _ = tx
-                        .send(RunEvent::Error {
-                            message: err.to_string(),
-                            code: Some("provider_error".to_string()),
-                        })
-                        .await;
-                } else {
-                    tracing::info!("provider stream DONE: model='{}'", model);
+                    let stream_result = provider.send_chat_completion_stream(&model, req.clone(), inner_tx).await;
+                    let returned_run = forwarder.await.ok().flatten();
+                    let captured_failover = failover_capture.lock().await.clone();
+
+                    // Prefer explicit quota error event captured by forwarder; fall back to Err.
+                    let quota_failover_reason = if let Some(msg) = captured_failover {
+                        Some(msg)
+                    } else if let Err(ref err) = stream_result {
+                        let err_str = err.to_string();
+                        if is_quota_error(&err_str)
+                            && !failed_over_to_9router
+                            && !had_meaningful_output.load(Ordering::Relaxed)
+                            && is_opencode_quota_failover_candidate(&provider_id, &model)
+                        {
+                            Some(err_str)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(_qe) = quota_failover_reason {
+                        failed_over_to_9router = true;
+                        let from_model = model.clone();
+                        model = "opencode/9router/free-forever".to_string();
+                        req.model = model.clone();
+                        tracing::warn!(
+                            provider_id = %provider_id,
+                            from_model = %from_model,
+                            to_model = %model,
+                            "quota/free-limit on opencode stream; failing over to 9router/free-forever"
+                        );
+                        crate::metrics::init_metrics().record_quota_error(&provider_id, &from_model);
+                        run_for_park = returned_run; // reuse run if forwarder gave it back
+                        had_meaningful_output.store(false, Ordering::Relaxed);
+                        continue;
+                    }
+
+                    if let Err(err) = stream_result {
+                        tracing::error!("provider stream error: {}", err);
+                        let _ = tx
+                            .send(RunEvent::Error {
+                                message: err.to_string(),
+                                code: Some("provider_error".to_string()),
+                            })
+                            .await;
+                    } else {
+                        tracing::info!("provider stream DONE: model='{}'", model);
+                    }
+                    break;
                 }
-                let _ = forwarder.await;
             });
         } else {
             let _ = tx
