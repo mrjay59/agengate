@@ -699,13 +699,25 @@ async fn emit_event(
                 if !ctx.tool_names.is_empty()
                     && !ctx.tool_names.iter().any(|n| n.eq_ignore_ascii_case(&name))
                 {
-                    tracing::warn!(
-                        tool = %name,
-                        "Dropping tool_call not registered by client (fail-closed)"
+                    let blocked_builtin = matches!(name.to_ascii_lowercase().as_str(),
+                        "execute" | "bash" | "write" | "read" | "edit" | "patch" | "list" | "glob"
                     );
-                    crate::metrics::init_metrics().record_guard_violation();
-                    dropped.push(name);
-                    continue;
+                    if ctx.allow_unregistered_tools || !blocked_builtin {
+                        tracing::warn!(
+                            tool = %name,
+                            blocked_builtin,
+                            passthrough = ctx.allow_unregistered_tools,
+                            "Emitting unregistered tool_call with warning (not in client tools[])"
+                        );
+                    } else {
+                        tracing::warn!(
+                            tool = %name,
+                            "Dropping tool_call not registered by client (fail-closed builtin)"
+                        );
+                        crate::metrics::init_metrics().record_guard_violation();
+                        dropped.push(name);
+                        continue;
+                    }
                 }
                 let index = emitted_index;
                 emitted_index += 1;
