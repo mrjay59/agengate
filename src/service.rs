@@ -1604,9 +1604,10 @@ impl ServiceRegistry {
         &self,
         provider_id: &str,
         request: ChatCompletionRequest,
-    ) -> mpsc::Receiver<RunEvent> {
+    ) -> (mpsc::Receiver<RunEvent>, Vec<String>) {
         info!("stream_run_events START: provider='{}', model='{}'", provider_id, request.model);
         let (tx, rx) = mpsc::channel(128);
+        let mut session_tool_names: Vec<String> = Vec::new();
 
         // Strip "agg/" gateway namespace prefix from model id
         let mut request = request;
@@ -1713,6 +1714,12 @@ impl ServiceRegistry {
                             .collect()
                     })
                     .unwrap_or_default();
+                session_tool_names = tool_schemas.iter().map(|t| t.name.clone()).collect();
+                for t in crate::bridge::agentgate_builtin_tools() {
+                    if !session_tool_names.iter().any(|n| n.eq_ignore_ascii_case(&t.name)) {
+                        session_tool_names.push(t.name);
+                    }
+                }
                 let created = self
                     .run_registry
                     .create_run(
@@ -1811,7 +1818,7 @@ impl ServiceRegistry {
                 .await;
         }
 
-        rx
+        (rx, session_tool_names)
     }
 
     pub async fn add_provider(&mut self, request: AddProviderRequest) -> Result<(), AppError> {

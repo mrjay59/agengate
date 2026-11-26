@@ -155,16 +155,20 @@ struct ChunkContext {
     /// When bridge.passthrough_host_mcp is enabled, allow emitting tool calls
     /// not declared by the client (host MCP tools) instead of dropping them.
     allow_unregistered_tools: bool,
+    /// Tool names registered in the bridge session for this run (client tools + builtins).
+    /// Used as an additional allowlist source for emit filtering.
+    session_tool_names: Vec<String>,
 }
 
 impl ChunkContext {
-    fn new(model: &str, tool_names: Vec<String>, allow_unregistered_tools: bool) -> Self {
+    fn new(model: &str, tool_names: Vec<String>, allow_unregistered_tools: bool, session_tool_names: Vec<String>) -> Self {
         Self {
             id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
             created: chrono::Utc::now().timestamp(),
             model: model.to_string(),
             tool_names,
             allow_unregistered_tools,
+            session_tool_names,
         }
     }
 
@@ -330,8 +334,11 @@ async fn chat_completions(
             .map(|tools| tools.iter().map(|t| t.function.name.clone()).collect())
             .unwrap_or_default();
         let allow_unregistered_tools = registry.bridge_config.passthrough_host_mcp;
-        let ctx = ChunkContext::new(&resolved_model, client_tool_names, allow_unregistered_tools);
         let registry_clone = registry.clone();
+        let (mut events, session_tool_names) = registry_clone
+            .stream_run_events(&provider_id, request)
+            .await;
+        let ctx = ChunkContext::new(&resolved_model, client_tool_names, allow_unregistered_tools, session_tool_names);
         let activity_via_reasoning = reasoning_cfg.activity_via_reasoning;
         let response_cfg = reasoning_cfg.clone();
         let stream_run_id = run_id_for_stream.take().unwrap_or_default();
@@ -363,9 +370,6 @@ async fn chat_completions(
                 emit_event(&tx, &ctx, &mut writer, event, activity_via_reasoning).await;
             }
 
-            let mut events = registry_clone
-                .stream_run_events(&provider_id, request)
-                .await;
             let ttft_start = Instant::now();
             let mut ttft_recorded = false;
             let mut ticker = tokio::time::interval(Duration::from_millis(250));
@@ -430,7 +434,8 @@ async fn chat_completions(
                                         tool_calls_finished = true;
                                         break;
                                     } else {
-                                        terminated_by_error = true;
+                                        // All tool calls dropped; emit_event already sent warning content.
+                                        let _ = send_sse(&tx, &ctx.chunk(serde_json::json!({}), Some("stop"))).await;
                                         let _ = tx
                                             .send(Ok(axum::response::sse::Event::default().data("[DONE]")))
                                             .await;
