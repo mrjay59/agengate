@@ -152,15 +152,19 @@ struct ChunkContext {
     /// fail-closed at SSE emit so a raw built-in `execute` never leaks to
     /// AionUI as an unknown tool.
     tool_names: Vec<String>,
+    /// When bridge.passthrough_host_mcp is enabled, allow emitting tool calls
+    /// not declared by the client (host MCP tools) instead of dropping them.
+    allow_unregistered_tools: bool,
 }
 
 impl ChunkContext {
-    fn new(model: &str, tool_names: Vec<String>) -> Self {
+    fn new(model: &str, tool_names: Vec<String>, allow_unregistered_tools: bool) -> Self {
         Self {
             id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
             created: chrono::Utc::now().timestamp(),
             model: model.to_string(),
             tool_names,
+            allow_unregistered_tools,
         }
     }
 
@@ -325,7 +329,8 @@ async fn chat_completions(
             .as_ref()
             .map(|tools| tools.iter().map(|t| t.function.name.clone()).collect())
             .unwrap_or_default();
-        let ctx = ChunkContext::new(&resolved_model, client_tool_names);
+        let allow_unregistered_tools = registry.bridge_config.passthrough_host_mcp;
+        let ctx = ChunkContext::new(&resolved_model, client_tool_names, allow_unregistered_tools);
         let registry_clone = registry.clone();
         let activity_via_reasoning = reasoning_cfg.activity_via_reasoning;
         let response_cfg = reasoning_cfg.clone();
