@@ -136,7 +136,7 @@ early_role_chunk = true
 [bridge]
 # FIX-QUOTA-03: Reduce concurrent runs for free tier to prevent quota exhaustion.
 # These keys belong to [bridge]; under [bridge.limits] they were silently ignored.
-max_runs_per_key = 1
+max_runs_per_key = 2
 max_parked_runs = 2
 # FIX-QUOTA-STEP: lower from 50 to bound free-tier provider calls per tool loop.
 max_steps = 25

@@ -915,14 +915,36 @@ async fn emit_event(
                 // and casing must not hide a legitimately registered tool.
                 let normalized =
                     crate::bridge::BridgeServer::strip_mcp_tool_prefix(&name).to_ascii_lowercase();
-                let registered = ctx
-                    .tool_names
-                    .iter()
-                    .chain(ctx.session_tool_names.iter())
-                    .any(|n| {
-                        crate::bridge::BridgeServer::strip_mcp_tool_prefix(n)
-                            .eq_ignore_ascii_case(&normalized)
-                    });
+                let all_names = ctx.tool_names.iter().chain(ctx.session_tool_names.iter());
+                let registered = all_names.clone().any(|n| {
+                    crate::bridge::BridgeServer::strip_mcp_tool_prefix(n)
+                        .eq_ignore_ascii_case(&normalized)
+                });
+                // A CLI built-in (e.g. opencode's `Bash`) may be the local
+                // equivalent of a client tool with a different name (AionUI
+                // registers `ExecCommand`, GitHub Copilot registers `execute`).
+                // Map it to the client-registered name instead of dropping it,
+                // so the client can execute the call under a tool it knows.
+                let mut emitted_name = name.clone();
+                if !registered {
+                    let aliases: &[&str] = match normalized.as_str() {
+                        "bash" | "shell" | "execute" | "exec" =>
+                            &["execcommand", "exec_command", "execute", "bash", "shell"],
+                        "read" => &["read_file", "read"],
+                        "write" => &["write_file", "write"],
+                        "edit" => &["edit_file", "edit"],
+                        "list" | "glob" => &["list_dir", "list", "glob"],
+                        _ => &[],
+                    };
+                    if let Some(client_name) = aliases.iter().find_map(|alias| {
+                        all_names.clone().find(|n| n.eq_ignore_ascii_case(alias))
+                    }) {
+                        emitted_name = client_name.clone();
+                        tracing::info!(tool = %name, mapped_to = %emitted_name,
+                            "mapped CLI built-in tool to client-registered name");
+                    }
+                }
+                let registered = registered || emitted_name != name;
                 let blocked_builtin = matches!(normalized.as_str(),
                     "execute" | "bash" | "shell" | "write" | "read" | "edit" | "patch" | "list" | "glob"
                 );
@@ -954,7 +976,7 @@ async fn emit_event(
                         "index": index,
                         "id": call.id,
                         "type": call.r#type,
-                        "function": { "name": name, "arguments": "" }
+                        "function": { "name": emitted_name, "arguments": "" }
                     }]
                 })).await;
                 let args = call.function.arguments.as_str();
