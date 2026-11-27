@@ -1521,6 +1521,19 @@ impl ServiceRegistry {
         let mut attempt: u32 = 0;
         let mut request = request;
         let mut failed_over_to_9router = false;
+        // FIX-QUOTA-NO-SPAWN: fail fast before spawning CLI if the target model
+        // is already quota-disabled and reroute yielded no healthy alternative.
+        if provider_id == "opencode" && self.is_model_quota_disabled(&provider_id, &request.model).await {
+            crate::metrics::init_metrics().record_error("quota_disabled", "no_spawn_guard");
+            return Err(AppError::QuotaExceeded {
+                reason: format!(
+                    "model '{}' is quota-disabled and no healthy free alternative is available",
+                    request.model
+                ),
+                scope: "provider:model".to_string(),
+                reset_at: None,
+            });
+        }
         let response = loop {
             let call = tokio::time::timeout(
                 std::time::Duration::from_secs(timeout_secs),
@@ -1891,6 +1904,21 @@ impl ServiceRegistry {
                 }
                 request.agentgate_force_fresh_cli_session = true;
                 request.model = routed;
+            }
+            // FIX-QUOTA-NO-SPAWN: never spawn CLI for a model that is still
+            // quota-disabled (e.g. fallback itself exhausted / pool empty).
+            // Fail fast before any provider call or bridge run creation.
+            if self.is_model_quota_disabled(provider_id, &request.model).await {
+                drop(permit);
+                crate::metrics::init_metrics().record_error("quota_disabled", "no_spawn_guard");
+                return Err(AppError::QuotaExceeded {
+                    reason: format!(
+                        "model '{}' is quota-disabled and no healthy free alternative is available",
+                        request.model
+                    ),
+                    scope: "provider:model".to_string(),
+                    reset_at: None,
+                });
             }
         }
 
@@ -2680,6 +2708,26 @@ impl ServiceRegistry {
                             tracing::info!(event="quota.model.reroute", provider_id=%provider_id, from_model=%from, to_model=%model, reason=if disabled {"quota_disabled"} else {"free_policy"}, "Rerouted model");
                         }
                     }
+                }
+                // FIX-QUOTA-NO-SPAWN: never spawn CLI for a model that is still
+                // quota-disabled after reroute/fallback. Fail fast in-stream.
+                if provider_id == "opencode" && {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    let key = {
+                        let ml = model.trim().to_lowercase();
+                        if ml.starts_with("agg/") { ml[4..].to_string() } else { ml.clone() }
+                    };
+                    quota_state_clone.read().await.is_disabled(&key, now)
+                } {
+                    crate::metrics::init_metrics().record_error("quota_disabled", "no_spawn_guard");
+                    let _ = tx.send(RunEvent::Error {
+                        message: format!(
+                            "quota_exceeded: model '{}' is quota-disabled and no healthy free alternative is available",
+                            model
+                        ),
+                        code: Some("quota_exceeded".to_string()),
+                    }).await;
+                    return;
                 }
                 loop {
                     // Proxy the event channel so we can park the Run at the exact
