@@ -1336,6 +1336,14 @@ fn max_persistent_sessions() -> usize {
         .unwrap_or(4)
 }
 
+/// True when the error is an OS broken pipe (a CLI child's stdin closed).
+fn is_pipe_broken(err: &anyhow::Error) -> bool {
+    matches!(
+        crate::transport::classify_message(&err.to_string()),
+        crate::transport::TransportErrorClass::BrokenPipe
+    )
+}
+
 pub struct BridgeCliProvider {
     pub id: String,
     pub bin: Option<String>,
@@ -1654,6 +1662,20 @@ impl BridgeCliProvider {
             bridge.remove_session(id).await;
         }
     }
+
+    /// Drop a cached CLI session whose child pipe has already closed. The
+    /// caller's transient retry then spawns a fresh process instead of writing
+    /// into a dead pipe and surfacing `Broken pipe (os error 32)` to the client.
+    async fn retire_broken_session(
+        &self,
+        session: &Arc<dyn crate::provider::bridge::BridgeSession>,
+        session_id: &str,
+        mcp_session_id: &Option<String>,
+    ) {
+        self.persistent_sessions.write().await.remove(session_id);
+        let _ = session.close().await;
+        self.release_session(mcp_session_id).await;
+    }
 }
 
 /// Select the CLI provider implementation for a configured provider.
@@ -1911,7 +1933,23 @@ impl CliProvider for BridgeCliProvider {
         }
 
         if !user_message.trim().is_empty() {
-            session.send_user_message(&user_message).await?;
+            if let Err(e) = session.send_user_message(&user_message).await {
+                if is_pipe_broken(&e) {
+                    // Reused CLI child already exited: its stdin pipe is dead.
+                    // Drop the cache entry so the caller's transient retry spawns
+                    // a fresh child instead of echoing the raw OS error.
+                    tracing::warn!(
+                        target: "agentgate.provider",
+                        provider_id = %self.id,
+                        "CLI stdin pipe closed (stale session); dropping session for fresh respawn"
+                    );
+                    self.retire_broken_session(&session, &session_id, &mcp_session_id).await;
+                    return Err(anyhow::anyhow!(
+                        "provider_error: broken pipe — CLI stdin closed; stale session dropped"
+                    ));
+                }
+                return Err(e);
+            }
         }
 
         // Wait for completion (handles tool calls via bridge)
@@ -2185,7 +2223,23 @@ impl CliProvider for BridgeCliProvider {
         }
 
         if !user_message.trim().is_empty() {
-            session.send_user_message(&user_message).await?;
+            if let Err(e) = session.send_user_message(&user_message).await {
+                if is_pipe_broken(&e) {
+                    // Reused CLI child already exited: its stdin pipe is dead.
+                    // Drop the cache entry so the caller's transient retry spawns
+                    // a fresh child instead of echoing the raw OS error.
+                    tracing::warn!(
+                        target: "agentgate.provider",
+                        provider_id = %self.id,
+                        "CLI stdin pipe closed (stale session); dropping session for fresh respawn"
+                    );
+                    self.retire_broken_session(&session, &session_id, &mcp_session_id).await;
+                    return Err(anyhow::anyhow!(
+                        "provider_error: broken pipe — CLI stdin closed; stale session dropped"
+                    ));
+                }
+                return Err(e);
+            }
         }
 
         // Take event receiver for true streaming

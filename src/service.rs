@@ -105,6 +105,21 @@ fn skip_retry_when_client_gone(client_gone: bool, error: &str) -> bool {
     !error.is_empty()
 }
 
+/// What the client is allowed to see for a *terminal* provider stream error.
+///
+/// `Broken pipe (os error 32)` is an internal transport detail (a CLI child's
+/// stdin closed) — it must never be echoed to the client verbatim. Map it to a
+/// stable, actionable code; keep all other errors as-is.
+fn terminal_stream_error_surface(error: &str) -> (String, &'static str) {
+    match crate::transport::classify_message(error) {
+        crate::transport::TransportErrorClass::BrokenPipe => (
+            "provider CLI session closed mid-stream; retry the request".to_string(),
+            "provider_pipe_closed",
+        ),
+        _ => (error.to_string(), "provider_error"),
+    }
+}
+
 fn is_opencode_quota_failover_candidate(provider_id: &str, model: &str) -> bool {
     let is_opencode = provider_id == "opencode"
         || model.starts_with("opencode/")
@@ -2874,10 +2889,11 @@ impl ServiceRegistry {
                             error = %crate::transport::redact_diagnostics(&err_str),
                             "provider stream error"
                         );
+                        let (surface_message, surface_code) = terminal_stream_error_surface(&err_str);
                         let _ = tx
                             .send(RunEvent::Error {
-                                message: err_str,
-                                code: Some("provider_error".to_string()),
+                                message: surface_message,
+                                code: Some(surface_code.to_string()),
                             })
                             .await;
                     } else {
@@ -2960,6 +2976,17 @@ mod http_router_tests {
         assert!(skip_retry_when_client_gone(true, "readiness"));
         assert!(!skip_retry_when_client_gone(false, "Broken pipe (os error 32)"));
         assert!(!skip_retry_when_client_gone(true, ""));
+    }
+
+    #[test]
+    fn broken_pipe_never_reaches_client_verbatim() {
+        let (msg, code) = terminal_stream_error_surface("Error: Broken pipe (os error 32)");
+        assert_eq!(code, "provider_pipe_closed");
+        assert!(!msg.contains("os error 32"), "raw os error leaked: {msg}");
+
+        let (msg, code) = terminal_stream_error_surface("provider_error: transport ECONNRESET");
+        assert_eq!(code, "provider_error");
+        assert!(msg.contains("ECONNRESET"), "non-pipe errors keep their detail");
     }
 
     fn nvidia_cfg() -> ProviderConfig {

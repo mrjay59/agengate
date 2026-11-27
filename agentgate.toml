@@ -175,7 +175,7 @@ minimal_free_model = false
 # MCP tool-hold truncation (bridge.rs execute_tool path).
 [bridge.limits]
 max_inject = 10
-max_tools = 128
+max_tools = 256
 max_prompt_chars = 64000
 max_result_bytes = 262144
 
@@ -183,7 +183,7 @@ max_result_bytes = 262144
 # A replay re-sends the whole transcript, so this budget must stay small.
 [limits]
 max_inject = 10
-max_tools = 128
+max_tools = 256
 max_prompt_chars = 64000
 max_result_bytes = 262144
 

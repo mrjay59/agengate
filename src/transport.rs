@@ -129,7 +129,14 @@ pub fn classify_message(message: &str) -> TransportErrorClass {
     if s.contains("connection reset") || s.contains("econnreset") || s.contains("os error 104") {
         return TransportErrorClass::ConnectionReset;
     }
-    if s.contains("broken pipe") || s.contains("os error 32") {
+    if s.contains("broken pipe")
+        || s.contains("os error 32")
+        // Windows: ERROR_BROKEN_PIPE (109) / ERROR_NO_DATA (232)
+        || s.contains("os error 109")
+        || s.contains("os error 232")
+        || s.contains("pipe has been ended")
+        || s.contains("pipe is being closed")
+    {
         return TransportErrorClass::BrokenPipe;
     }
     if s.contains("timed out") || s.contains("timeout") || s.contains("elapsed") {
