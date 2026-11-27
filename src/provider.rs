@@ -779,6 +779,14 @@ impl CliProviderImpl {
         // CLI receives the bare model name (avoids "pull model manifest" errors).
         let model = if self.id == "ollama" {
             model.strip_prefix("ollama/").unwrap_or(model)
+        } else if self.id == "opencode" {
+            // "opencode/9router/free-forever" -> "9router/free-forever", but keep
+            // "opencode/beam-free" as-is (rest has no '/').
+            if let Some(rest) = model.strip_prefix("opencode/") {
+                if rest.contains('/') { rest } else { model }
+            } else {
+                model
+            }
         } else {
             model
         };
