@@ -1,6 +1,6 @@
 [package]
 name = "agentgate"
-version = "0.3.30"
+version = "0.3.31"
 edition = "2021"
 default-run = "agentgate"
 
@@ -36,6 +36,9 @@ regex = "1.10"
 percent-encoding = "2.3"
 chrono = "0.4"
 libc = "0.2"
+# FIX-KEYSTORE: cryptographic hash + secure random for API key secrets.
+# `ring` is already in the dependency graph via rustls, so this adds no new crate.
+ring = "0.17"
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -23,6 +23,12 @@ pub struct Config {
     /// Tool injection limits.
     #[serde(default)]
     pub limits: LimitsConfig,
+    /// FIX-KEYSTORE: API key lifecycle / authentication settings.
+    #[serde(default)]
+    pub auth: AuthConfig,
+    /// FIX-QUOTA-ACCOUNTING: per-key/provider/model usage limits.
+    #[serde(default)]
+    pub quota: QuotaConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -355,6 +361,135 @@ pub struct ServerConfig {
     pub cors: bool,
 }
 
+/// FIX-KEYSTORE: `[server.auth]` — lifecycle-backed API key authentication.
+///
+/// Backward compatible: when `enabled = false` (the default), the legacy
+/// `server.api_keys` static list keeps working exactly as before. When enabled,
+/// requests are authenticated against the SQLite key store, and `/admin/*`
+/// additionally requires the `admin` scope.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthConfig {
+    /// Enable lifecycle-backed auth. Default: false (legacy static keys).
+    #[serde(default)]
+    pub enabled: bool,
+    /// SQLite file for keys + usage. Default: `<config dir>/agentgate/keys.sqlite3`.
+    #[serde(default)]
+    pub key_store_path: Option<PathBuf>,
+    /// Static keys that always have `admin` scope (bootstrap / break-glass).
+    #[serde(default)]
+    pub admin_keys: Vec<String>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self { enabled: false, key_store_path: None, admin_keys: Vec::new() }
+    }
+}
+
+/// FIX-QUOTA-ACCOUNTING: a quota rule overlay for a provider/model pair.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct QuotaRule {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub limits: QuotaLimits,
+}
+
+/// FIX-QUOTA-ACCOUNTING: limit set. `None` means "no limit for this dimension".
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
+pub struct QuotaLimits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requests_per_minute: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requests_per_day: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens_per_day: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens_per_day: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens_per_day: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_body_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_uses_total: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_uses_per_day: Option<u64>,
+}
+
+impl QuotaLimits {
+    /// Overlay `Some` values of `other` on top of `self`.
+    pub fn overlay(&self, other: &QuotaLimits) -> QuotaLimits {
+        QuotaLimits {
+            requests_per_minute: other.requests_per_minute.or(self.requests_per_minute),
+            requests_per_day: other.requests_per_day.or(self.requests_per_day),
+            input_tokens_per_day: other.input_tokens_per_day.or(self.input_tokens_per_day),
+            output_tokens_per_day: other.output_tokens_per_day.or(self.output_tokens_per_day),
+            total_tokens_per_day: other.total_tokens_per_day.or(self.total_tokens_per_day),
+            max_concurrent_requests: other.max_concurrent_requests.or(self.max_concurrent_requests),
+            max_body_bytes: other.max_body_bytes.or(self.max_body_bytes),
+            max_uses_total: other.max_uses_total.or(self.max_uses_total),
+            max_uses_per_day: other.max_uses_per_day.or(self.max_uses_per_day),
+        }
+    }
+}
+
+/// FIX-QUOTA-ACCOUNTING: `[quota]` defaults + overlays.
+#[derive(Debug, Clone, Deserialize)]
+pub struct QuotaConfig {
+    #[serde(default = "default_quota_limits")]
+    pub defaults: QuotaLimits,
+    #[serde(default)]
+    pub rules: Vec<QuotaRule>,
+    /// How often the watcher re-checks quota-disabled models (default 12h).
+    #[serde(default = "default_43200")]
+    pub watcher_interval_secs: u64,
+    /// Cooldown from the FIRST free-limit notification before re-enable (12h).
+    #[serde(default = "default_43200")]
+    pub cooldown_secs: u64,
+    /// Opt-in lightweight probe before re-enabling (default false: schedule only).
+    #[serde(default)]
+    pub probe_on_recheck: bool,
+    /// Apply limit enforcement even to requests without a lifecycle key
+    /// (legacy static-key / no-auth deployments). Default false: accounting is
+    /// always on, but limits are only enforced for real keys unless opted in.
+    #[serde(default)]
+    pub enforce_anonymous: bool,
+}
+
+fn default_43200() -> u64 { 43_200 }
+
+impl Default for QuotaConfig {
+    fn default() -> Self {
+        Self {
+            defaults: default_quota_limits(),
+            rules: Vec::new(),
+            watcher_interval_secs: default_43200(),
+            cooldown_secs: default_43200(),
+            probe_on_recheck: false,
+            enforce_anonymous: false,
+        }
+    }
+}
+
+fn default_quota_limits() -> QuotaLimits {
+    // Spec SAFE defaults (docs/AGENTGATE_HTTP_CHAT_COMPLETIONS_SPEC.md §7.4/§10).
+    QuotaLimits {
+        requests_per_minute: Some(60),
+        requests_per_day: Some(2000),
+        input_tokens_per_day: Some(1_000_000),
+        output_tokens_per_day: Some(1_000_000),
+        total_tokens_per_day: None,
+        max_concurrent_requests: Some(10),
+        max_body_bytes: Some(4 * 1024 * 1024),
+        max_uses_total: None,
+        max_uses_per_day: None,
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct DefaultsConfig {
     #[serde(default = "default_cwd")]
@@ -519,7 +654,84 @@ pub struct ProviderConfig {
     /// prompting for JSON tool calls and parsing them from the output.
     #[serde(default)]
     pub prompt_tools_fallback: bool,
+
+    // ---- HTTP upstream provider fields (OpenAI-compatible) ----
+    // These are optional and backwards compatible: existing CLI providers keep
+    // their behavior because `mode`/`type` default to `cli`.
+    /// Execution mode: `cli` (default, preserves legacy behavior), `http`, `auto`.
+    #[serde(default = "default_cli_mode")]
+    pub mode: String,
+    /// Provider type: `cli` (default) or `http_openai_compatible`.
+    /// `type` is a Rust keyword, so the field is renamed at the serde boundary.
+    #[serde(rename = "type", default = "default_cli_provider_type")]
+    pub provider_type: String,
+    /// Upstream adapter. `openai_compatible_chat` is the default for HTTP providers.
+    #[serde(default = "default_adapter")]
+    pub adapter: String,
+    /// Chat completions path, relative to `base_url`.
+    #[serde(default = "default_chat_completions_path")]
+    pub chat_completions_path: String,
+    /// Model catalog path, relative to `base_url` (used by `/v1/models` sync).
+    #[serde(default = "default_models_path")]
+    pub models_path: String,
+    /// Upstream auth scheme: `bearer` | `header` | `none`.
+    #[serde(default = "default_auth_type")]
+    pub auth_type: String,
+    /// Environment variable holding the upstream API key (preferred over `api_key`).
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    /// Inline upstream API key. Discouraged; prefer `api_key_env`.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Expected key prefix, e.g. `nvapi-` for NVIDIA NIM. Used to validate env keys.
+    #[serde(default)]
+    pub api_key_prefix: Option<String>,
+    /// Endpoint mapping verification status: `verified` | `unverified`.
+    #[serde(default = "default_unverified")]
+    pub mapping_status: String,
+    /// Per-request upstream timeout in seconds.
+    #[serde(default = "default_http_timeout")]
+    pub timeout_secs: u64,
+    /// Retry attempts after the first request (0 = no retries).
+    #[serde(default)]
+    pub max_retries: u32,
+    /// Backoff delays in milliseconds, one entry per retry attempt.
+    #[serde(default)]
+    pub retry_backoff_ms: Vec<u64>,
+    /// Forward client `tools` to the upstream.
+    #[serde(default = "default_true")]
+    pub forward_tools: bool,
+    /// Forward `tool_choice`. Some NIM models reject this field (422).
+    #[serde(default = "default_true")]
+    pub forward_tool_choice: bool,
+    /// Forward `response_format`. Some NIM models reject this field (422).
+    #[serde(default = "default_true")]
+    pub forward_response_format: bool,
+    /// Forward `stream` / accept SSE upstream.
+    #[serde(default = "default_true")]
+    pub forward_stream: bool,
+    /// Max idle wait between SSE events before failing over.
+    #[serde(default = "default_http_timeout")]
+    pub stream_idle_timeout_secs: u64,
+    /// Verify upstream TLS certificates.
+    #[serde(default = "default_true")]
+    pub verify_tls: bool,
+    /// Upstream model to use when the client omits/aliases the model.
+    #[serde(default)]
+    pub default_model: Option<String>,
+    /// Upstream HTTP status codes classified as quota/rate-limit (failover trigger).
+    #[serde(default)]
+    pub quota_exhausted_statuses: Vec<u16>,
 }
+
+fn default_cli_mode() -> String { "cli".to_string() }
+fn default_cli_provider_type() -> String { "cli".to_string() }
+fn default_adapter() -> String { "openai_compatible_chat".to_string() }
+fn default_chat_completions_path() -> String { "/chat/completions".to_string() }
+fn default_models_path() -> String { "/models".to_string() }
+fn default_auth_type() -> String { "bearer".to_string() }
+fn default_unverified() -> String { "unverified".to_string() }
+fn default_http_timeout() -> u64 { 120 }
 
 fn default_host() -> String {
     "127.0.0.1".to_string()
@@ -558,6 +770,8 @@ impl Default for Config {
             provider: Vec::new(),
             workspace: std::collections::HashMap::new(),
             limits: LimitsConfig::default(),
+            auth: AuthConfig::default(),
+            quota: QuotaConfig::default(),
         }
     }
 }
@@ -596,9 +810,10 @@ fn find_config_path() -> anyhow::Result<PathBuf> {
     Ok(std::env::current_dir()?.join("agentgate.toml"))
 }
 
-/// Create default config file
-pub async fn write_default_config(force: bool) -> anyhow::Result<()> {
-    let config_content = r#"# AgentGate Configuration
+/// Default config template used by `agentgate init`.
+/// Kept as a function so tests can assert the generated file is valid TOML.
+pub fn default_config_content() -> &'static str {
+    r#"# AgentGate Configuration
 # Generated by agentgate init
 # SECURITY NOTICE: This file controls network exposure. Read comments carefully.
 
@@ -630,11 +845,6 @@ workdir = "."
 max_concurrency_per_provider = 2
 model_cache_ttl_secs = 900
 first_token_timeout_secs = 120
-
-[routing]
-no_tools_policy = "chat_only"
-on_client_tools = "bridge"
-default_workspace = "default"
 
 [bridge]
 # FIX-QUOTA-03: Reduce concurrent runs for free tier to prevent quota exhaustion.
@@ -720,6 +930,48 @@ strip_ansi = true
 enabled = true
 models = ["llama3", "deepseek-r1", "phi3"]
 
+# -----------------------------------------------------------------------------
+# NVIDIA NIM (OpenAI-compatible HTTP provider)
+# Verified mapping: https://docs.api.nvidia.com/nim/reference/llm-apis
+# Requires NVIDIA_API_KEY (`nvapi-*`). Kept disabled until a key is configured
+# and `enabled = true` is explicitly chosen. No CLI process is spawned.
+# -----------------------------------------------------------------------------
+[[provider]]
+id = "nvidia"
+type = "http_openai_compatible"
+mode = "http"
+adapter = "openai_compatible_chat"
+base_url = "https://integrate.api.nvidia.com/v1"
+chat_completions_path = "/chat/completions"
+models_path = "/models"
+auth_type = "bearer"
+api_key_env = "NVIDIA_API_KEY"
+api_key_prefix = "nvapi-"
+mapping_status = "verified"
+enabled = false
+bridge = false
+default_model = "meta/llama-3.3-70b-instruct"
+# Seed catalog; `/v1/models` sync refreshes this from GET /models when enabled.
+models = [
+  "meta/llama-3.3-70b-instruct",
+  "meta/llama-3.1-8b-instruct",
+  "meta/llama-3.1-70b-instruct",
+  "qwen/qwen3-next-80b-a3b-instruct",
+  "deepseek-ai/deepseek-v4-flash",
+]
+timeout_secs = 120
+max_retries = 2
+retry_backoff_ms = [250, 1000]
+forward_tools = true
+# NIM ChatRequest has additionalProperties=false and does not declare
+# tool_choice / response_format / seed; forwarding them can return 422.
+forward_tool_choice = false
+forward_response_format = false
+forward_stream = true
+stream_idle_timeout_secs = 120
+verify_tls = true
+quota_exhausted_statuses = [429]
+
 # =============================================================================
 # SECURITY HARDENING GUIDE
 # =============================================================================
@@ -749,8 +1001,13 @@ models = ["llama3", "deepseek-r1", "phi3"]
 #    These use per-session tokens, not api_keys. They are always accessible
 #    if the session token is known. Ensure session tokens are not leaked.
 # =============================================================================
-"#;
-    
+"#
+}
+
+/// Create default config file
+pub async fn write_default_config(force: bool) -> anyhow::Result<()> {
+    let config_content = default_config_content();
+
     let path = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("agentgate.toml");
@@ -762,6 +1019,42 @@ models = ["llama3", "deepseek-r1", "phi3"]
     tokio::fs::write(&path, config_content).await?;
     tracing::info!("Config written to {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_nvidia_mapping(cfg: &Config, source: &str) {
+        let p = cfg
+            .provider
+            .iter()
+            .find(|p| p.id == "nvidia")
+            .unwrap_or_else(|| panic!("nvidia provider missing in {}", source));
+        assert_eq!(p.provider_type, "http_openai_compatible", "{}", source);
+        assert_eq!(p.mode, "http", "{}", source);
+        assert_eq!(p.base_url.as_deref(), Some("https://integrate.api.nvidia.com/v1"));
+        assert_eq!(p.chat_completions_path, "/chat/completions");
+        assert_eq!(p.api_key_env.as_deref(), Some("NVIDIA_API_KEY"));
+        assert_eq!(p.mapping_status, "verified");
+        assert!(!p.enabled, "nvidia must stay disabled until a key is configured");
+        assert!(!p.bridge, "HTTP providers must not spawn a CLI bridge");
+    }
+
+    #[test]
+    fn repository_configs_parse_with_nvidia_provider() {
+        let repo: Config = toml::from_str(include_str!("../agentgate.toml"))
+            .expect("agentgate.toml must parse");
+        assert_nvidia_mapping(&repo, "agentgate.toml");
+
+        let example: Config = toml::from_str(include_str!("../agentgate.example.toml"))
+            .expect("agentgate.example.toml must parse");
+        assert_nvidia_mapping(&example, "agentgate.example.toml");
+
+        let generated: Config = toml::from_str(default_config_content())
+            .expect("generated default config must be valid TOML");
+        assert_nvidia_mapping(&generated, "default_config_content()");
+    }
 }
 
 

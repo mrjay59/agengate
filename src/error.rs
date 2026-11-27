@@ -65,6 +65,34 @@ pub enum AppError {
 
     #[error("tool_isolation_violation: {0}")]
     ToolIsolationViolation(String),
+
+    /// FIX-QUOTA-ACCOUNTING: 429 with `error.type = quota_exceeded`.
+    #[error("quota_exceeded: {reason}")]
+    QuotaExceeded {
+        reason: String,
+        scope: String,
+        reset_at: Option<i64>,
+    },
+
+    /// FIX-KEYSTORE: authentication / authorization failures with stable codes.
+    #[error("invalid_api_key")]
+    KeyInvalid,
+    #[error("api_key_expired")]
+    KeyExpired,
+    #[error("api_key_revoked")]
+    KeyRevoked,
+    #[error("scope_denied: {0}")]
+    ScopeDenied(String),
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+    #[error("bad_request: {0}")]
+    BadRequest(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
+    #[error("not_found: {0}")]
+    NotFound(String),
+    #[error("store_error: {0}")]
+    StoreError(String),
 }
 
 impl AppError {
@@ -81,6 +109,16 @@ impl AppError {
             AppError::ProviderUnavailable(_) => "provider_unavailable",
             AppError::ToolIsolationViolation(_) => "tool_isolation_violation",
             AppError::ToolError(_) => "tool_error",
+            AppError::QuotaExceeded { .. } => "quota_exceeded",
+            AppError::KeyInvalid => "invalid_api_key",
+            AppError::KeyExpired => "api_key_expired",
+            AppError::KeyRevoked => "api_key_revoked",
+            AppError::ScopeDenied(_) => "scope_denied",
+            AppError::Forbidden(_) => "forbidden",
+            AppError::BadRequest(_) => "bad_request",
+            AppError::Conflict(_) => "conflict",
+            AppError::NotFound(_) => "not_found",
+            AppError::StoreError(_) => "store_error",
             _ => "internal_error",
         }
     }
@@ -109,22 +147,40 @@ impl IntoResponse for AppError {
             AppError::ProviderError(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::ProviderUnavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
             AppError::ToolIsolationViolation(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+            AppError::QuotaExceeded { .. } => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
+            AppError::KeyInvalid | AppError::KeyExpired | AppError::KeyRevoked => {
+                (StatusCode::UNAUTHORIZED, self.to_string())
+            }
+            AppError::ScopeDenied(_) | AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
+            AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            AppError::Conflict(_) => (StatusCode::CONFLICT, self.to_string()),
+            AppError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
+            AppError::StoreError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 
         let code = self.code();
-        // Per spec §7.6: 5xx -> server_error/provider_error, 4xx -> invalid_request_error
-        let error_type = if status.is_server_error() {
-            "provider_error"
-        } else {
-            "invalid_request_error"
+        // Per spec §7.6: 5xx -> server_error/provider_error, 4xx -> invalid_request_error.
+        // FIX-QUOTA-ACCOUNTING: quota errors use their own type + reset metadata
+        // (spec §10.2) so clients can tell them apart from ordinary 429s.
+        let error_type = match self {
+            AppError::QuotaExceeded { .. } => "quota_exceeded",
+            AppError::KeyInvalid | AppError::KeyExpired | AppError::KeyRevoked
+            | AppError::ScopeDenied(_) | AppError::Forbidden(_) => "invalid_request_error",
+            _ if status.is_server_error() => "provider_error",
+            _ => "invalid_request_error",
         };
-        let body = axum::Json(serde_json::json!({
-            "error": {
-                "message": message,
-                "type": error_type,
-                "code": code,
-            }
-        }));
+        let mut error_obj = serde_json::json!({
+            "message": message,
+            "type": error_type,
+            "code": code,
+        });
+        if let AppError::QuotaExceeded { reason, scope, reset_at } = self {
+            let obj = error_obj.as_object_mut().expect("json object");
+            obj.insert("reason".to_string(), serde_json::json!(reason));
+            obj.insert("scope".to_string(), serde_json::json!(scope));
+            obj.insert("reset_at".to_string(), serde_json::json!(reset_at));
+        }
+        let body = axum::Json(serde_json::json!({ "error": error_obj }));
 
         (status, body).into_response()
     }

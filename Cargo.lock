@@ -23,6 +23,7 @@ dependencies = [
  "predicates",
  "regex",
  "reqwest",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",

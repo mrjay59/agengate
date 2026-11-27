@@ -59,6 +59,34 @@ pub struct Metrics {
     /// Quota / free-limit errors (HTTP 429) by provider, model.
     /// FIX-QUOTA-METRIC: makes free-tier exhaustion observable.
     pub quota_errors_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// FIX-QUOTA-ACCOUNTING: accounted tokens by direction/provider/model/key_id.
+    pub quota_tokens_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// FIX-QUOTA-ACCOUNTING: accounted content bytes by direction/provider/model/key_id.
+    pub quota_bytes_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// FIX-QUOTA-ACCOUNTING: quota denials by scope/reason.
+    pub quota_denied_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// FIX-KEYSTORE: key usage counter by key_id.
+    pub key_usage_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+
+    // ---- Phase 5 observability (spec §14) --------------------------------
+    /// HTTP upstream requests by provider, model, target, result, mode.
+    pub http_upstream_requests_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// HTTP upstream errors by provider, model, transport class.
+    pub http_upstream_errors_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Sum of HTTP upstream request latencies in milliseconds.
+    pub http_upstream_latency_ms_sum: AtomicU64,
+    /// Count of HTTP upstream latency observations.
+    pub http_upstream_latency_ms_count: AtomicU64,
+    /// Per-(provider,model) latency accumulator: (sum_ms, count).
+    pub http_upstream_latency_by_model: std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>>,
+    /// Proxy selections by provider, proxy, strategy.
+    pub proxy_selected_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Proxy errors by provider, proxy, transport class.
+    pub proxy_errors_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// LB selections by pool, from_model, to_model, reason.
+    pub lb_selection_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// LB fallbacks by pool, to_model, reason.
+    pub lb_fallback_total: std::sync::Mutex<std::collections::HashMap<String, u64>>,
 }
 
 impl Metrics {
@@ -89,6 +117,19 @@ impl Metrics {
             tool_injected_total: std::sync::Mutex::new(std::collections::HashMap::new()),
             errors_total: std::sync::Mutex::new(std::collections::HashMap::new()),
             quota_errors_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            quota_tokens_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            quota_bytes_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            quota_denied_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            key_usage_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            http_upstream_requests_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            http_upstream_errors_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            http_upstream_latency_ms_sum: AtomicU64::new(0),
+            http_upstream_latency_ms_count: AtomicU64::new(0),
+            http_upstream_latency_by_model: std::sync::Mutex::new(std::collections::HashMap::new()),
+            proxy_selected_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            proxy_errors_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            lb_selection_total: std::sync::Mutex::new(std::collections::HashMap::new()),
+            lb_fallback_total: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -223,6 +264,96 @@ impl Metrics {
         Self::increment_map(&self.quota_errors_total, &key);
     }
 
+    // ---- Phase 5 observability (spec §14) --------------------------------
+
+    fn add_map(map: &std::sync::Mutex<std::collections::HashMap<String, u64>>, key: &str, amount: u64) {
+        map.lock().unwrap_or_else(|e| e.into_inner())
+            .entry(key.to_string())
+            .and_modify(|v| *v = v.saturating_add(amount))
+            .or_insert(amount);
+    }
+
+    /// Record one HTTP upstream attempt with result (`ok`/`error`) and mode.
+    pub fn record_http_upstream_request(&self, provider: &str, model: &str, target: &str, result: &str, mode: &str) {
+        let key = format!(
+            "provider=\"{}\",model=\"{}\",target=\"{}\",result=\"{}\",mode=\"{}\"",
+            provider, model, target, result, mode
+        );
+        Self::increment_map(&self.http_upstream_requests_total, &key);
+    }
+
+    /// Record a classified HTTP upstream error (see `TransportErrorClass`).
+    pub fn record_http_upstream_error(&self, provider: &str, model: &str, class: &str) {
+        let key = format!("provider=\"{}\",model=\"{}\",class=\"{}\"", provider, model, class);
+        Self::increment_map(&self.http_upstream_errors_total, &key);
+    }
+
+    pub fn observe_http_upstream_latency(&self, provider: &str, model: &str, ms: u64) {
+        self.http_upstream_latency_ms_sum.fetch_add(ms, Ordering::Relaxed);
+        self.http_upstream_latency_ms_count.fetch_add(1, Ordering::Relaxed);
+        let key = format!("provider=\"{}\",model=\"{}\"", provider, model);
+        let mut map = self.http_upstream_latency_by_model.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = map.entry(key).or_insert((0, 0));
+        entry.0 = entry.0.saturating_add(ms);
+        entry.1 = entry.1.saturating_add(1);
+    }
+
+    /// Record token usage (direction = `in` or `out`).
+    pub fn record_quota_tokens(&self, direction: &str, provider: &str, model: &str, key_id: &str, amount: u64) {
+        let key = format!(
+            "direction=\"{}\",provider=\"{}\",model=\"{}\",key_id=\"{}\"",
+            direction, provider, model, key_id
+        );
+        Self::add_map(&self.quota_tokens_total, &key, amount);
+    }
+
+    /// Record content byte usage (direction = `in` or `out`).
+    pub fn record_quota_bytes(&self, direction: &str, provider: &str, model: &str, key_id: &str, amount: u64) {
+        let key = format!(
+            "direction=\"{}\",provider=\"{}\",model=\"{}\",key_id=\"{}\"",
+            direction, provider, model, key_id
+        );
+        Self::add_map(&self.quota_bytes_total, &key, amount);
+    }
+
+    pub fn record_quota_denied(&self, scope: &str, reason: &str) {
+        let key = format!("scope=\"{}\",reason=\"{}\"", scope, reason);
+        Self::increment_map(&self.quota_denied_total, &key);
+    }
+
+    pub fn record_key_usage(&self, key_id: &str) {
+        let key = format!("key_id=\"{}\"", key_id);
+        Self::increment_map(&self.key_usage_total, &key);
+    }
+
+    pub fn record_proxy_selected(&self, provider: &str, proxy: &str, strategy: &str) {
+        let key = format!("provider=\"{}\",proxy=\"{}\",strategy=\"{}\"", provider, proxy, strategy);
+        Self::increment_map(&self.proxy_selected_total, &key);
+    }
+
+    pub fn record_proxy_error(&self, provider: &str, proxy: &str, class: &str) {
+        let key = format!("provider=\"{}\",proxy=\"{}\",class=\"{}\"", provider, proxy, class);
+        Self::increment_map(&self.proxy_errors_total, &key);
+    }
+
+    /// Plural alias used by the gateway/proxy-pool workstream (same counter).
+    pub fn record_proxy_errors(&self, provider: &str, proxy: &str, class: &str) {
+        self.record_proxy_error(provider, proxy, class);
+    }
+
+    pub fn record_lb_selection(&self, pool: &str, from_model: &str, to_model: &str, reason: &str) {
+        let key = format!(
+            "pool=\"{}\",from_model=\"{}\",to_model=\"{}\",reason=\"{}\"",
+            pool, from_model, to_model, reason
+        );
+        Self::increment_map(&self.lb_selection_total, &key);
+    }
+
+    pub fn record_lb_fallback(&self, pool: &str, to_model: &str, reason: &str) {
+        let key = format!("pool=\"{}\",to_model=\"{}\",reason=\"{}\"", pool, to_model, reason);
+        Self::increment_map(&self.lb_fallback_total, &key);
+    }
+
     fn ms(v: u64) -> f64 {
         v as f64 / 1000.0
     }
@@ -317,6 +448,40 @@ impl Metrics {
         out.push_str(&self.render_map_metrics("agentgate_provider_concurrency", &self.provider_concurrency));
         out.push_str(&self.render_map_metrics("agentgate_errors_total", &self.errors_total));
         out.push_str(&self.render_map_metrics("agentgate_quota_errors_total", &self.quota_errors_total));
+
+        // ---- Phase 5 observability (spec §14) -----------------------------
+        fn render_line(out: &mut String, metric: &str, value: f64) {
+            out.push_str(metric);
+            out.push(' ');
+            out.push_str(&value.to_string());
+            out.push('\n');
+        }
+        out.push_str(&self.render_map_metrics("agentgate_http_upstream_requests_total", &self.http_upstream_requests_total));
+        out.push_str(&self.render_map_metrics("agentgate_http_upstream_errors_total", &self.http_upstream_errors_total));
+        render_line(&mut out, "agentgate_http_upstream_latency_ms_sum", self.http_upstream_latency_ms_sum.load(Ordering::Relaxed) as f64);
+        render_line(&mut out, "agentgate_http_upstream_latency_ms_count", self.http_upstream_latency_ms_count.load(Ordering::Relaxed) as f64);
+        // Labeled average latency per (provider, model) as specified in §14.
+        for (labels, (sum, count)) in self
+            .http_upstream_latency_by_model
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+        {
+            let avg = if *count == 0 { 0.0 } else { *sum as f64 / *count as f64 };
+            out.push_str("agentgate_http_upstream_latency_ms{");
+            out.push_str(labels);
+            out.push_str("} ");
+            out.push_str(&avg.to_string());
+            out.push('\n');
+        }
+        out.push_str(&self.render_map_metrics("agentgate_quota_tokens_total", &self.quota_tokens_total));
+        out.push_str(&self.render_map_metrics("agentgate_quota_bytes_total", &self.quota_bytes_total));
+        out.push_str(&self.render_map_metrics("agentgate_quota_denied_total", &self.quota_denied_total));
+        out.push_str(&self.render_map_metrics("agentgate_key_usage_total", &self.key_usage_total));
+        out.push_str(&self.render_map_metrics("agentgate_proxy_selected_total", &self.proxy_selected_total));
+        out.push_str(&self.render_map_metrics("agentgate_proxy_errors_total", &self.proxy_errors_total));
+        out.push_str(&self.render_map_metrics("agentgate_lb_selection_total", &self.lb_selection_total));
+        out.push_str(&self.render_map_metrics("agentgate_lb_fallback_total", &self.lb_fallback_total));
         out
     }
 }

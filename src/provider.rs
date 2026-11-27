@@ -1,4 +1,7 @@
 use crate::config::ProviderConfig;
+pub mod combo;
+pub mod http;
+pub mod mappings;
 use crate::provider::bridge::BridgeSession as ProviderBridgeSession;
 use crate::reasoning::parser::ReasoningParser;
 use crate::reasoning::{FinishReason, ReasoningKind, RunEvent};

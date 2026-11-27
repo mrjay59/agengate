@@ -25,6 +25,28 @@ request_timeout_secs = 120
 # For production, use a reverse proxy (nginx, Caddy) with explicit CORS policy instead.
 cors = false
 
+# FIX-KEYSTORE: lifecycle-backed API keys (SQLite). Default false keeps the
+# legacy static `api_keys` behaviour above. When enabled, /v1/* requires a key
+# generated via POST /admin/keys and /admin/* requires the `admin` scope.
+# [server.auth]
+# enabled = true
+# key_store_path = ""            # default: <config dir>/agentgate/keys.sqlite3
+# admin_keys = []                # static admin/bootstrap keys (break-glass)
+
+# FIX-QUOTA-ACCOUNTING: per-key/provider/model limits. Usage is always recorded
+# to the key store; enforcement applies to lifecycle keys by default.
+# [quota]
+# watcher_interval_secs = 43200  # re-check quota-disabled models every 12h
+# cooldown_secs = 43200          # re-enable 12h after first free.limit notice
+# enforce_anonymous = false      # opt-in: apply limits to legacy/no-auth keys
+# [quota.defaults]
+# requests_per_minute = 60
+# requests_per_day = 2000
+# input_tokens_per_day = 1000000
+# output_tokens_per_day = 1000000
+# max_concurrent_requests = 10
+# max_body_bytes = 4194304
+
 [defaults]
 workdir = "."
 max_concurrency_per_provider = 2
@@ -62,6 +84,48 @@ chat_cmd = ["run", "{model}"]
 strip_ansi = true
 enabled = true
 models = ["llama3", "deepseek-r1", "phi3"]
+
+# -----------------------------------------------------------------------------
+# NVIDIA NIM (OpenAI-compatible HTTP provider)
+# Verified mapping: https://docs.api.nvidia.com/nim/reference/llm-apis
+# Requires NVIDIA_API_KEY (`nvapi-*`). Disabled by default: set the key and
+# flip `enabled = true` to activate. No CLI process is spawned in this mode.
+# -----------------------------------------------------------------------------
+[[provider]]
+id = "nvidia"
+type = "http_openai_compatible"
+mode = "http"
+adapter = "openai_compatible_chat"
+base_url = "https://integrate.api.nvidia.com/v1"
+chat_completions_path = "/chat/completions"
+models_path = "/models"
+auth_type = "bearer"
+api_key_env = "NVIDIA_API_KEY"
+api_key_prefix = "nvapi-"
+mapping_status = "verified"
+enabled = false
+bridge = false
+default_model = "meta/llama-3.3-70b-instruct"
+# Seed catalog. GET /models sync refreshes this when the provider is enabled.
+models = [
+  "meta/llama-3.3-70b-instruct",
+  "meta/llama-3.1-8b-instruct",
+  "meta/llama-3.1-70b-instruct",
+  "qwen/qwen3-next-80b-a3b-instruct",
+  "deepseek-ai/deepseek-v4-flash",
+]
+timeout_secs = 120
+max_retries = 2
+retry_backoff_ms = [250, 1000]
+forward_tools = true
+# NIM ChatRequest has additionalProperties=false and does not declare
+# tool_choice / response_format / seed; forwarding them can return 422.
+forward_tool_choice = false
+forward_response_format = false
+forward_stream = true
+stream_idle_timeout_secs = 120
+verify_tls = true
+quota_exhausted_statuses = [429]
 
 [reasoning]
 enabled = true

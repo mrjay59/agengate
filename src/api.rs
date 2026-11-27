@@ -1,5 +1,6 @@
 use crate::config::ReasoningConfig;
 use crate::error::AppError;
+use crate::gateway::admin as admin_api;
 use crate::reasoning::{
     format::{parse_reasoning_format, reasoning_headers, SseWriter},
     Coalescer, CoalescerSettings, ReasoningFormat, ReasoningKind, ReasoningPipeline, RunEvent,
@@ -14,7 +15,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, HeaderValue},
     response::{IntoResponse, Response, Sse},
-    routing::{get, post},
+    routing::{get, patch, post, put},
     Json, Router,
 };
 use std::sync::Arc;
@@ -33,8 +34,35 @@ pub fn api() -> Router<Arc<ServiceRegistry>> {
         .route("/_bridge/mcp/:session_id", post(bridge_mcp).delete(bridge_mcp_delete))
         .route("/_bridge/resolve/:call_id", post(bridge_resolve))
         .route("/_bridge/preflight/:session_id", get(preflight_isolation_check))
+        // Admin management plane (spec §8.2). All routes require admin scope
+        // and return redacted payloads; see gateway::admin::authorize.
+        .route("/admin/providers", get(admin_api::list_providers).post(admin_api::add_provider))
+        .route("/admin/providers/:id", get(admin_api::get_provider).patch(admin_api::update_provider).delete(admin_api::delete_provider))
+        .route("/admin/providers/:id/test", post(admin_api::test_provider))
+        .route("/admin/models", get(admin_api::list_models).post(admin_api::add_model))
+        .route("/admin/models/sync", post(admin_api::sync_models))
+        .route("/admin/models/:id", get(admin_api::get_model).patch(admin_api::update_model).delete(admin_api::delete_model))
+        .route("/admin/combos", get(admin_api::list_combos).post(admin_api::add_combo))
+        .route("/admin/combos/:id", get(admin_api::get_combo).patch(admin_api::update_combo).delete(admin_api::delete_combo))
+        .route("/admin/proxies", get(admin_api::list_proxies).post(admin_api::add_proxy))
+        .route("/admin/proxies/:id", get(admin_api::get_proxy).patch(admin_api::update_proxy).delete(admin_api::delete_proxy))
+        .route("/admin/proxies/:id/test", post(admin_api::test_proxy))
+        .route("/admin/pools", get(admin_api::list_pools).put(admin_api::put_pool))
+        .route("/admin/pools/:name", put(admin_api::put_pool_named))
+        .route("/admin/status", get(admin_api::gateway_status))
+        // FIX-KEYSTORE / FIX-QUOTA-ACCOUNTING: key lifecycle + usage/quota.
+        // Owned by Quota & Key Store; kept in its own block to avoid clashing
+        // with the provider/model/proxy routes above.
+        .route("/admin/keys", post(crate::admin::create_key).get(crate::admin::list_keys))
+        .route("/admin/keys/:id", get(crate::admin::get_key).patch(crate::admin::patch_key_handler))
+        .route("/admin/keys/:id/revoke", post(crate::admin::revoke_key_handler))
+        .route("/admin/keys/:id/rotate", post(crate::admin::rotate_key_handler))
+        .route("/admin/usage", get(crate::admin::usage))
+        .route("/admin/quotas", get(crate::admin::quotas_get).patch(crate::admin::quotas_patch_defaults))
+        .route("/admin/quotas/keys/:id", get(crate::admin::key_quota_get).patch(crate::admin::key_quota_patch))
+        // Deprecated aliases kept for backward compatibility (spec §8.3).
         .route("/admin/provider", post(add_provider))
-        .route("/admin/key", post(add_key))
+        .route("/admin/key", post(legacy_add_key))
         .route("/admin/proxy", post(proxy))
         .route("/admin/skill", post(add_skill))
         .route("/admin/mcp", post(add_mcp))
@@ -245,6 +273,21 @@ async fn chat_completions(
         request.messages.len()
     );
 
+    // FIX-QUOTA-ACCOUNTING: capture raw request size before any mutation and
+    // resolve the authenticated key identity (also works when middleware is
+    // bypassed in unit tests).
+    let content_in_bytes = serde_json::to_string(&request)
+        .map(|s| s.len() as u64).unwrap_or(0);
+    let mut key_identity = crate::keystore::identity_from_headers(&headers);
+    if key_identity.is_none() {
+        if let Some(store) = crate::keystore::keystore() {
+            if store.quota_config().enforce_anonymous {
+                key_identity = Some(crate::keystore::KeyStore::anonymous_identity());
+            }
+        }
+    }
+    let request_started = Instant::now();
+
     // Spec validation (spec_tooling §7.1)
     if request.n.unwrap_or(1) > 1 {
         return Err(AppError::ToolError("n > 1 is not supported".to_string()));
@@ -281,6 +324,22 @@ async fn chat_completions(
 
     // Update request.model to resolved model for downstream processing
     request.model = resolved_model.clone();
+
+    // FIX-QUOTA-ACCOUNTING: enforce per-key/provider/model limits before any
+    // provider work starts. The permit is released when this request (or its
+    // spawned stream task) finishes, so concurrency is bounded in-process.
+    let mut quota_permit = None;
+    if let (Some(store), Some(identity)) = (crate::keystore::keystore(), key_identity.as_ref()) {
+        if !identity.allows_provider(&provider_id) || !identity.allows_model(&resolved_model) {
+            return Err(AppError::ScopeDenied(format!("provider={} model={}", provider_id, resolved_model)));
+        }
+        match store.check_quota(identity, &provider_id, &resolved_model, content_in_bytes) {
+            Ok(permit) => quota_permit = permit,
+            Err(d) => return Err(AppError::QuotaExceeded {
+                reason: d.reason, scope: d.scope, reset_at: d.reset_at,
+            }),
+        }
+    }
 
     // Fail fast: reject unavailable providers (missing binary, broken install)
     // before opening a stream that would only send keep-alives. Ollama served
@@ -342,8 +401,46 @@ async fn chat_completions(
         let activity_via_reasoning = reasoning_cfg.activity_via_reasoning;
         let response_cfg = reasoning_cfg.clone();
         let stream_run_id = run_id_for_stream.take().unwrap_or_default();
+        // FIX-QUOTA-ACCOUNTING: state carried into the stream task so usage is
+        // recorded even when the client disconnects or the provider errors.
+        let usage_provider = provider_id.clone();
+        let usage_model = resolved_model.clone();
+        let usage_mode = mode.to_string();
+        let usage_identity = key_identity.clone();
+        let usage_in_bytes = content_in_bytes;
+        let usage_started = request_started;
+        // Hold the concurrency slot for the whole stream, not just until the
+        // SSE response headers are returned.
+        let stream_quota_permit = quota_permit;
 
         tokio::spawn(async move {
+            let _quota_permit = stream_quota_permit;
+            let mut usage_in = 0u64;
+            let mut usage_out = 0u64;
+            let mut usage_out_bytes = 0u64;
+            let mut usage_error: Option<String> = None;
+            // FIX-TRANSPORT-BUILD: this was a closure that immutably borrowed
+            // usage_in/usage_out/usage_out_bytes while the stream loop mutates
+            // them (E0506). A local macro expands at the call site and reads
+            // the current values without holding a borrow across mutations.
+            macro_rules! record_stream_usage {
+                ($error:expr) => {{
+                    let error: Option<String> = $error;
+                    let estimated = usage_in == 0 && usage_out == 0;
+                    let (in_tokens, out_tokens) = if estimated {
+                        ((usage_out_bytes / 4) as u64, 0u64)
+                    } else {
+                        (usage_in, usage_out)
+                    };
+                    record_request_usage(
+                        usage_identity.as_ref(), &usage_provider, &usage_model, &usage_mode,
+                        &stream_run_id, if error.is_some() { "error" } else { "ok" }, error,
+                        usage_started.elapsed().as_millis() as u64,
+                        in_tokens, out_tokens, estimated,
+                        usage_in_bytes, usage_out_bytes, true,
+                    );
+                }};
+            }
             let mut pipeline = ReasoningPipeline::new(&reasoning_cfg);
             let mut coalescer = Coalescer::with_settings(CoalescerSettings {
                 flush_ms: reasoning_cfg.flush_ms,
@@ -416,6 +513,26 @@ async fn chat_completions(
                                 }
                                 let is_tool_calls = matches!(event, RunEvent::ToolCalls { .. });
                                 let is_error = matches!(event, RunEvent::Error { .. });
+                                // FIX-QUOTA-ACCOUNTING: token usage comes from the
+                                // upstream usage event; bytes are accumulated from
+                                // the produced content as a always-available proxy.
+                                match &event {
+                                    RunEvent::Usage { prompt_tokens, completion_tokens, .. } => {
+                                        usage_in = *prompt_tokens as u64;
+                                        usage_out = *completion_tokens as u64;
+                                    }
+                                    RunEvent::Text { text } | RunEvent::ReasoningDelta { text, .. } => {
+                                        usage_out_bytes += text.len() as u64;
+                                    }
+                                    RunEvent::ToolCalls { calls } => {
+                                        usage_out_bytes += serde_json::to_string(calls)
+                                            .map(|s| s.len() as u64).unwrap_or(0);
+                                    }
+                                    RunEvent::Error { message, .. } => {
+                                        usage_error = Some(message.clone());
+                                    }
+                                    _ => {}
+                                }
                                 let mut emitted_tool_calls: usize = 0;
                                 for processed in pipeline.process(event) {
                                     for coalesced in coalescer.add_event(processed) {
@@ -509,6 +626,7 @@ async fn chat_completions(
 
             // Error/timeout paths already emitted their terminal chunk(s) and [DONE].
             if terminated_by_error {
+                record_stream_usage!(usage_error.take().or_else(|| Some("stream_timeout".to_string())));
                 crate::metrics::init_metrics().mark_run_ended();
                 info!(event = "run.end", run_id = %stream_run_id, tool_calls = tool_calls_finished, terminated_by_error = true);
                 return;
@@ -536,6 +654,7 @@ async fn chat_completions(
             let _ = tx
                 .send(Ok(axum::response::sse::Event::default().data("[DONE]")))
                 .await;
+            record_stream_usage!(usage_error.take());
             crate::metrics::init_metrics().mark_run_ended();
             info!(event = "run.end", run_id = %stream_run_id, tool_calls = tool_calls_finished);
         });
@@ -587,15 +706,45 @@ async fn chat_completions(
                 if resume_mode.is_some() && e.code() == "tool_already_resolved" {
                     crate::metrics::init_metrics().record_resume("conflict");
                 }
+                // FIX-QUOTA-ACCOUNTING: failed requests still count toward RPD.
+                record_request_usage(
+                    key_identity.as_ref(), &provider_id, &resolved_model, mode, &run_id,
+                    "error", Some(e.code().to_string()),
+                    request_started.elapsed().as_millis() as u64,
+                    0, 0, false, content_in_bytes, 0, false,
+                );
                 crate::metrics::init_metrics().mark_run_ended();
                 return Err(e);
             }
             Err(_) => {
+                record_request_usage(
+                    key_identity.as_ref(), &provider_id, &resolved_model, mode, &run_id,
+                    "error", Some("request_timeout".to_string()),
+                    request_started.elapsed().as_millis() as u64,
+                    0, 0, false, content_in_bytes, 0, false,
+                );
                 crate::metrics::init_metrics().mark_run_ended();
                 return Err(AppError::Timeout);
             }
         };
+        let upstream_usage = response.usage.clone().unwrap_or_default();
         let value = apply_non_stream_format(response, format, &reasoning_cfg);
+        // FIX-QUOTA-ACCOUNTING: upstream usage wins; fall back to a chars/4
+        // estimator and flag it so reports can distinguish the two.
+        let content_out_bytes = serde_json::to_string(&value)
+            .map(|s| s.len() as u64).unwrap_or(0);
+        let estimated = upstream_usage.total_tokens == 0;
+        let (input_tokens, output_tokens) = if estimated {
+            ((content_out_bytes / 4) as u64, 0u64)
+        } else {
+            (upstream_usage.prompt_tokens as u64, upstream_usage.completion_tokens as u64)
+        };
+        record_request_usage(
+            key_identity.as_ref(), &provider_id, &resolved_model, mode, &run_id,
+            "ok", None, request_started.elapsed().as_millis() as u64,
+            input_tokens, output_tokens, estimated,
+            content_in_bytes, content_out_bytes, false,
+        );
         crate::metrics::init_metrics().mark_run_ended();
         let mut res = Json(value).into_response();
         res.headers_mut().insert(
@@ -619,6 +768,50 @@ async fn chat_completions(
         add_reasoning_headers(&mut res, format, &reasoning_cfg, "final");
         Ok(res)
     }
+}
+
+/// FIX-QUOTA-ACCOUNTING: persist one usage row + update metrics. Called from
+/// both the stream and non-stream paths; a no-op when no key store is active.
+fn record_request_usage(
+    identity: Option<&crate::keystore::KeyIdentity>,
+    provider: &str,
+    model: &str,
+    mode: &str,
+    run_id: &str,
+    status: &str,
+    error_class: Option<String>,
+    latency_ms: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    tokens_estimated: bool,
+    content_in_bytes: u64,
+    content_out_bytes: u64,
+    stream: bool,
+) {
+    let store = match crate::keystore::keystore() {
+        Some(s) => s,
+        None => return,
+    };
+    let total_tokens = input_tokens.saturating_add(output_tokens);
+    store.record_usage(crate::keystore::UsageRecord {
+        request_id: run_id.to_string(),
+        ts: chrono::Utc::now().timestamp(),
+        key_id: identity.map(|i| i.id.clone()).unwrap_or_else(|| "anonymous".to_string()),
+        provider_id: provider.to_string(),
+        model: model.to_string(),
+        upstream_model: None,
+        mode: mode.to_string(),
+        status: status.to_string(),
+        error_class,
+        latency_ms,
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        tokens_estimated,
+        content_in_bytes,
+        content_out_bytes,
+        stream,
+    });
 }
 
 fn add_reasoning_headers(
@@ -855,12 +1048,23 @@ async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({"status": "ok"}))
 }
 
+/// Deprecated alias: POST /admin/provider -> POST /admin/providers.
 async fn add_provider(
     State(_registry): State<Arc<ServiceRegistry>>,
+    headers: HeaderMap,
     Json(request): Json<AddProviderRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!("Admin endpoint: add provider {}", request.id);
-    Ok(Json(serde_json::json!({"status": "ok"})))
+) -> axum::response::Response {
+    let id = request.id.clone();
+    let payload = serde_json::json!({
+        "id": id,
+        "name": id,
+        "base_url": request.base_url,
+        "provider_kind": request.provider_kind,
+        "mode": "auto",
+    });
+    let mut response = admin_api::add_provider(headers, Json(payload)).await;
+    admin_api::deprecation_headers(&mut response, "/admin/providers");
+    response
 }
 
 async fn add_key(
@@ -871,12 +1075,48 @@ async fn add_key(
     Ok(Json(serde_json::json!({"status": "ok", "provider": request.provider})))
 }
 
+/// Deprecated alias: POST /admin/key -> POST /admin/keys.
+async fn legacy_add_key(
+    State(registry): State<Arc<ServiceRegistry>>,
+    headers: HeaderMap,
+    Json(request): Json<AddKeyRequest>,
+) -> axum::response::Response {
+    // FIX-KEYSTORE: delegate to the real lifecycle-backed create handler.
+    let mut response = match crate::admin::legacy_add_key(State(registry), headers, Json(request)).await {
+        Ok(v) => v.into_response(),
+        Err(e) => e.into_response(),
+    };
+    admin_api::deprecation_headers(&mut response, "/admin/keys");
+    response
+}
+
+/// Deprecated alias: POST /admin/proxy -> POST /admin/proxies.
+/// The legacy shape is a URL probe, not a proxy config; keep it side-effect
+/// free and redact credentials from the echoed target.
 async fn proxy(
     State(_registry): State<Arc<ServiceRegistry>>,
+    headers: HeaderMap,
     Json(request): Json<ProxyRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    info!("Admin endpoint: proxy to {}", request.target);
-    Ok(Json(serde_json::json!({"status": "ok", "target": request.target})))
+) -> axum::response::Response {
+    if let Err(response) = admin_api::authorize(&headers) { return response; }
+    let mut response = if crate::gateway::store::validate_http_url(&request.target, true).is_ok() {
+        (
+            axum::http::StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "ok",
+                "target": crate::gateway::store::redact_url(&request.target),
+                "method": request.method,
+            })),
+        ).into_response()
+    } else {
+        admin_api::error_response(
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "target must be an http(s) URL",
+        )
+    };
+    admin_api::deprecation_headers(&mut response, "/admin/proxies");
+    response
 }
 
 async fn add_skill(

@@ -3,6 +3,7 @@ pub mod bridge;
 pub mod config;
 pub mod doctor;
 pub mod error;
+pub mod gateway;
 pub mod openai;
 pub mod permission;
 pub mod provider;
@@ -12,6 +13,9 @@ pub mod service;
 pub mod types;
 pub mod cli;
 pub mod metrics;
+pub mod keystore;
+pub mod admin;
+pub mod transport;
 
 pub type Result<T> = anyhow::Result<T>;
 

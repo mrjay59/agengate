@@ -1,4 +1,8 @@
 use crate::config::ProviderConfig;
+use crate::transport::{
+    classify_status, log_transport_failure, retry_after_from_headers, retry_with_backoff,
+    RetryPolicy, TransportContext, TransportFailure,
+};
 use crate::types::{ChatCompletionRequest, ChatCompletionResponse, ChatCompletionChunk};
 use anyhow::{anyhow, Result};
 use reqwest::Client;
@@ -11,6 +15,8 @@ pub struct OllamaNativeProvider {
     client: Client,
     base_url: String,
     stream_timeout: u64,
+    /// FIX-TRANSPORT-HARDENING: bounded retry for transient HTTP transport errors.
+    retry_policy: RetryPolicy,
 }
 
 impl OllamaNativeProvider {
@@ -26,13 +32,103 @@ impl OllamaNativeProvider {
         // Stream timeout (seconds) from config, default 300s
         let stream_timeout = config.ollama_stream_timeout.unwrap_or(300);
 
-        Self { config, client, base_url, stream_timeout }
+        Self {
+            config,
+            client,
+            base_url,
+            stream_timeout,
+            retry_policy: RetryPolicy::default(),
+        }
+    }
+
+    /// Override the transport retry policy (useful in tests and tuning).
+    pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry_policy = policy;
+        self
+    }
+
+    /// FIX-TRANSPORT-HARDENING: send a cloneable request with bounded retries
+    /// for transient transport classes, recording HTTP upstream metrics and
+    /// redacted diagnostics. Quota (429) failures fail fast so the router's
+    /// quota-aware failover stays authoritative.
+    async fn send_with_retry(
+        &self,
+        builder: reqwest::RequestBuilder,
+        model: &str,
+        endpoint: &str,
+    ) -> Result<reqwest::Response> {
+        use std::time::Instant;
+
+        let metrics = crate::metrics::init_metrics();
+        let policy = self.retry_policy;
+        let ctx = TransportContext {
+            provider: "ollama-http",
+            model,
+            target: endpoint,
+            mode: "http",
+        };
+        let template = builder
+            .try_clone()
+            .ok_or_else(|| anyhow!("request body is not cloneable; transport retry disabled"))?;
+        let started = Instant::now();
+
+        let result = retry_with_backoff(&policy, ctx, |_| {
+            let clone = template.try_clone();
+            async move {
+                let request = match clone {
+                    Some(request) => request,
+                    None => {
+                        return Err(TransportFailure::new(
+                            crate::transport::TransportErrorClass::Io,
+                            "request body is not cloneable; transport retry disabled",
+                        ));
+                    }
+                };
+                let response = request
+                    .send()
+                    .await
+                    .map_err(|error| TransportFailure::from_reqwest(&error))?;
+                let status = response.status();
+                if status.is_success() {
+                    Ok(response)
+                } else {
+                    let mut failure = TransportFailure::new(
+                        classify_status(status.as_u16()),
+                        format!("upstream returned HTTP {}", status.as_u16()),
+                    );
+                    if let Some(delay) = retry_after_from_headers(response.headers()) {
+                        failure = failure.with_retry_after(delay);
+                    }
+                    Err(failure)
+                }
+            }
+        })
+        .await;
+
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        metrics.observe_http_upstream_latency("ollama-http", model, elapsed_ms);
+
+        match result {
+            Ok(response) => {
+                metrics.record_http_upstream_request("ollama-http", model, endpoint, "ok", "http");
+                Ok(response)
+            }
+            Err(err) => {
+                metrics.record_http_upstream_request("ollama-http", model, endpoint, "error", "http");
+                metrics.record_http_upstream_error("ollama-http", model, err.class.as_str());
+                if err.class.is_quota() {
+                    metrics.record_quota_error("ollama-http", model);
+                }
+                log_transport_failure(ctx, &err, policy.max_retries + 1);
+                Err(anyhow!("{}", err))
+            }
+        }
     }
 
     /// Get available models from Ollama
     pub async fn get_models(&self) -> Result<Vec<OllamaModel>> {
         let url = format!("{}/api/tags", self.base_url);
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.send_with_retry(self.client.get(&url), "ollama/models", &url).await?;
         let data: OllamaTagsResponse = resp.json().await?;
         
         Ok(data.models.into_iter().map(|m| OllamaModel {
@@ -61,9 +157,8 @@ impl OllamaNativeProvider {
         let ollama_req = self.to_ollama_request(model, &request, false, true);
 
         let url = format!("{}/api/chat", self.base_url);
-        let resp = self.client.post(&url)
-            .json(&ollama_req)
-            .send()
+        let resp = self
+            .send_with_retry(self.client.post(&url).json(&ollama_req), model, &url)
             .await?;
 
         let ollama_resp: OllamaChatResponse = resp.json().await?;
@@ -97,7 +192,9 @@ impl OllamaNativeProvider {
 
         let ollama_req = self.to_ollama_request(model, request, true, true);
         let url = format!("{}/api/chat", self.base_url);
-        let resp = self.client.post(&url).json(&ollama_req).send().await?;
+        let resp = self
+            .send_with_retry(self.client.post(&url).json(&ollama_req), model, &url)
+            .await?;
         let mut stream = resp.bytes_stream();
         let mut buffer = String::new();
         let mut in_reasoning = false;
@@ -207,9 +304,8 @@ impl OllamaNativeProvider {
         let ollama_req = self.to_ollama_request(model, &request, true, true);
         let url = format!("{}/api/chat", self.base_url);
 
-        let resp = self.client.post(&url)
-            .json(&ollama_req)
-            .send()
+        let resp = self
+            .send_with_retry(self.client.post(&url).json(&ollama_req), model, &url)
             .await?;
 
         let mut stream = resp.bytes_stream();

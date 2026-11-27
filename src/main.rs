@@ -178,6 +178,21 @@ async fn main() -> Result<()> {
             let port = port.unwrap_or(config.server.port);
             let bind_addr = format!("{}:{}", host, port);
             std::env::set_var("AGENTGATE_BRIDGE_PORT", port.to_string());
+
+            // FIX-KEYSTORE / FIX-QUOTA-ACCOUNTING: always open the store so
+            // usage/accounting and admin key endpoints work. Enforcement only
+            // activates when [server.auth] enabled = true (default false), so
+            // legacy deployments with static `api_keys` are unaffected.
+            let key_store = agentgate::keystore::KeyStore::open(
+                config.auth.key_store_path.clone()
+                    .unwrap_or_else(agentgate::keystore::default_key_store_path),
+                config.quota.clone(),
+                config.auth.enabled,
+                config.auth.admin_keys.clone(),
+            ).map_err(|e| anyhow::anyhow!(e.message()))?;
+            agentgate::keystore::init_keystore(key_store);
+            tracing::info!(auth_enabled = config.auth.enabled, "Key store initialised");
+
             let mut registry = ServiceRegistry::with_config(
                 config.routing.clone(),
                 config.bridge.clone(),
@@ -186,7 +201,8 @@ async fn main() -> Result<()> {
                 ollama_cli_enabled(&config),
                 config.limits.clone(),
             )
-            .with_request_timeout(std::time::Duration::from_secs(config.server.request_timeout_secs));
+            .with_request_timeout(std::time::Duration::from_secs(config.server.request_timeout_secs))
+            .with_quota_config(&config.quota);
             for provider_cfg in &config.provider {
                 // Bridge-capable agents use the MCP bridge adapter (spec_tooling.md §12);
                 // set `bridge = false` on the provider to opt out.
@@ -232,7 +248,7 @@ async fn main() -> Result<()> {
             };
             // Bearer auth guard when api_keys configured
             let api_keys = config.server.api_keys.clone();
-            let app = if !api_keys.is_empty() {
+            let app = if !api_keys.is_empty() && !config.auth.enabled {
                 app.layer(axum::middleware::from_fn(move |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
                     let keys = api_keys.clone();
                     async move {
@@ -265,8 +281,14 @@ async fn main() -> Result<()> {
             } else {
                 app
             };
+            // FIX-KEYSTORE: lifecycle-backed auth layer (installed only when enabled).
+            let app = if config.auth.enabled {
+                app.layer(axum::middleware::from_fn(agentgate::keystore::auth_middleware))
+            } else {
+                app
+            };
             // Warn if binding non-loopback without keys
-            if config.server.api_keys.is_empty() && (host == "0.0.0.0" || host == "::") {
+            if config.server.api_keys.is_empty() && !config.auth.enabled && (host == "0.0.0.0" || host == "::") {
                 tracing::warn!("Binding to {} without api_keys: service is open to the network", host);
             }
             tracing::info!("Starting server on {}", bind_addr);

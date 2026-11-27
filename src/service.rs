@@ -3,6 +3,8 @@ use crate::config::{BridgeConfig, ReasoningConfig, RoutingConfig, DefaultsConfig
 use crate::error::AppError;
 use crate::config::ProviderConfig;
 use crate::provider::{CliProvider};
+use crate::provider::combo::{ComboModel, ComboRegistry, FailureContext as ComboFailure, should_fallback};
+use crate::provider::http::HttpOpenAiCompatibleProvider;
 use crate::provider::ollama_native::OllamaNativeProvider;
 use crate::reasoning::RunEvent;
 use crate::run::classify;
@@ -82,16 +84,14 @@ fn is_quota_error(e: &str) -> bool {
 }
 
 /// Transient opencode/bridge errors worth one retry when no meaningful output was emitted.
+///
+/// FIX-TRANSPORT-CLASSIFY: delegate to the shared `transport` classifier so
+/// bridge retries, HTTP upstream retries, and metrics use one taxonomy. All
+/// previously matched strings remain retryable; the classifier additionally
+/// covers DNS/timeouts/5xx/ECONNRESET/ECONNREFUSED variants.
 fn is_transient_bridge_error(e: &str) -> bool {
-    let lower = e.to_lowercase();
-    lower.contains("broken pipe")
-        || lower.contains("os error 32")
-        || lower.contains("resource temporarily unavailable")
-        || lower.contains("os error 11")
-        || lower.contains("standalone server exited before reporting readiness")
-        || lower.contains("failed to spawn opencode process")
-        || lower.contains("connection reset")
-        || lower.contains("connection refused")
+    crate::transport::classify_message(e).is_retryable()
+        || e.to_lowercase().contains("failed to spawn opencode process")
 }
 
 fn is_opencode_quota_failover_candidate(provider_id: &str, model: &str) -> bool {
@@ -136,9 +136,20 @@ impl Drop for ProviderPermit {
 pub struct QuotaDisabledModel {
     pub model: String,
     pub provider_id: String,
+    /// FIX-QUOTA-WATCHER: timestamp of the FIRST free.limit notification.
+    /// Never overwritten by later notifications while the model stays disabled.
     pub disabled_at_unix: u64,
     pub retry_after_unix: u64,
     pub reason: String,
+    /// FIX-QUOTA-WATCHER: timestamp of the most recent notification.
+    #[serde(default)]
+    pub last_seen_quota_at: u64,
+    /// FIX-QUOTA-WATCHER: number of watcher re-checks performed.
+    #[serde(default)]
+    pub recheck_count: u32,
+    /// FIX-QUOTA-WATCHER: origin of the notification (http_429 / provider.free-limit / admin).
+    #[serde(default)]
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -161,9 +172,54 @@ impl QuotaState {
     }
 }
 
+/// How the router should execute a resolved model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionMode {
+    /// Existing CLI/bridge path (spawns a process).
+    Cli,
+    /// Direct HTTP `/chat/completions` (never spawns a process).
+    Http,
+}
+
+impl ExecutionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExecutionMode::Cli => "cli",
+            ExecutionMode::Http => "http",
+        }
+    }
+}
+
+/// One resolved combo candidate, owned so the forwarding task never borrows
+/// `ServiceRegistry`.
+enum ComboStreamTarget {
+    Http {
+        provider: Arc<HttpOpenAiCompatibleProvider>,
+        upstream: String,
+        sticky: Option<String>,
+        request: ChatCompletionRequest,
+    },
+    Cli {
+        provider: Arc<dyn CliProvider + Send + Sync>,
+        model: String,
+        request: ChatCompletionRequest,
+    },
+    Missing(String),
+}
+
+/// An enabled HTTP upstream plus the routing metadata needed by the catalog.
+struct HttpProviderEntry {
+    provider: Arc<HttpOpenAiCompatibleProvider>,
+    mode: String,
+    models: Vec<String>,
+}
+
 pub struct ServiceRegistry {
     providers: RwLock<HashMap<String, Arc<dyn CliProvider + Send + Sync>>>,
     native_providers: RwLock<HashMap<String, Arc<dyn CliProvider + Send + Sync>>>,
+    /// Direct OpenAI-compatible upstreams. Kept separate from `CliProvider`s so
+    /// HTTP mode never spawns a CLI process (spec §5.1).
+    http_providers: RwLock<HashMap<String, HttpProviderEntry>>,
     add_providers: RwLock<Vec<AddProviderRequest>>,
     pub bridge: Arc<BridgeServer>,
     pub run_registry: RunRegistry,
@@ -205,6 +261,9 @@ pub struct ServiceRegistry {
     /// Quota-disabled model state (quota exhaustion -> disable, watcher re-enables).
     quota_state: Arc<RwLock<QuotaState>>,
     quota_state_path: std::path::PathBuf,
+    /// FIX-QUOTA-WATCHER: 12h watcher interval + cooldown (configurable).
+    quota_watcher_interval: Duration,
+    quota_cooldown: Duration,
 }
 
 impl ServiceRegistry {
@@ -233,6 +292,7 @@ impl ServiceRegistry {
         Self {
             providers: RwLock::new(HashMap::new()),
             native_providers: RwLock::new(HashMap::new()),
+            http_providers: RwLock::new(HashMap::new()),
             add_providers: RwLock::new(Vec::new()),
             bridge,
             run_registry,
@@ -260,6 +320,8 @@ impl ServiceRegistry {
             }),
             quota_state: Arc::new(RwLock::new(quota_state)),
             quota_state_path,
+            quota_watcher_interval: Duration::from_secs(43_200),
+            quota_cooldown: Duration::from_secs(43_200),
         }
     }
 
@@ -310,17 +372,37 @@ impl ServiceRegistry {
     pub async fn mark_model_quota_disabled(&self, provider_id: &str, model: &str, reason: &str) {
         let now = Self::now_unix();
         let key = Self::quota_model_key(provider_id, model);
-        let retry_after = Self::next_utc_day_unix(now); // esoknya bisa dipakai lagi
+        // FIX-QUOTA-WATCHER: cooldown runs from the LAST notification so repeated
+        // free.limit hits keep the model disabled, while `disabled_at_unix`
+        // preserves the very first notification for auditing.
+        let retry_after = now.saturating_add(self.quota_cooldown.as_secs());
+        let source = if reason.to_lowercase().contains("429") {
+            "http_429"
+        } else if reason.to_lowercase().contains("free") {
+            "provider.free-limit"
+        } else {
+            "quota_exhausted"
+        };
+        let mut st = self.quota_state.write().await;
+        let previous = st.disabled.get(&key);
+        let first_seen = previous.map(|e| e.disabled_at_unix).unwrap_or(now);
+        let recheck_count = previous.map(|e| e.recheck_count).unwrap_or(0);
         let entry = QuotaDisabledModel {
             model: model.to_string(),
             provider_id: provider_id.to_string(),
-            disabled_at_unix: now,
+            disabled_at_unix: first_seen,
             retry_after_unix: retry_after,
             reason: reason.to_string(),
+            last_seen_quota_at: now,
+            recheck_count,
+            source: source.to_string(),
         };
-        let mut st = self.quota_state.write().await;
+        let is_first = previous.is_none();
         st.disable(key.clone(), entry);
         self.save_quota_state(&st);
+        if is_first {
+            tracing::warn!(event="quota.model.disabled_first_seen", model=%model, provider_id=%provider_id, first_seen_unix=first_seen, retry_after_unix=retry_after, reason=%reason, source=%source, "Model disabled on first quota notification");
+        }
         tracing::warn!(event="quota.model.disabled", model=%model, provider_id=%provider_id, retry_after_unix=retry_after, reason=%reason, "Model disabled due to quota exhaustion");
     }
 
@@ -331,32 +413,83 @@ impl ServiceRegistry {
         st.is_disabled(&key, now)
     }
 
+    /// Free-model candidates for the load balancer.
+    ///
+    /// Combines models discovered from the provider CLI with the gateway model
+    /// catalog (so cross-provider free pools work), excluding the hard
+    /// `9router/free-forever` fallback.
+    pub async fn free_model_candidates(&self, provider_id: &str) -> Vec<crate::gateway::LbCandidate> {
+        use crate::gateway::LbCandidate;
+        let models = {
+            let providers = self.providers.read().await;
+            providers.get(provider_id).map(|p| p.models()).unwrap_or_default()
+        };
+        let is_free = |model: &str| {
+            let ml = model.to_lowercase();
+            let fallback = ml.contains("9router/free-forever") || ml.contains("9router/free_forever");
+            !fallback && (ml.ends_with("-free") || ml == "free" || ml.contains("free-forever"))
+        };
+        let mut candidates: Vec<LbCandidate> = models.into_iter()
+            .filter(|m| is_free(m))
+            .map(|m| LbCandidate::new(m, provider_id))
+            .collect();
+        let doc = crate::gateway::state().document().await;
+        for (id, record) in &doc.models {
+            if !record.enabled || candidates.iter().any(|c| c.model == *id) { continue; }
+            if !record.free && !is_free(id) { continue; }
+            let candidate_provider = record.provider_id.clone().unwrap_or_else(|| provider_id.to_string());
+            let mut candidate = LbCandidate::new(id.clone(), candidate_provider);
+            candidate.weight = record.weight.max(1);
+            candidates.push(candidate);
+        }
+        candidates.sort_by(|a, b| a.model.cmp(&b.model));
+        candidates
+    }
+
     pub async fn pick_available_free_model(&self, provider_id: &str) -> Option<String> {
+        self.pick_available_free_model_for(provider_id, None, "quota_disabled", None).await
+    }
+
+    /// Filter quota-disabled candidates, then pick via the free-pool LB.
+    pub async fn pick_available_free_model_for(
+        &self,
+        provider_id: &str,
+        session_id: Option<&str>,
+        reason: &str,
+        already_disabled: Option<&str>,
+    ) -> Option<String> {
+        let candidates = self.free_model_candidates(provider_id).await;
         let now = Self::now_unix();
         let st = self.quota_state.read().await;
-        // Prefer configured provider models filtered to free, not disabled, not 9router/free-forever last-resort unless needed.
-        let providers = self.providers.read().await;
-        let p = providers.get(provider_id)?;
-        let models = p.models();
-        let mut free_candidates: Vec<String> = models.into_iter()
-            .filter(|m| {
-                let ml = m.to_lowercase();
-                (ml.ends_with("-free") || ml.contains("free-forever")) && !ml.contains("9router/free-forever") && !ml.contains("9router/free_forever")
-            })
-            .collect();
-        drop(providers);
-        // stable order by name
-        free_candidates.sort();
-        for m in free_candidates {
-            let key = Self::quota_model_key(provider_id, &m);
-            if !st.is_disabled(&key, now) {
-                return Some(m);
-            }
+        let mut eligible = Vec::new();
+        for candidate in candidates {
+            if Some(candidate.model.as_str()) == already_disabled { continue; }
+            if st.is_disabled(&candidate.key(), now) { continue; }
+            eligible.push(candidate);
         }
-        None
+        drop(st);
+        crate::gateway::lb::select(
+            crate::gateway::DEFAULT_FREE_POOL,
+            &eligible,
+            &format!("{}/", provider_id),
+            reason,
+            session_id,
+            None,
+        )
+        .await
+        .map(|selection| selection.model)
     }
 
     pub async fn reroute_model_for_quota(&self, provider_id: &str, requested_model: &str) -> String {
+        self.reroute_model_for_quota_with_session(provider_id, requested_model, None).await
+    }
+
+    pub async fn reroute_model_for_quota_with_session(
+        &self,
+        provider_id: &str,
+        requested_model: &str,
+        session_id: Option<&str>,
+    ) -> String {
         if provider_id != "opencode" {
             return requested_model.to_string();
         }
@@ -369,26 +502,49 @@ impl ServiceRegistry {
             return requested_model.to_string();
         }
         if disabled || is_free {
-            if let Some(m) = self.pick_available_free_model(provider_id).await {
+            let reason = if disabled { "quota_disabled" } else { "free_policy" };
+            if let Some(m) = self
+                .pick_available_free_model_for(provider_id, session_id, reason, Some(requested_model))
+                .await
+            {
                 if Self::quota_model_key(provider_id, &m) != key {
-                    tracing::info!(event="quota.model.reroute", from=%requested_model, to=%m, reason=if disabled {"quota_disabled"} else {"free_policy"}, "Rerouted model");
                     return m;
                 }
             }
-            tracing::warn!(event="quota.model.fallback_9router", from=%requested_model, "No available free model; falling back to 9router/free-forever");
-            return "opencode/9router/free-forever".to_string();
+            return crate::gateway::lb::fallback_selection(
+                crate::gateway::DEFAULT_FREE_POOL,
+                requested_model,
+                "pool_exhausted",
+            )
+            .await
+            .model;
         }
         requested_model.to_string()
     }
 
     pub fn start_quota_watcher(self: &Arc<Self>) {
         let this = Arc::clone(self);
+        let interval_secs = this.quota_watcher_interval.as_secs();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            // FIX-QUOTA-WATCHER: default 12h (was 5 min). A disabled model is
+            // only reconsidered on this schedule; no quota is burned probing
+            // unless `probe_on_recheck` is explicitly enabled elsewhere.
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs.max(1)));
+            tracing::info!(event="quota.watcher.started", interval_secs=interval_secs, "Quota watcher started");
             loop {
                 interval.tick().await;
                 let now = Self::now_unix();
                 let mut st = this.quota_state.write().await;
+                let mut due: Vec<(String, u64, u32)> = Vec::new();
+                for (k, e) in st.disabled.iter_mut() {
+                    if e.retry_after_unix <= now {
+                        e.recheck_count = e.recheck_count.saturating_add(1);
+                        due.push((k.clone(), e.disabled_at_unix, e.recheck_count));
+                    }
+                }
+                for (k, first_seen, rechecks) in &due {
+                    tracing::info!(event="quota.model.recheck", model=%k, first_seen_unix=first_seen, recheck_count=rechecks, "Re-checking quota-disabled model");
+                }
                 let expired = st.remove_expired(now);
                 if !expired.is_empty() {
                     this.save_quota_state(&st);
@@ -403,6 +559,17 @@ impl ServiceRegistry {
     /// Replace the global reasoning configuration.
     pub fn with_reasoning(mut self, reasoning: ReasoningConfig) -> Self {
         self.reasoning = reasoning;
+        self
+    }
+
+    /// FIX-QUOTA-WATCHER: wire `[quota]` watcher interval and cooldown.
+    pub fn with_quota_config(mut self, cfg: &crate::config::QuotaConfig) -> Self {
+        if cfg.watcher_interval_secs > 0 {
+            self.quota_watcher_interval = Duration::from_secs(cfg.watcher_interval_secs);
+        }
+        if cfg.cooldown_secs > 0 {
+            self.quota_cooldown = Duration::from_secs(cfg.cooldown_secs);
+        }
         self
     }
 
@@ -481,6 +648,22 @@ impl ServiceRegistry {
         if model.starts_with("ollama/") {
             return Some("ollama".to_string());
         }
+        // HTTP upstreams are checked first: their catalog ids are explicit
+        // (`nvidia/meta/...`) and must not be misattributed to a CLI namespace.
+        {
+            let http = self.http_providers.read().await;
+            if let Some((id, _)) = http
+                .iter()
+                .find(|(_, entry)| entry.models.iter().any(|m| m == model))
+            {
+                return Some(id.clone());
+            }
+            if let Some((prefix, _)) = model.split_once('/') {
+                if http.contains_key(prefix) {
+                    return Some(prefix.to_string());
+                }
+            }
+        }
         let providers = self.providers.read().await;
         if let Some((id, _)) = providers
             .iter()
@@ -540,6 +723,128 @@ impl ServiceRegistry {
         providers.insert(id, Arc::from(provider));
     }
 
+    /// Register an HTTP upstream provider. Missing keys or malformed URLs are
+    /// logged and skipped so one broken provider cannot block server startup.
+    /// Returns `true` when the provider was registered.
+    pub async fn register_http_provider(&self, config: &ProviderConfig) -> bool {
+        if config.provider_type != crate::provider::mappings::HTTP_PROVIDER_TYPE {
+            return false;
+        }
+        if !config.enabled {
+            tracing::info!(provider_id = %config.id, "HTTP provider disabled, skipping");
+            return false;
+        }
+        match HttpOpenAiCompatibleProvider::new(config.clone()) {
+            Ok(provider) => {
+                let entry = HttpProviderEntry {
+                    provider: Arc::new(provider),
+                    mode: config.mode.clone(),
+                    models: config.models.clone(),
+                };
+                self.http_providers.write().await.insert(config.id.clone(), entry);
+                tracing::info!(provider_id = %config.id, mode = %config.mode, "HTTP provider registered");
+                true
+            }
+            Err(error) => {
+                tracing::warn!(provider_id = %config.id, error = %error, "HTTP provider registration failed; skipping");
+                false
+            }
+        }
+    }
+
+    /// Access a registered HTTP provider (for the data-plane handler).
+    pub async fn http_provider(&self, provider_id: &str) -> Option<Arc<HttpOpenAiCompatibleProvider>> {
+        self.http_providers
+            .read()
+            .await
+            .get(provider_id)
+            .map(|entry| entry.provider.clone())
+    }
+
+    /// Resolve a combo from the admin gateway catalog (`/admin/combos`) first,
+    /// then from the in-process registry used by tests/programmatic callers.
+    pub async fn combo_for_model(&self, id: &str) -> Option<ComboModel> {
+        if let Some(record) = crate::gateway::state().get_model(id).await {
+            if let Some(combo) = crate::provider::combo::from_model_record(&record) {
+                return Some(combo);
+            }
+        }
+        crate::provider::combo::registry().get(id).await
+    }
+
+    /// Refresh a provider's model catalog from its upstream `/models` endpoint.
+    /// The configured static list is kept when the probe fails.
+    pub async fn sync_http_models(&self, provider_id: &str) -> anyhow::Result<usize> {
+        let provider = self.http_provider(provider_id).await.ok_or_else(|| {
+            anyhow::anyhow!("HTTP provider '{}' is not registered", provider_id)
+        })?;
+        let models = tokio::time::timeout(Duration::from_secs(10), provider.fetch_models())
+            .await
+            .map_err(|_| anyhow::anyhow!("model sync timed out for '{}'", provider_id))?
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        if let Some(entry) = self.http_providers.write().await.get_mut(provider_id) {
+            entry.models = models.clone();
+        }
+        Ok(models.len())
+    }
+
+    /// Map a gateway model id to the upstream model id expected by an HTTP
+    /// provider, e.g. `agg/nvidia/meta/llama-3.3-70b-instruct` ->
+    /// `meta/llama-3.3-70b-instruct`.
+    pub async fn upstream_model_for(&self, model: &str) -> Option<String> {
+        let provider_id = self.provider_for_model(model).await?;
+        if !self.http_providers.read().await.contains_key(&provider_id) {
+            return None;
+        }
+        let bare = model.strip_prefix("agg/").unwrap_or(model);
+        let prefix = format!("{}/", provider_id);
+        let upstream = bare.strip_prefix(&prefix).unwrap_or(bare);
+        if upstream.is_empty() { None } else { Some(upstream.to_string()) }
+    }
+
+    /// Decide `cli` vs `http` execution for a resolved model.
+    ///
+    /// Rules (spec §5.1): explicit `mode = http` always uses HTTP; `cli` only
+    /// uses CLI when a CLI provider exists; `auto` prefers HTTP for chat-only
+    /// requests and falls back to CLI when tools are requested and the upstream
+    /// cannot forward them. OpenCode CLI and HTTP are never auto-switched: each
+    /// provider id keeps its own configured mode.
+    pub async fn select_execution_mode(&self, model: &str, has_tools: bool) -> ExecutionMode {
+        let provider_id = match self.provider_for_model(model).await {
+            Some(id) => id,
+            None => return ExecutionMode::Cli,
+        };
+        let (mode, forward_tools, has_http) = {
+            let http = self.http_providers.read().await;
+            match http.get(&provider_id) {
+                Some(entry) => (entry.mode.clone(), entry.provider.forward_tools(), true),
+                None => (String::new(), false, false),
+            }
+        };
+        if !has_http {
+            return ExecutionMode::Cli;
+        }
+        match mode.as_str() {
+            "http" => ExecutionMode::Http,
+            "cli" => {
+                if self.providers.read().await.contains_key(&provider_id) {
+                    ExecutionMode::Cli
+                } else {
+                    ExecutionMode::Http
+                }
+            }
+            _ => {
+                // auto mode: prefer HTTP for chat-only; use CLI for tools when
+                // the HTTP upstream cannot forward them and a CLI provider exists.
+                if has_tools && !forward_tools && self.providers.read().await.contains_key(&provider_id) {
+                    ExecutionMode::Cli
+                } else {
+                    ExecutionMode::Http
+                }
+            }
+        }
+    }
+
     /// Whether a provider is registered **and** reported as available.
     ///
     /// Used to reject requests for dead providers (missing binary, broken
@@ -548,6 +853,12 @@ impl ServiceRegistry {
     /// because a bridge adapter can report unavailable while the native CLI
     /// works (and vice versa).
     pub async fn is_provider_available(&self, provider_id: &str) -> bool {
+        {
+            let http = self.http_providers.read().await;
+            if http.contains_key(provider_id) {
+                return true;
+            }
+        }
         {
             let native = self.native_providers.read().await;
             if let Some(p) = native.get(provider_id) {
@@ -573,6 +884,12 @@ impl ServiceRegistry {
     /// reachable through `resolve_binary`'s nvm fallback.
     pub async fn register_configured(&mut self, providers: &[ProviderConfig]) {
         for provider_cfg in providers {
+            // HTTP upstreams must never be registered as CLI providers: no
+            // binary is spawned and no bridge session is created for them.
+            if provider_cfg.provider_type == crate::provider::mappings::HTTP_PROVIDER_TYPE {
+                self.register_http_provider(provider_cfg).await;
+                continue;
+            }
             let provider =
                 crate::provider::build_cli_provider(provider_cfg, Some(self.bridge.clone()), Some(&self.bridge_config), Some(&self.limits));
             self.register(provider).await;
@@ -805,6 +1122,28 @@ impl ServiceRegistry {
             }
         }
 
+        // Direct HTTP upstreams: advertise their configured/synced catalog as
+        // `agg/<provider>/<upstream-model>`. No CLI scan and no network probe
+        // here — `/v1/models` must stay fast; use sync_http_models() to refresh.
+        {
+            let http = self.http_providers.read().await;
+            for (provider_id, entry) in http.iter() {
+                for model_id in &entry.models {
+                    let prefixed = format!("agg/{}/{}", provider_id, model_id);
+                    if seen_ids.insert(prefixed.clone()) {
+                        models.push(Model {
+                            id: prefixed,
+                            object: "model".to_string(),
+                            created: 0,
+                            owned_by: provider_id.clone(),
+                            provider: provider_id.clone(),
+                            name: model_id.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
         // Stable ordering so clients that diff the model list do not see
         // HashMap iteration order churn between requests.
         models.sort_by(|a, b| a.id.cmp(&b.id));
@@ -906,8 +1245,52 @@ impl ServiceRegistry {
 
     pub async fn chat_completion(
         &self,
-        mut request: ChatCompletionRequest,
+        request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, AppError> {
+        self.chat_completion_with_depth(request, 0).await
+    }
+
+    async fn chat_completion_with_depth(
+        &self,
+        mut request: ChatCompletionRequest,
+        depth: u8,
+    ) -> Result<ChatCompletionResponse, AppError> {
+        const MAX_COMBO_DEPTH: u8 = 8;
+
+        // Combo (virtual) model: try candidates in order. Recursion is bounded
+        // and the registry prevents cycles at creation time.
+        if depth < MAX_COMBO_DEPTH {
+            if let Some(combo) = self
+                .combo_for_model(&request.model)
+                .await
+                .filter(|combo| combo.enabled)
+            {
+                for (attempt, candidate) in ComboRegistry::candidates(&combo).iter().enumerate() {
+                    let mut candidate_request = request.clone();
+                    candidate_request.model = candidate.model.clone();
+                    if let Some(provider) = candidate.provider.as_deref() {
+                        candidate_request.provider = Some(provider.to_string());
+                    }
+                    ComboRegistry::record_attempt(&combo.id, &candidate.model, attempt);
+                    match Box::pin(self.chat_completion_with_depth(candidate_request, depth + 1)).await {
+                        Ok(response) => return Ok(response),
+                        Err(error) => {
+                            let failure = ComboFailure::from_message(error.to_string());
+                            if should_fallback(&combo.fallback_on, &failure) {
+                                ComboRegistry::record_fallback(&combo.id, error.code());
+                                continue;
+                            }
+                            return Err(error);
+                        }
+                    }
+                }
+                return Err(AppError::Internal(format!(
+                    "combo '{}' exhausted all candidates",
+                    combo.id
+                )));
+            }
+        }
+
         // Keep the published (possibly `agg/`-namespaced) id for provider
         // resolution, then strip the gateway namespace for the CLI invocation.
         let requested_model = request.model.clone();
@@ -989,6 +1372,29 @@ impl ServiceRegistry {
             let mut resp = ollama.forward_chat(&model, &request).await.map_err(|e| AppError::Internal(e.to_string()))?;
             truncate_parallel_tool_calls(&mut resp, request.parallel_tool_calls);
             return Ok(resp);
+        }
+
+        // Direct HTTP OpenAI-compatible upstream (no CLI process, no bridge).
+        // Resolution happens before this point via `resolve_provider`, which
+        // now understands HTTP model ids. Choose the explicit execution mode
+        // rather than silently switching a CLI provider to HTTP.
+        if self
+            .select_execution_mode(&requested_model, request.tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false))
+            .await
+            == ExecutionMode::Http
+        {
+            if let Some(provider) = self.http_provider(&provider_id).await {
+                let upstream_model = self
+                    .upstream_model_for(&requested_model)
+                    .await
+                    .unwrap_or_else(|| request.model.clone());
+                let mut resp = provider
+                    .chat(&upstream_model, &request, request.session_id.as_deref())
+                    .await
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+                truncate_parallel_tool_calls(&mut resp, request.parallel_tool_calls);
+                return Ok(resp);
+            }
         }
 
         // Fail-closed (spec §7.6 error table + spec §13.1): during the bridge
@@ -1087,7 +1493,13 @@ impl ServiceRegistry {
                     failed_over_to_9router = true;
                     let from_model = model.clone();
                     self.mark_model_quota_disabled(&provider_id, &from_model, "quota_exhausted").await;
-                    model = "opencode/9router/free-forever".to_string();
+                    crate::gateway::lb::cooldown_after_quota(crate::gateway::DEFAULT_FREE_POOL, &from_model, &provider_id).await;
+                    // Prefer another healthy free model; hard fallback only when
+                    // the pool is exhausted (spec §13.2).
+                    model = self
+                        .pick_available_free_model_for(&provider_id, request.session_id.as_deref(), "quota_exhausted", Some(&from_model))
+                        .await
+                        .unwrap_or_else(|| "opencode/9router/free-forever".to_string());
                     request.model = model.clone();
                     request.agentgate_force_fresh_cli_session = true;
                     if let Some(sid) = request.session_id.clone() {
@@ -1428,7 +1840,9 @@ impl ServiceRegistry {
 
         // Quota-aware model routing: disabled-quota models reroute to other free models, else 9router/free-forever.
         if provider_id == "opencode" {
-            let routed = self.reroute_model_for_quota(provider_id, &request.model).await;
+            let routed = self
+                .reroute_model_for_quota_with_session(provider_id, &request.model, request.session_id.as_deref())
+                .await;
             if routed != request.model {
                 let sid = request.session_id.clone().unwrap_or_default();
                 if !sid.is_empty() {
@@ -1573,7 +1987,11 @@ impl ServiceRegistry {
                     failed_over_to_9router = true;
                     let from_model = model.clone();
                     self.mark_model_quota_disabled(provider_id, &from_model, "quota_exhausted").await;
-                    model = "opencode/9router/free-forever".to_string();
+                    crate::gateway::lb::cooldown_after_quota(crate::gateway::DEFAULT_FREE_POOL, &from_model, provider_id).await;
+                    model = self
+                        .pick_available_free_model_for(provider_id, req_for_provider.session_id.as_deref(), "quota_exhausted", Some(&from_model))
+                        .await
+                        .unwrap_or_else(|| "opencode/9router/free-forever".to_string());
                     req_for_provider.model = model.clone();
                     req_for_provider.agentgate_force_fresh_cli_session = true;
                     if let Some(sid) = req_for_provider.session_id.clone() {
@@ -1811,6 +2229,173 @@ impl ServiceRegistry {
         provider_id: &str,
         request: ChatCompletionRequest,
     ) -> (mpsc::Receiver<RunEvent>, Vec<String>) {
+        self.stream_run_events_with_depth(provider_id, request, 0).await
+    }
+
+    /// Combo streaming: forward each candidate's events, but only advance the
+    /// chain when the candidate failed *before* meaningful output was emitted.
+    async fn stream_combo_with_depth(
+        &self,
+        combo: ComboModel,
+        request: ChatCompletionRequest,
+        _depth: u8,
+    ) -> (mpsc::Receiver<RunEvent>, Vec<String>) {
+        let (tx, rx) = mpsc::channel(128);
+
+        // Resolve all targets up front so the spawned task owns only Arcs and
+        // owned data. This keeps the future `Send` and avoids recursion.
+        let mut targets = Vec::new();
+        for candidate in ComboRegistry::candidates(&combo) {
+            let mut candidate_request = request.clone();
+            candidate_request.model = candidate.model.clone();
+            if let Some(provider) = candidate.provider.as_deref() {
+                candidate_request.provider = Some(provider.to_string());
+            }
+            let provider_id = if let Some(id) = candidate.provider.as_deref() {
+                Some(id.to_string())
+            } else {
+                self.provider_for_model(&candidate.model).await
+            };
+            let target = match provider_id {
+                Some(id) => {
+                    if let Some(http) = self.http_provider(&id).await {
+                        let prefix = format!("{}/", id);
+                        let upstream = candidate
+                            .model
+                            .strip_prefix(&prefix)
+                            .unwrap_or(&candidate.model)
+                            .to_string();
+                        ComboStreamTarget::Http {
+                            provider: http,
+                            upstream,
+                            sticky: candidate_request.session_id.clone(),
+                            request: candidate_request,
+                        }
+                    } else {
+                        match self.providers.read().await.get(&id).cloned() {
+                            Some(provider) => ComboStreamTarget::Cli {
+                                provider,
+                                model: candidate.model.clone(),
+                                request: candidate_request,
+                            },
+                            None => ComboStreamTarget::Missing(format!("provider not found: {}", id)),
+                        }
+                    }
+                }
+                None => ComboStreamTarget::Missing(format!(
+                    "combo candidate provider not found: {}",
+                    candidate.model
+                )),
+            };
+            targets.push((candidate.model.clone(), target));
+        }
+
+        tokio::spawn(async move {
+            let mut had_output = false;
+            for (attempt, (candidate_model, target)) in targets.into_iter().enumerate() {
+                ComboRegistry::record_attempt(&combo.id, &candidate_model, attempt);
+                let (inner_tx, mut inner_rx) = mpsc::channel::<RunEvent>(256);
+                let inner_tx_clone = inner_tx.clone();
+                match target {
+                    ComboStreamTarget::Http { provider, upstream, sticky, request } => {
+                        if let Err(error) = provider
+                            .stream_events(&upstream, &request, inner_tx_clone, sticky.as_deref())
+                            .await
+                        {
+                            let _ = inner_tx.send(RunEvent::Error {
+                                message: error.to_string(),
+                                code: Some("provider_error".to_string()),
+                            }).await;
+                        }
+                    }
+                    ComboStreamTarget::Cli { provider, model, request } => {
+                        if let Err(error) = provider
+                            .send_chat_completion_stream(&model, request, inner_tx_clone)
+                            .await
+                        {
+                            let _ = inner_tx.send(RunEvent::Error {
+                                message: error.to_string(),
+                                code: Some("provider_error".to_string()),
+                            }).await;
+                        }
+                    }
+                    ComboStreamTarget::Missing(message) => {
+                        let _ = inner_tx.send(RunEvent::Error {
+                            message,
+                            code: Some("provider_not_found".to_string()),
+                        }).await;
+                    }
+                }
+                // Release our sender so `recv()` can observe stream completion.
+                drop(inner_tx);
+
+                let mut advance = false;
+                while let Some(event) = inner_rx.recv().await {
+                    match event {
+                        RunEvent::Error { message, code } => {
+                            if !had_output {
+                                let failure = ComboFailure::from_message(message.clone());
+                                if should_fallback(&combo.fallback_on, &failure) {
+                                    ComboRegistry::record_fallback(
+                                        &combo.id,
+                                        code.as_deref().unwrap_or("error"),
+                                    );
+                                    advance = true;
+                                    break;
+                                }
+                            }
+                            let _ = tx.send(RunEvent::Error { message, code }).await;
+                            return;
+                        }
+                        RunEvent::Done { .. } => {
+                            let _ = tx.send(event).await;
+                            return;
+                        }
+                        other => {
+                            if matches!(
+                                other,
+                                RunEvent::Text { .. }
+                                    | RunEvent::ToolCalls { .. }
+                                    | RunEvent::Usage { .. }
+                                    | RunEvent::ReasoningDelta { .. }
+                            ) {
+                                had_output = true;
+                            }
+                            let _ = tx.send(other).await;
+                        }
+                    }
+                }
+                if !advance {
+                    return;
+                }
+            }
+            let _ = tx
+                .send(RunEvent::Error {
+                    message: format!("combo '{}' exhausted all candidates", combo.id),
+                    code: Some("combo_exhausted".to_string()),
+                })
+                .await;
+        });
+        (rx, Vec::new())
+    }
+
+    async fn stream_run_events_with_depth(
+        &self,
+        provider_id: &str,
+        request: ChatCompletionRequest,
+        depth: u8,
+    ) -> (mpsc::Receiver<RunEvent>, Vec<String>) {
+        // Virtual combo models are resolved before any provider lookup.
+        if depth < 8 {
+            if let Some(combo) = self
+                .combo_for_model(&request.model)
+                .await
+                .filter(|combo| combo.enabled)
+            {
+                return Box::pin(self.stream_combo_with_depth(combo, request, depth)).await;
+            }
+        }
+
         info!("stream_run_events START: provider='{}', model='{}'", provider_id, request.model);
         let (tx, rx) = mpsc::channel(128);
         let mut session_tool_names: Vec<String> = Vec::new();
@@ -1819,6 +2404,39 @@ impl ServiceRegistry {
         let mut request = request;
         if let Some(stripped) = request.model.strip_prefix("agg/") {
             request.model = stripped.to_string();
+        }
+
+        // Direct HTTP upstream: stream SSE into RunEvents without a CLI/bridge
+        // session. Sticky key is the AgentGate session id when available.
+        if self
+            .select_execution_mode(&request.model, request.tools.as_ref().map(|t| !t.is_empty()).unwrap_or(false))
+            .await
+            == ExecutionMode::Http
+        {
+            if let Some(provider) = self.http_provider(provider_id).await {
+                let prefix = format!("{}/", provider_id);
+                let upstream = request
+                    .model
+                    .strip_prefix(&prefix)
+                    .unwrap_or(&request.model)
+                    .to_string();
+                let req = request.clone();
+                let sticky = req.session_id.clone();
+                tokio::spawn(async move {
+                    let result = provider
+                        .stream_events(&upstream, &req, tx.clone(), sticky.as_deref())
+                        .await;
+                    if let Err(err) = result {
+                        let _ = tx
+                            .send(RunEvent::Error {
+                                message: err.to_string(),
+                                code: Some("provider_error".to_string()),
+                            })
+                            .await;
+                    }
+                });
+                return (rx, Vec::new());
+            }
         }
 
         let providers = self.providers.read().await;
@@ -1978,26 +2596,38 @@ impl ServiceRegistry {
                     let ml = model.to_lowercase();
                     let is_free = ml.ends_with("-free") || ml == "free";
                     if disabled || (reroute_free_models && is_free && !ml.contains("9router/free-forever") && !ml.contains("9router/free_forever")) {
-                        // pick another available free model from config
-                        let mut candidates: Vec<String> = opencode_free_models.iter()
+                        let reason = if disabled { "quota_disabled" } else { "free_policy" };
+                        // FIX-LB: use the quota-aware free pool instead of a
+                        // fixed alphabetical first pick.
+                        let mut candidates: Vec<crate::gateway::LbCandidate> = opencode_free_models.iter()
                             .filter(|m| {
                                 let l = m.to_lowercase();
                                 (l.ends_with("-free") || l.contains("free-forever")) && !l.contains("9router/free-forever") && !l.contains("9router/free_forever")
                             })
-                            .cloned().collect();
-                        candidates.sort();
-                        let mut picked: Option<String> = None;
+                            .map(|m| crate::gateway::LbCandidate::new(m.clone(), provider_id.clone()))
+                            .collect();
+                        candidates.sort_by(|a, b| a.model.cmp(&b.model));
+                        let mut eligible = Vec::new();
                         {
                             let st = quota_state_clone.read().await;
-                            for c in &candidates {
-                                let ck = { let cl=c.trim().to_lowercase(); if cl.starts_with("agg/") { cl[4..].to_string() } else { cl.clone() } };
-                                if !st.is_disabled(&ck, now) && ck != model_key {
-                                    picked = Some(c.clone());
-                                    break;
-                                }
+                            for candidate in candidates {
+                                if st.is_disabled(&candidate.key(), now) || candidate.model.eq_ignore_ascii_case(&model) { continue; }
+                                eligible.push(candidate);
                             }
                         }
-                        let to = picked.unwrap_or_else(|| "opencode/9router/free-forever".to_string());
+                        let to = match crate::gateway::lb::select(
+                            crate::gateway::DEFAULT_FREE_POOL,
+                            &eligible,
+                            &model,
+                            reason,
+                            req.session_id.as_deref(),
+                            None,
+                        ).await {
+                            Some(selection) => selection.model,
+                            None => crate::gateway::lb::fallback_selection(
+                                crate::gateway::DEFAULT_FREE_POOL, &model, "pool_exhausted",
+                            ).await.model,
+                        };
                         if to.to_lowercase() != ml {
                             let from = model.clone();
                             model = to;
@@ -2123,18 +2753,49 @@ impl ServiceRegistry {
                                 let retry_after = ((now / 86_400) + 1) * 86_400;
                                 let key = { let ml = from_model.trim().to_lowercase(); if ml.starts_with("agg/") { ml[4..].to_string() } else { ml.clone() } };
                                 let mut st = quota_state_clone.write().await;
+                                let previous = st.disabled.get(&key).cloned();
                                 st.disable(key.clone(), QuotaDisabledModel {
                                     model: from_model.clone(),
                                     provider_id: provider_id.clone(),
-                                    disabled_at_unix: now,
+                                    disabled_at_unix: previous.as_ref().map(|e| e.disabled_at_unix).unwrap_or(now),
                                     retry_after_unix: retry_after,
                                     reason: "quota_exhausted".to_string(),
+                                    last_seen_quota_at: now,
+                                    recheck_count: previous.as_ref().map(|e| e.recheck_count).unwrap_or(0),
+                                    source: "quota_exhausted".to_string(),
                                 });
                                 if let Some(parent) = quota_state_path_clone.parent() { let _ = std::fs::create_dir_all(parent); }
                                 if let Ok(s) = serde_json::to_string_pretty(&*st) { let _ = std::fs::write(&quota_state_path_clone, s); }
                                 tracing::warn!(event="quota.model.disabled", model=%from_model, provider_id=%provider_id, retry_after_unix=retry_after, "Model disabled due to quota exhaustion");
                             }
-                            model = "opencode/9router/free-forever".to_string();
+                            // FIX-LB: after disabling the exhausted model, try
+                            // the remaining free pool before the hard fallback.
+                            crate::gateway::lb::cooldown_after_quota(crate::gateway::DEFAULT_FREE_POOL, &from_model, &provider_id).await;
+                            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                            let mut failover_candidates: Vec<crate::gateway::LbCandidate> = opencode_free_models.iter()
+                                .filter(|m| !m.eq_ignore_ascii_case(&from_model))
+                                .map(|m| crate::gateway::LbCandidate::new(m.clone(), provider_id.clone()))
+                                .collect();
+                            let mut eligible = Vec::new();
+                            {
+                                let st = quota_state_clone.read().await;
+                                for candidate in failover_candidates.drain(..) {
+                                    if !st.is_disabled(&candidate.key(), now) { eligible.push(candidate); }
+                                }
+                            }
+                            model = match crate::gateway::lb::select(
+                                crate::gateway::DEFAULT_FREE_POOL,
+                                &eligible,
+                                &from_model,
+                                "quota_exhausted",
+                                req.session_id.as_deref(),
+                                None,
+                            ).await {
+                                Some(selection) => selection.model,
+                                None => crate::gateway::lb::fallback_selection(
+                                    crate::gateway::DEFAULT_FREE_POOL, &from_model, "pool_exhausted",
+                                ).await.model,
+                            };
                             req.model = model.clone();
                             req.agentgate_force_fresh_cli_session = true;
                             if let Some(sid) = req.session_id.clone() {
@@ -2144,7 +2805,7 @@ impl ServiceRegistry {
                                 provider_id = %provider_id,
                                 from_model = %from_model,
                                 to_model = %model,
-                                "quota/free-limit on opencode stream; failing over to 9router/free-forever"
+                                "quota/free-limit on opencode stream; rerouted via free pool"
                             );
                             crate::metrics::init_metrics().record_quota_error(&provider_id, &from_model);
                             run_for_park = returned_run;
@@ -2156,11 +2817,17 @@ impl ServiceRegistry {
                             && is_transient_bridge_error(&err_str)
                         {
                             transient_retries += 1;
+                            // FIX-TRANSPORT-CLASSIFY: structured diagnostics for
+                            // ECONNREFUSED / ECONNRESET / broken pipe / readiness.
+                            let class = crate::transport::classify_message(&err_str);
+                            crate::metrics::init_metrics().record_error("bridge_transport_retry", class.as_str());
                             tracing::warn!(
+                                target: "agentgate.transport",
                                 provider_id = %provider_id,
                                 model = %model,
+                                error_class = class.as_str(),
                                 attempt = transient_retries,
-                                error = %err_str,
+                                error = %crate::transport::redact_diagnostics(&err_str),
                                 "transient bridge/CLI error with no output; retrying once"
                             );
                             run_for_park = returned_run;
@@ -2168,7 +2835,18 @@ impl ServiceRegistry {
                             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                             continue;
                         }
-                        tracing::error!("provider stream error: {}", err_str);
+                        // FIX-TRANSPORT-CLASSIFY: terminal stream errors also
+                        // carry a class label and redacted message for triage.
+                        let terminal_class = crate::transport::classify_message(&err_str);
+                        crate::metrics::init_metrics().record_error("bridge_transport_terminal", terminal_class.as_str());
+                        tracing::error!(
+                            target: "agentgate.transport",
+                            provider_id = %provider_id,
+                            model = %model,
+                            error_class = terminal_class.as_str(),
+                            error = %crate::transport::redact_diagnostics(&err_str),
+                            "provider stream error"
+                        );
                         let _ = tx
                             .send(RunEvent::Error {
                                 message: err_str,
@@ -2212,6 +2890,216 @@ fn provider_call_timeout_secs() -> u64 {
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
         .unwrap_or(60)
+}
+
+#[cfg(test)]
+mod transport_regression_tests {
+    use super::*;
+
+    /// Regression for the reported incident: transient transport failures must
+    /// be retried, quota/auth failures must not be retried as transport errors.
+    #[test]
+    fn incident_transport_messages_are_classified_transient() {
+        for message in [
+            "provider_error: Transport: ECONNREFUSED: Unable to connect. Is the computer able to access the url?",
+            "provider_error: Transport: ECONNRESET: The socket connection was closed unexpectedly",
+            "Error: Broken pipe (os error 32)",
+            "provider_error: Standalone server exited before reporting readiness",
+            "connection refused (os error 111)",
+            "connection reset by peer (os error 104)",
+            "failed to spawn opencode process: resource temporarily unavailable",
+        ] {
+            assert!(is_transient_bridge_error(message), "should be transient: {message}");
+        }
+
+        for fatal in [
+            "free usage limit reached",
+            "provider.free-limit",
+            "model_no_tool_support: no tools",
+            "tool_isolation_violation",
+        ] {
+            assert!(!is_transient_bridge_error(fatal), "should be fatal: {fatal}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod http_router_tests {
+    use super::*;
+
+    fn nvidia_cfg() -> ProviderConfig {
+        ProviderConfig {
+            id: "nvidia".to_string(),
+            enabled: true,
+            provider_type: crate::provider::mappings::HTTP_PROVIDER_TYPE.to_string(),
+            mode: "http".to_string(),
+            adapter: crate::provider::mappings::OPENAI_COMPATIBLE_ADAPTER.to_string(),
+            base_url: Some("https://integrate.api.nvidia.com/v1".to_string()),
+            chat_completions_path: "/chat/completions".to_string(),
+            models_path: "/models".to_string(),
+            api_key: Some("nvapi-test-key".to_string()),
+            api_key_prefix: Some("nvapi-".to_string()),
+            mapping_status: "verified".to_string(),
+            forward_tools: true,
+            models: vec!["meta/llama-3.3-70b-instruct".to_string()],
+            timeout_secs: 10,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn http_models_are_merged_and_resolved() {
+        let registry = ServiceRegistry::new();
+        assert!(registry.register_http_provider(&nvidia_cfg()).await);
+        assert!(registry.is_provider_available("nvidia").await);
+        let gateway_id = "agg/nvidia/meta/llama-3.3-70b-instruct";
+        assert_eq!(
+            registry.provider_for_model(gateway_id).await.as_deref(),
+            Some("nvidia")
+        );
+        assert_eq!(
+            registry.upstream_model_for(gateway_id).await.as_deref(),
+            Some("meta/llama-3.3-70b-instruct")
+        );
+        let models = registry.list_models(None).await.expect("model list");
+        assert!(
+            models.data.iter().any(|m| m.id == gateway_id && m.provider == "nvidia"),
+            "HTTP models must be published in /v1/models"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_provider_never_registers_as_cli() {
+        let mut registry = ServiceRegistry::new();
+        registry.register_configured(&[nvidia_cfg()]).await;
+        assert!(registry.http_provider("nvidia").await.is_some());
+        assert!(!registry.providers.read().await.contains_key("nvidia"));
+        assert!(!registry.native_providers.read().await.contains_key("nvidia"));
+    }
+
+    #[tokio::test]
+    async fn explicit_http_mode_is_honored_even_with_tools() {
+        let registry = ServiceRegistry::new();
+        registry.register_http_provider(&nvidia_cfg()).await;
+        assert_eq!(
+            registry.select_execution_mode("agg/nvidia/meta/llama-3.3-70b-instruct", true).await,
+            ExecutionMode::Http
+        );
+        // Unknown models keep the legacy CLI path.
+        assert_eq!(
+            registry.select_execution_mode("unknown/model", false).await,
+            ExecutionMode::Cli
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_completion_dispatches_to_http_upstream() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "meta/llama-3.3-70b-instruct",
+                "choices": [{
+                    "index": 0,
+                    "message": { "role": "assistant", "content": "hello from NIM" },
+                    "finish_reason": "stop"
+                }],
+                "usage": { "prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8 }
+            })))
+            .mount(&server)
+            .await;
+
+        let mut cfg = nvidia_cfg();
+        cfg.base_url = Some(format!("{}/v1", server.uri()));
+        let registry = ServiceRegistry::new();
+        assert!(registry.register_http_provider(&cfg).await);
+
+        let request = ChatCompletionRequest {
+            model: "agg/nvidia/meta/llama-3.3-70b-instruct".to_string(),
+            messages: vec![crate::types::ChatMessage::text("user", "hi")],
+            ..Default::default()
+        };
+        let response = registry.chat_completion(request).await.expect("HTTP chat ok");
+        assert_eq!(response.choices[0].message.content.as_deref(), Some("hello from NIM"));
+        assert_eq!(response.usage.map(|u| u.total_tokens), Some(8));
+    }
+
+    #[tokio::test]
+    async fn combo_falls_back_on_429_to_next_candidate() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let failing = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("rate limit reached"))
+            .mount(&failing)
+            .await;
+        let working = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "chatcmpl-fallback",
+                "choices": [{ "index": 0, "message": { "role": "assistant", "content": "from fallback" }, "finish_reason": "stop" }]
+            })))
+            .mount(&working)
+            .await;
+
+        let mut first = nvidia_cfg();
+        first.id = "nvidia".to_string();
+        first.base_url = Some(format!("{}/v1", failing.uri()));
+        let mut second = nvidia_cfg();
+        second.id = "groq".to_string();
+        second.base_url = Some(format!("{}/v1", working.uri()));
+
+        let registry = ServiceRegistry::new();
+        assert!(registry.register_http_provider(&first).await);
+        assert!(registry.register_http_provider(&second).await);
+
+        let combo = ComboModel {
+            id: "combo/test-fallback".to_string(),
+            enabled: true,
+            strategy: "fallback".to_string(),
+            candidates: vec![
+                crate::provider::combo::ComboCandidate {
+                    model: "agg/nvidia/meta/llama-3.3-70b-instruct".to_string(),
+                    provider: None,
+                    mode: None,
+                    weight: 1,
+                },
+                crate::provider::combo::ComboCandidate {
+                    model: "agg/groq/llama-3.1-8b-instant".to_string(),
+                    provider: None,
+                    mode: None,
+                    weight: 1,
+                },
+            ],
+            fallback_on: crate::provider::combo::default_fallback_conditions(),
+            max_attempts: 2,
+        };
+        let resolver = |id: &str| {
+            if id.starts_with("agg/nvidia/") || id.starts_with("agg/groq/") {
+                Some(ExecutionMode::Http)
+            } else {
+                None
+            }
+        };
+        crate::provider::combo::registry().create(combo, &resolver).await.unwrap();
+
+        let request = ChatCompletionRequest {
+            model: "combo/test-fallback".to_string(),
+            messages: vec![crate::types::ChatMessage::text("user", "hi")],
+            ..Default::default()
+        };
+        let response = registry.chat_completion(request).await.expect("combo fallback ok");
+        assert_eq!(response.choices[0].message.content.as_deref(), Some("from fallback"));
+    }
 }
 
 
