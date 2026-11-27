@@ -87,6 +87,9 @@ pub struct ChatCompletionRequest {
     /// explicit tool results in the history (`Resume`/`Replay`/`NewChatOnly`).
     #[serde(skip)]
     pub agentgate_multi_turn: bool,
+    /// Internal: force a fresh CLI session (do not resume stored --session). Used on model reroute/quota failover.
+    #[serde(skip)]
+    pub agentgate_force_fresh_cli_session: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

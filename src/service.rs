@@ -1089,6 +1089,10 @@ impl ServiceRegistry {
                     self.mark_model_quota_disabled(&provider_id, &from_model, "quota_exhausted").await;
                     model = "opencode/9router/free-forever".to_string();
                     request.model = model.clone();
+                    request.agentgate_force_fresh_cli_session = true;
+                    if let Some(sid) = request.session_id.clone() {
+                        crate::provider::clear_cli_session_for_chain(&sid).await;
+                    }
                     tracing::warn!(
                         provider_id = %provider_id,
                         from_model = %from_model,
@@ -1426,6 +1430,11 @@ impl ServiceRegistry {
         if provider_id == "opencode" {
             let routed = self.reroute_model_for_quota(provider_id, &request.model).await;
             if routed != request.model {
+                let sid = request.session_id.clone().unwrap_or_default();
+                if !sid.is_empty() {
+                    crate::provider::clear_cli_session_for_chain(&sid).await;
+                }
+                request.agentgate_force_fresh_cli_session = true;
                 request.model = routed;
             }
         }
@@ -1566,6 +1575,10 @@ impl ServiceRegistry {
                     self.mark_model_quota_disabled(provider_id, &from_model, "quota_exhausted").await;
                     model = "opencode/9router/free-forever".to_string();
                     req_for_provider.model = model.clone();
+                    req_for_provider.agentgate_force_fresh_cli_session = true;
+                    if let Some(sid) = req_for_provider.session_id.clone() {
+                        crate::provider::clear_cli_session_for_chain(&sid).await;
+                    }
                     tracing::warn!(
                         provider_id = %provider_id,
                         from_model = %from_model,
@@ -1989,6 +2002,10 @@ impl ServiceRegistry {
                             let from = model.clone();
                             model = to;
                             req.model = model.clone();
+                            req.agentgate_force_fresh_cli_session = true;
+                            if let Some(sid) = req.session_id.clone() {
+                                crate::provider::clear_cli_session_for_chain(&sid).await;
+                            }
                             tracing::info!(event="quota.model.reroute", provider_id=%provider_id, from_model=%from, to_model=%model, reason=if disabled {"quota_disabled"} else {"free_policy"}, "Rerouted model");
                         }
                     }
@@ -2119,6 +2136,10 @@ impl ServiceRegistry {
                             }
                             model = "opencode/9router/free-forever".to_string();
                             req.model = model.clone();
+                            req.agentgate_force_fresh_cli_session = true;
+                            if let Some(sid) = req.session_id.clone() {
+                                crate::provider::clear_cli_session_for_chain(&sid).await;
+                            }
                             tracing::warn!(
                                 provider_id = %provider_id,
                                 from_model = %from_model,

@@ -34,6 +34,15 @@ pub async fn register_pending_cli_session(agentgate_session_id: &str, cli_sessio
     }
 }
 
+/// Clear all stored CLI session state for an agentgate session chain.
+/// Used when model reroute/quota failover makes resuming the old CLI session unsafe.
+pub async fn clear_cli_session_for_chain(agentgate_session_id: &str) {
+    let key = agentgate_session_id.to_string();
+    pending_sessions().write().await.remove(&key);
+    pending_busy().write().await.remove(&key);
+    active_sessions().write().await.remove(&key);
+}
+
 pub async fn mark_bridge_cli_session_busy(agentgate_session_id: &str) {
     pending_busy().write().await.insert(agentgate_session_id.to_string(), std::time::Instant::now());
 }
@@ -1792,7 +1801,18 @@ impl CliProvider for BridgeCliProvider {
 
             // FIX-SESSION: resume the captured OpenCode CLI conversation session
             // (e.g. `ses_...`) when one was remembered for this agentgate session.
-            let resume_cli_sid = self.stored_opencode_session(&session_id).await;
+            // On model reroute/quota failover, force a fresh CLI session to avoid model/context mismatch.
+            let force_fresh_cli = request.agentgate_force_fresh_cli_session;
+            if force_fresh_cli {
+                self.remember_opencode_session(&session_id, None).await;
+                clear_cli_session_for_chain(&session_id).await;
+                tracing::info!(event="bridge.cli_session.force_fresh", session_id=%session_id, model=%model, "Forced fresh CLI session (model reroute/quota failover)");
+            }
+            let resume_cli_sid = if force_fresh_cli {
+                None
+            } else {
+                self.stored_opencode_session(&session_id).await
+            };
 
             // FIX-PROMPT-01: Default strip system prompt — do not forward to CLI
             // System messages are skipped in render_conversation (see function)
@@ -2055,7 +2075,18 @@ impl CliProvider for BridgeCliProvider {
 
             // FIX-SESSION: resume the captured OpenCode CLI conversation session
             // (e.g. `ses_...`) when one was remembered for this agentgate session.
-            let resume_cli_sid = self.stored_opencode_session(&session_id).await;
+            // On model reroute/quota failover, force a fresh CLI session to avoid model/context mismatch.
+            let force_fresh_cli = request.agentgate_force_fresh_cli_session;
+            if force_fresh_cli {
+                self.remember_opencode_session(&session_id, None).await;
+                clear_cli_session_for_chain(&session_id).await;
+                tracing::info!(event="bridge.cli_session.force_fresh", session_id=%session_id, model=%model, "Forced fresh CLI session (model reroute/quota failover)");
+            }
+            let resume_cli_sid = if force_fresh_cli {
+                None
+            } else {
+                self.stored_opencode_session(&session_id).await
+            };
 
             // FIX-PROMPT-01: Default strip system prompt — do not forward to CLI
             // System messages are skipped in render_conversation (see function)
