@@ -94,6 +94,17 @@ fn is_transient_bridge_error(e: &str) -> bool {
         || e.to_lowercase().contains("failed to spawn opencode process")
 }
 
+/// Whether a stream error should be ignored because the SSE consumer is gone.
+///
+/// A broken pipe / readiness failure that happens *after* the client hung up
+/// must not trigger another CLI spawn (retry or failover): nobody reads the
+/// result and the extra child process pushes the cgroup toward TasksMax.
+fn skip_retry_when_client_gone(client_gone: bool, error: &str) -> bool {
+    if !client_gone { return false; }
+    // Any error is skip-worthy once the only consumer has disconnected.
+    !error.is_empty()
+}
+
 fn is_opencode_quota_failover_candidate(provider_id: &str, model: &str) -> bool {
     let is_opencode = provider_id == "opencode"
         || model.starts_with("opencode/")
@@ -2740,6 +2751,22 @@ impl ServiceRegistry {
                     };
 
                     if let Some(err_str) = captured_or_err {
+                        // FIX-CLIENT-DISCONNECT: when the SSE receiver is gone,
+                        // the client already hung up. Retrying or failing over
+                        // here would spawn yet another CLI child nobody reads,
+                        // inflating Tasks until the cgroup limit is hit (which
+                        // in turn causes more broken pipes/readiness failures).
+                        if skip_retry_when_client_gone(tx.is_closed(), &err_str) {
+                            tracing::info!(
+                                target: "agentgate.transport",
+                                provider_id = %provider_id,
+                                model = %model,
+                                error_class = crate::transport::classify_message(&err_str).as_str(),
+                                "client disconnected; skipping retry/failover"
+                            );
+                            crate::metrics::init_metrics().record_error("bridge_transport_client_gone", "skip");
+                            break;
+                        }
                         let quota = is_quota_error(&err_str)
                             && !failed_over_to_9router
                             && !had_meaningful_output.load(Ordering::Relaxed)
@@ -2926,6 +2953,14 @@ mod transport_regression_tests {
 #[cfg(test)]
 mod http_router_tests {
     use super::*;
+
+    #[test]
+    fn skip_retry_only_when_client_gone_with_error() {
+        assert!(skip_retry_when_client_gone(true, "Broken pipe (os error 32)"));
+        assert!(skip_retry_when_client_gone(true, "readiness"));
+        assert!(!skip_retry_when_client_gone(false, "Broken pipe (os error 32)"));
+        assert!(!skip_retry_when_client_gone(true, ""));
+    }
 
     fn nvidia_cfg() -> ProviderConfig {
         ProviderConfig {
