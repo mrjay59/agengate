@@ -116,6 +116,10 @@ fn terminal_stream_error_surface(error: &str) -> (String, &'static str) {
             "provider CLI session closed mid-stream; retry the request".to_string(),
             "provider_pipe_closed",
         ),
+        crate::transport::TransportErrorClass::InvalidOutput => (
+            "provider emitted an invalid stream event; retrying the request".to_string(),
+            "provider_invalid_output",
+        ),
         _ => (error.to_string(), "provider_error"),
     }
 }
@@ -2987,6 +2991,13 @@ mod http_router_tests {
         let (msg, code) = terminal_stream_error_surface("provider_error: transport ECONNRESET");
         assert_eq!(code, "provider_error");
         assert!(msg.contains("ECONNRESET"), "non-pipe errors keep their detail");
+
+        let (msg, code) = terminal_stream_error_surface(
+            "provider_error: Invalid 9router/openai-compatible-chat stream event: Expected string at choices[0].delta.content",
+        );
+        assert_eq!(code, "provider_invalid_output");
+        assert!(!msg.contains("Expected string"), "raw schema error leaked: {msg}");
+        assert!(!msg.contains("9router"), "raw provider string leaked: {msg}");
     }
 
     fn nvidia_cfg() -> ProviderConfig {

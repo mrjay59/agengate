@@ -48,6 +48,9 @@ pub enum TransportErrorClass {
     Io,
     /// The client/stream was aborted; retrying is pointless.
     Aborted,
+    /// Upstream emitted an invalid stream event (e.g. non-string delta.content).
+    /// Transient: a retry often yields a valid frame when no output was sent yet.
+    InvalidOutput,
     /// Unclassified.
     Other,
 }
@@ -66,6 +69,7 @@ impl TransportErrorClass {
             TransportErrorClass::Readiness => "readiness",
             TransportErrorClass::Io => "io",
             TransportErrorClass::Aborted => "aborted",
+            TransportErrorClass::InvalidOutput => "invalid_output",
             TransportErrorClass::Other => "other",
         }
     }
@@ -84,6 +88,7 @@ impl TransportErrorClass {
                 | TransportErrorClass::Server5xx
                 | TransportErrorClass::Readiness
                 | TransportErrorClass::Io
+                | TransportErrorClass::InvalidOutput
         )
     }
 
@@ -138,6 +143,15 @@ pub fn classify_message(message: &str) -> TransportErrorClass {
         || s.contains("pipe is being closed")
     {
         return TransportErrorClass::BrokenPipe;
+    }
+    // Upstream stream-frame shape error (e.g. 9router sending non-string
+    // `choices[0].delta.content`) surfacing through the opencode AI SDK.
+    // Transient: one retry when no meaningful output has been emitted yet.
+    if s.contains("provider.invalid-output")
+        || (s.contains("invalid") && s.contains("stream event"))
+        || (s.contains("delta.content") && s.contains("expected string"))
+    {
+        return TransportErrorClass::InvalidOutput;
     }
     if s.contains("timed out") || s.contains("timeout") || s.contains("elapsed") {
         return TransportErrorClass::Timeout;
@@ -705,6 +719,15 @@ mod tests {
             ("tcp connect ECONNREFUSED 127.0.0.1:11434", TransportErrorClass::ConnectionRefused),
             ("Connection reset by peer (os error 104)", TransportErrorClass::ConnectionReset),
             ("Broken pipe (os error 32)", TransportErrorClass::BrokenPipe),
+            (
+                "provider_error: Invalid 9router/openai-compatible-chat stream event",
+                TransportErrorClass::InvalidOutput,
+            ),
+            (
+                "Expected string | null | undefined at choices[0].delta.content",
+                TransportErrorClass::InvalidOutput,
+            ),
+            ("provider.invalid-output", TransportErrorClass::InvalidOutput),
             ("standalone server exited before reporting readiness", TransportErrorClass::Readiness),
             ("request timed out after 30s", TransportErrorClass::Timeout),
             ("error sending request: provider.free-limit reached", TransportErrorClass::Quota429),
@@ -732,6 +755,7 @@ mod tests {
     fn retryable_classes_exclude_quota_tls_and_abort() {
         assert!(TransportErrorClass::ConnectionRefused.is_retryable());
         assert!(TransportErrorClass::BrokenPipe.is_retryable());
+        assert!(TransportErrorClass::InvalidOutput.is_retryable());
         assert!(TransportErrorClass::Readiness.is_retryable());
         assert!(TransportErrorClass::Server5xx.is_retryable());
         assert!(!TransportErrorClass::Quota429.is_retryable());

@@ -269,6 +269,166 @@ async fn client_disconnect_does_not_retry_the_pipe_error() {
 /// `Broken pipe (os error 32)` on Linux (and `os error 109/232` on Windows).
 /// Documents that the transport classifier maps the real OS error correctly so
 /// the sanitizer above triggers.
+/// Provider emits an invalid stream event (non-string delta.content) BEFORE
+/// any meaningful output → classified as InvalidOutput → retry once → recovers.
+struct InvalidStreamEventThenRecover {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl CliProvider for InvalidStreamEventThenRecover {
+    fn id(&self) -> String {
+        "invalid-output-recover".into()
+    }
+    fn bin(&self) -> Option<String> {
+        Some("invalid-output-recover".into())
+    }
+    fn models(&self) -> Vec<String> {
+        vec!["invalid-output-recover-model".into()]
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn set_available(&mut self, _available: bool) {}
+    async fn check_available(&self) -> bool {
+        true
+    }
+    async fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> {
+        Ok(vec!["invalid-output-recover-model".into()])
+    }
+    async fn send_chat_completion(
+        &self,
+        _model: &str,
+        _request: ChatCompletionRequest,
+    ) -> Result<ProviderResponse, anyhow::Error> {
+        Ok(ProviderResponse::Error(
+            "provider.invalid-output: Expected string at delta.content".into(),
+        ))
+    }
+    async fn send_chat_completion_stream(
+        &self,
+        _model: &str,
+        _request: ChatCompletionRequest,
+        tx: mpsc::Sender<RunEvent>,
+    ) -> Result<(), anyhow::Error> {
+        let attempt = self.calls.fetch_add(1, Ordering::SeqCst);
+        if attempt == 0 {
+            return Err(anyhow::anyhow!(
+                "provider_error: Invalid 9router/openai-compatible-chat stream event: Expected string | null | undefined at choices[0].delta.content"
+            ));
+        }
+        let _ = tx.send(RunEvent::Text { text: "recovered".into() }).await;
+        let _ = tx.send(RunEvent::Done { reason: FinishReason::Stop }).await;
+        Ok(())
+    }
+}
+
+/// Provider emits invalid stream event AFTER partial output → terminal error,
+/// must be sanitized, not raw schema error.
+struct InvalidStreamEventTerminal;
+
+#[async_trait]
+impl CliProvider for InvalidStreamEventTerminal {
+    fn id(&self) -> String {
+        "invalid-output-terminal".into()
+    }
+    fn bin(&self) -> Option<String> {
+        Some("invalid-output-terminal".into())
+    }
+    fn models(&self) -> Vec<String> {
+        vec!["invalid-output-terminal-model".into()]
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn set_available(&mut self, _available: bool) {}
+    async fn check_available(&self) -> bool {
+        true
+    }
+    async fn scan_models(&self) -> Result<Vec<String>, anyhow::Error> {
+        Ok(vec!["invalid-output-terminal-model".into()])
+    }
+    async fn send_chat_completion(
+        &self,
+        _model: &str,
+        _request: ChatCompletionRequest,
+    ) -> Result<ProviderResponse, anyhow::Error> {
+        Ok(ProviderResponse::Error(
+            "provider.invalid-output: Expected string at delta.content".into(),
+        ))
+    }
+    async fn send_chat_completion_stream(
+        &self,
+        _model: &str,
+        _request: ChatCompletionRequest,
+        tx: mpsc::Sender<RunEvent>,
+    ) -> Result<(), anyhow::Error> {
+        let _ = tx.send(RunEvent::Text { text: "partial".into() }).await;
+        Err(anyhow::anyhow!(
+            "provider_error: Invalid 9router/openai-compatible-chat stream event: Expected string | null | undefined at choices[0].delta.content"
+        ))
+    }
+}
+
+#[tokio::test]
+async fn invalid_stream_event_before_output_is_retried_transparently() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = app_with(Box::new(InvalidStreamEventThenRecover { calls: calls.clone() })).await;
+
+    let resp = stream_request(app, "invalid-output-recover-model").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = tokio::time::timeout(
+        Duration::from_secs(15),
+        axum::body::to_bytes(resp.into_body(), usize::MAX),
+    )
+    .await
+    .expect("stream must terminate")
+    .unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+
+    assert!(text.contains("recovered"), "retry must recover, got: {text}");
+    assert!(
+        !text.contains("Expected string"),
+        "raw schema error leaked to client: {text}"
+    );
+    assert!(
+        !text.contains("Invalid 9router"),
+        "raw provider string leaked: {text}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "expected exactly one retry");
+}
+
+#[tokio::test]
+async fn terminal_invalid_stream_event_is_sanitized_for_the_client() {
+    let app = app_with(Box::new(InvalidStreamEventTerminal)).await;
+
+    let resp = stream_request(app, "invalid-output-terminal-model").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = tokio::time::timeout(
+        Duration::from_secs(15),
+        axum::body::to_bytes(resp.into_body(), usize::MAX),
+    )
+    .await
+    .expect("stream must terminate")
+    .unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+
+    assert!(text.contains("partial"), "partial output lost: {text}");
+    assert!(
+        !text.contains("Expected string"),
+        "raw schema error must never reach the client: {text}"
+    );
+    assert!(
+        !text.contains("Invalid 9router"),
+        "raw provider string must never reach the client: {text}"
+    );
+    assert!(
+        text.contains("provider emitted an invalid stream event"),
+        "expected sanitized message, got: {text}"
+    );
+    assert!(text.contains("[DONE]"), "expected terminator, got: {text}");
+}
+
 #[tokio::test]
 async fn closed_child_stdin_write_is_classified_as_broken_pipe() {
     use tokio::io::AsyncWriteExt;
