@@ -2757,7 +2757,7 @@ impl ServiceRegistry {
                     });
 
                     let stream_result = provider.send_chat_completion_stream(&model, req.clone(), inner_tx).await;
-                    let returned_run = forwarder.await.ok().flatten();
+                    let mut returned_run = forwarder.await.ok().flatten();
                     let captured_failover = failover_capture.lock().await.clone();
 
                     // Prefer explicit error event captured by forwarder; fall back to Err.
@@ -2854,6 +2854,11 @@ impl ServiceRegistry {
                                 "quota/free-limit on opencode stream; rerouted via free pool"
                             );
                             crate::metrics::init_metrics().record_quota_error(&provider_id, &from_model);
+                            // FIX-RAM-LEAK: close the failed attempt session before failover.
+                            if let Some(ref mut r) = returned_run {
+                                r.fail("quota_failover".to_string());
+                                bridge_for_park.runs().write().await.insert(r.id.clone(), r.clone());
+                            }
                             run_for_park = returned_run;
                             had_meaningful_output.store(false, Ordering::Relaxed);
                             continue;
@@ -2876,6 +2881,12 @@ impl ServiceRegistry {
                                 error = %crate::transport::redact_diagnostics(&err_str),
                                 "transient bridge/CLI error with no output; retrying once"
                             );
+                            // FIX-RAM-LEAK: close the failed attempt session so
+                            // retry does not orphan the CLI child/MCP shim.
+                            if let Some(ref mut r) = returned_run {
+                                r.fail("transient_retry".to_string());
+                                bridge_for_park.runs().write().await.insert(r.id.clone(), r.clone());
+                            }
                             run_for_park = returned_run;
                             had_meaningful_output.store(false, Ordering::Relaxed);
                             tokio::time::sleep(std::time::Duration::from_millis(500)).await;

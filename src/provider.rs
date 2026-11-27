@@ -1781,12 +1781,33 @@ impl CliProvider for BridgeCliProvider {
         
         // Check if we have a persistent session for this session_id
         let keep_alive = self.keep_alive.is_some();
-        let existing_session = if keep_alive {
+        let mut existing_session = if keep_alive {
             let sessions = self.persistent_sessions.read().await;
             sessions.get(&session_id).map(|p| p.session.clone())
         } else {
             None
         };
+
+        if let Some(ref existing) = existing_session {
+            // FIX-RAM-LEAK: gate reuse on liveness. A dead child left in the
+            // cache holds the Arc and its CLI process handle for the full TTL
+            // (default 10m) while every retry spawns a fresh child -> leak.
+            let alive = match existing.check_liveness().await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "bridge.cli", session_id = %session_id, error = %e, "keep_alive liveness probe failed; treating as dead");
+                    false
+                }
+            };
+            if !alive {
+                tracing::warn!(target: "bridge.cli", session_id = %session_id, "keep_alive session is dead; retiring and respawning");
+                self.persistent_sessions.write().await.remove(&session_id);
+                let _ = existing.close().await;
+                // MCP session for the old persistent session was released when
+                // it was first stored; no mcp_session_id handle to release here.
+                existing_session = None;
+            }
+        }
 
         let (session, should_store, mcp_session_id): (
             Arc<dyn crate::provider::bridge::BridgeSession>,
@@ -2071,12 +2092,28 @@ impl CliProvider for BridgeCliProvider {
         
         // Check if we have a persistent session for this session_id
         let keep_alive = self.keep_alive.is_some();
-        let existing_session = if keep_alive {
+        let mut existing_session = if keep_alive {
             let sessions = self.persistent_sessions.read().await;
             sessions.get(&session_id).map(|p| p.session.clone())
         } else {
             None
         };
+
+        if let Some(ref existing) = existing_session {
+            let alive = match existing.check_liveness().await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "bridge.cli", session_id = %session_id, error = %e, "keep_alive liveness probe failed; treating as dead");
+                    false
+                }
+            };
+            if !alive {
+                tracing::warn!(target: "bridge.cli", session_id = %session_id, "keep_alive session is dead; retiring and respawning (stream)");
+                self.persistent_sessions.write().await.remove(&session_id);
+                let _ = existing.close().await;
+                existing_session = None;
+            }
+        }
 
         let (session, should_store, mcp_session_id): (
             Arc<dyn crate::provider::bridge::BridgeSession>,
@@ -2295,6 +2332,7 @@ impl CliProvider for BridgeCliProvider {
         let keep_alive_flag = keep_alive;
         let should_store_flag = should_store;
         let session_id_for_cleanup = session_id.clone();
+        let session_id_for_timeout_outer = session_id_for_cleanup.clone();
         let mcp_session_id_for_cleanup = mcp_session_id.clone();
         let persistent_sessions_clone = self.persistent_sessions.clone();
         let keep_alive_ttl_for_cleanup = self.keep_alive_ttl;
@@ -2480,12 +2518,13 @@ impl CliProvider for BridgeCliProvider {
         // (it owns the CLI child and spawn sites set `kill_on_drop`) and close the
         // session so `ollama run` / `opencode` is not left running after the
         // client is gone.
+        let session_for_cleanup_task = session_for_completion.clone();
         let completion_task = tokio::spawn(async move {
             let mut client_disconnected = false;
             {
                 let wait = tokio::time::timeout(
                     bridge_turn_timeout_secs,
-                    session_for_completion.wait_for_completion(),
+                    session_for_cleanup_task.wait_for_completion(),
                 );
                 tokio::pin!(wait);
                 let outcome = tokio::select! {
@@ -2537,7 +2576,7 @@ impl CliProvider for BridgeCliProvider {
 
             // Cleanup session
             if !keep_alive_flag {
-                let _ = session_for_completion.close().await;
+                let _ = session_for_cleanup_task.close().await;
             } else if should_store_flag {
                 // Bound the persistent-session cache the same way as the
                 // non-stream path (TTL + cap) so CLI child processes don't pile up.
@@ -2564,15 +2603,32 @@ impl CliProvider for BridgeCliProvider {
                     }
                 }
                 sessions.insert(
-                    session_id_for_cleanup,
-                    PersistentSession { session: session_for_completion, created_at: now },
+                    session_id_for_cleanup.clone(),
+                    PersistentSession { session: session_for_cleanup_task, created_at: now },
                 );
             }
+            let _ = session_id_for_cleanup;
             let _ = mcp_session_id_for_cleanup;
         });
 
-        // Detach completion task (runs in background for cleanup)
-        drop(completion_task);
+        // Bound the completion task so it cannot hold a dead CLI session
+        // forever. The bridge/CLI close path is already time-bounded, but a
+        // stuck wait_for_completion or cleanup lock must not leak the session
+        // Arc (and its child handle) indefinitely.
+        tokio::spawn(async move {
+            let max_wait = bridge_turn_timeout_secs + std::time::Duration::from_secs(30);
+            match tokio::time::timeout(max_wait, completion_task).await {
+                Ok(_) => {}
+                Err(_) => {
+                    tracing::warn!(
+                        target: "bridge.cli",
+                        session_id = %session_id_for_timeout_outer,
+                        "stream completion cleanup timed out; forcing session close"
+                    );
+                    let _ = session_for_completion.close().await;
+                }
+            }
+        });
 
         streaming_result
     }
