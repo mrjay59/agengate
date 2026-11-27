@@ -261,6 +261,19 @@ fn resolve_reasoning(
     (cfg, format, source)
 }
 
+/// Validate the requested tool count against the configured ceiling.
+/// Returns the error message to surface when the count exceeds the limit.
+fn validate_tool_count(count: usize, max_tools: usize) -> Result<(), String> {
+    if count > max_tools {
+        Err(format!(
+            "too_many_tools ({} > {}; set [bridge.limits] max_tools to raise)",
+            count, max_tools
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 async fn chat_completions(
     State(registry): State<Arc<ServiceRegistry>>,
     headers: HeaderMap,
@@ -293,8 +306,12 @@ async fn chat_completions(
         return Err(AppError::ToolError("n > 1 is not supported".to_string()));
     }
     if let Some(tools) = &request.tools {
-        if tools.len() > 128 {
-            return Err(AppError::ToolError("too_many_tools".to_string()));
+        // Use the configurable `[bridge.limits] max_tools` ceiling instead of
+        // a hard-coded 128. Operators with tool-heavy clients (AionUI MCP
+        // catalogs) can raise it without a code change; fail-closed remains.
+        let max_tools = registry.bridge_config.limits.max_tools;
+        if let Err(message) = validate_tool_count(tools.len(), max_tools) {
+            return Err(AppError::ToolError(message));
         }
         for t in tools {
             if t.r#type != "function" {
@@ -1420,6 +1437,26 @@ fn stream_idle_timeout() -> Duration {
         .filter(|v| *v > 0)
         .map(Duration::from_secs)
         .unwrap_or_else(|| Duration::from_secs(30))
+}
+
+#[cfg(test)]
+mod tool_limit_tests {
+    use super::validate_tool_count;
+
+    #[test]
+    fn tool_count_uses_configured_ceiling() {
+        // 129 tools must pass when the operator raises max_tools above 128.
+        assert!(validate_tool_count(129, 256).is_ok());
+        assert!(validate_tool_count(256, 256).is_ok());
+    }
+
+    #[test]
+    fn tool_count_fail_closed_with_actionable_message() {
+        let err = validate_tool_count(129, 128).unwrap_err();
+        assert!(err.starts_with("too_many_tools (129 > 128"));
+        assert!(err.contains("max_tools"));
+        assert!(validate_tool_count(128, 128).is_ok());
+    }
 }
 
 
