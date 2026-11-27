@@ -746,17 +746,36 @@ impl KeyStore {
                 args.push(rusqlite::types::Value::from($val));
             }};
         }
-        if let Some(v) = filter.from { push!(" AND ts>=?", v); }
-        if let Some(v) = filter.to { push!(" AND ts<=?", v); }
-        if let Some(v) = filter.provider { push!(" AND provider_id=?", v); }
-        if let Some(v) = filter.model { push!(" AND model=?", v); }
-        if let Some(v) = filter.key_id { push!(" AND key_id=?", v); }
+        // Build the filter clause once so both the row query and the summary
+        // aggregate use identical predicates. Previously the summary ignored
+        // all filters (always global totals), which misled `/admin/usage`
+        // consumers that filtered by key_id/provider/model.
+        let mut where_sql = String::new();
+        macro_rules! filterpush {
+            ($clause:expr, $val:expr) => {{
+                where_sql.push_str($clause);
+                args.push(rusqlite::types::Value::from($val));
+            }};
+        }
+        if let Some(v) = filter.from { filterpush!(" AND ts>=?", v); }
+        if let Some(v) = filter.to { filterpush!(" AND ts<=?", v); }
+        if let Some(v) = &filter.provider { filterpush!(" AND provider_id=?", v.to_string()); }
+        if let Some(v) = &filter.model { filterpush!(" AND model=?", v.to_string()); }
+        if let Some(v) = &filter.key_id { filterpush!(" AND key_id=?", v.to_string()); }
+        sql.push_str(&where_sql);
+        let summary_sql = format!(
+            "SELECT COUNT(*),COALESCE(SUM(input_tokens),0),COALESCE(SUM(output_tokens),0),
+                    COALESCE(SUM(total_tokens),0),COALESCE(SUM(content_in_bytes),0),
+                    COALESCE(SUM(content_out_bytes),0),COALESCE(SUM(tokens_estimated),0)
+             FROM usage_events WHERE 1=1{}",
+            where_sql
+        );
         let limited = filter.limit.max(1).min(1000);
         sql.push_str(" ORDER BY ts DESC LIMIT ");
         sql.push_str(&limited.to_string());
 
         let mut stmt = conn.prepare(&sql).map_err(|e| StoreError::Db(e.to_string()))?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(args), |r| {
+        let rows = stmt.query_map(rusqlite::params_from_iter(args.clone()), |r| {
             Ok(serde_json::json!({
                 "request_id": r.get::<_, String>(0)?,
                 "ts": r.get::<_, i64>(1)?,
@@ -780,11 +799,8 @@ impl KeyStore {
         drop(stmt);
 
         let (requests, it, ot, tt, cib, cob, est): (u64, u64, u64, u64, u64, u64, u64) = conn.query_row(
-            "SELECT COUNT(*),COALESCE(SUM(input_tokens),0),COALESCE(SUM(output_tokens),0),
-                    COALESCE(SUM(total_tokens),0),COALESCE(SUM(content_in_bytes),0),
-                    COALESCE(SUM(content_out_bytes),0),COALESCE(SUM(tokens_estimated),0)
-             FROM usage_events WHERE 1=1",
-            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+            &summary_sql,
+            rusqlite::params_from_iter(args), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
         ).unwrap_or_default();
         Ok(UsageQueryResult {
             summary: UsageSummary {

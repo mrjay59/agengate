@@ -51,6 +51,10 @@ fn require_admin(headers: &HeaderMap, allow_bootstrap: bool) -> Result<(), AppEr
     let token = bearer(headers).unwrap_or("");
     if admin_keys_from_env().iter().any(|k| k == token) { return Ok(()); }
     let store = keystore().ok_or(AppError::KeyInvalid)?;
+    // Honour static bootstrap keys configured via `[auth] admin_keys` as well.
+    // The middleware already accepts these for /admin/*; keep require_admin()
+    // consistent so handlers don't reject keys the middleware let through.
+    if store.admin_keys().iter().any(|k| k == token) { return Ok(()); }
     if allow_bootstrap && store.count_keys() == 0 {
         tracing::warn!(event = "key.bootstrap", "No keys in store; allowing first key creation");
         return Ok(());

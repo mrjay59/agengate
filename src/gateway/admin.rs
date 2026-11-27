@@ -41,6 +41,16 @@ pub fn authorize(headers: &HeaderMap) -> Result<(), Response> {
         Some(value) => value.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(),
         None => Vec::new(),
     };
+    // Also accept static bootstrap keys configured under `[auth] admin_keys`.
+    // Keystore middleware already treats these as admin-scoped; keep the
+    // gateway admin plane consistent with the key lifecycle plane.
+    let keys = if keys.is_empty() {
+        crate::keystore::keystore()
+            .map(|s| s.admin_keys().to_vec())
+            .unwrap_or_default()
+    } else {
+        keys
+    };
     let provided = headers
         .get("x-agentgate-admin-key")
         .and_then(|v| v.to_str().ok())
@@ -296,13 +306,24 @@ pub async fn delete_provider(headers: HeaderMap, Path(id): Path<String>, Query(p
     }
 }
 
+/// Strip the trailing `/test` segment from a wildcard-captured id.
+///
+/// The admin detail routes use `/admin/<kind>/*id` so ids containing `/`
+/// (e.g. `agg/nvidia/<model>`) are addressable. Axum 0.7 cannot register
+/// `*id` together with a separate `:id/test` route, so the `/test` action
+/// shares the wildcard route and `id` arrives as `"<id>/test"`.
+fn strip_test_suffix(id: &str) -> &str {
+    id.strip_suffix("/test").unwrap_or(id)
+}
+
 /// Smoke test for a provider: HTTP `/models` probe or CLI availability check.
 pub async fn test_provider(
     headers: HeaderMap,
     State(registry): State<Arc<ServiceRegistry>>,
-    Path(id): Path<String>,
+    Path(raw_id): Path<String>,
 ) -> Response {
     if let Err(response) = authorize(&headers) { return response; }
+    let id = strip_test_suffix(&raw_id).to_string();
     let provider = match state().get_provider(&id).await {
         Some(provider) => provider,
         None => return gateway_error(GatewayError::NotFound(format!("provider {}", id))),
@@ -590,8 +611,9 @@ pub async fn delete_proxy(headers: HeaderMap, Path(id): Path<String>) -> Respons
 }
 
 /// Smoke test all endpoints of a proxy config through real reqwest proxies.
-pub async fn test_proxy(headers: HeaderMap, Path(id): Path<String>) -> Response {
+pub async fn test_proxy(headers: HeaderMap, Path(raw_id): Path<String>) -> Response {
     if let Err(response) = authorize(&headers) { return response; }
+    let id = strip_test_suffix(&raw_id).to_string();
     let config = match state().get_proxy(&id).await {
         Some(config) => config,
         None => return gateway_error(GatewayError::NotFound(format!("proxy {}", id))),
