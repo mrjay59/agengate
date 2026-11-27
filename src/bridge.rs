@@ -1223,14 +1223,40 @@ impl BridgeServer {
                 // Conservative Python MCP orphan watchdog (run every 10 sweeps ~ 5 min)
                 // Default dry_run=true for safety; set AGENTGATE_MCP_ORPHAN_DRY_RUN=false to enable killing
                 if sweep_counter % 10 == 0 {
-                    let dry_run = std::env::var("AGENTGATE_MCP_ORPHAN_DRY_RUN")
+                    let _dry_run = std::env::var("AGENTGATE_MCP_ORPHAN_DRY_RUN")
                         .ok()
                         .and_then(|v| v.parse::<bool>().ok())
                         .unwrap_or(true);
-                    // We can't call self.sweep_orphan_python_mcp here because self isn't captured.
-                    // Instead, we'll implement a standalone function or restructure.
-                    // For now, skip the watchdog in the cleanup task and rely on startup sweep.
                     // TODO: restructure to allow calling sweep_orphan_python_mcp from cleanup task.
+
+                    // Best-effort stale /tmp/agentgate/sessions cleanup to prevent RAM/disk growth
+                    // from orphaned workdirs after crashes. Conservative: only delete dirs older than
+                    // 6h and not present in active sessions/provider_sessions.
+                    let active_ids: std::collections::HashSet<String> = {
+                        let mut ids = std::collections::HashSet::new();
+                        let sess = sessions.read().await;
+                        for id in sess.keys() { ids.insert(id.clone()); }
+                        drop(sess);
+                        let ps = provider_sessions.read().await;
+                        for k in ps.keys() { ids.insert(k.clone()); }
+                        drop(ps);
+                        ids
+                    };
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let base = std::path::Path::new("/tmp/agentgate/sessions");
+                        let rd = match std::fs::read_dir(base) { Ok(r) => r, Err(_) => return };
+                        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(6 * 3600);
+                        for ent in rd.flatten() {
+                            let path = ent.path();
+                            if !path.is_dir() { continue; }
+                            let name = match path.file_name().and_then(|s| s.to_str()) { Some(s) => s.to_string(), None => continue };
+                            if active_ids.contains(&name) { continue; }
+                            let modified = ent.metadata().and_then(|m| m.modified()).ok();
+                            let old_enough = modified.map(|m| m < cutoff).unwrap_or(false);
+                            if !old_enough { continue; }
+                            let _ = std::fs::remove_dir_all(&path);
+                        }
+                    }).await;
                 }
 
                 // Clean expired parked runs (collect removed for best-effort S5 cleanup).

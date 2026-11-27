@@ -86,6 +86,9 @@ passthrough_mcp_allowlist = ["vps", "vps-mcp"]
 passthrough_mcp_denylist = []
 # Allow client-advertised MCP servers (request.mcp_servers / mcpServers) to be merged into bridge config.
 allow_client_mcp = true
+# Preemptively reroute opencode free-tier models (*-free, except 9router/free-forever)
+# to opencode/9router/free-forever to avoid provider.free-limit churn.
+reroute_free_models = true
 
 [bridge.isolation]
 # mode = "selective" | "strict" | "off"

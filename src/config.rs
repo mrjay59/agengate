@@ -261,6 +261,10 @@ pub struct BridgeConfig {
     /// into the bridge-injected opencode config. Default false for safety.
     #[serde(default)]
     pub allow_client_mcp: bool,
+    /// Preemptively reroute opencode free-tier models (*-free, except 9router/free-forever)
+    /// to opencode/9router/free-forever to avoid provider.free-limit churn.
+    #[serde(default = "default_true")]
+    pub reroute_free_models: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -318,6 +322,7 @@ impl Default for BridgeConfig {
             passthrough_mcp_allowlist: Vec::new(),
             passthrough_mcp_denylist: Vec::new(),
             allow_client_mcp: false,
+            reroute_free_models: true,
         }
     }
 }

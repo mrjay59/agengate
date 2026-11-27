@@ -1251,6 +1251,18 @@ impl ServiceRegistry {
         // Acquire provider semaphore to limit concurrent runs per provider (spec §10.3)
         let permit = self.acquire_provider_permit(provider_id).await?;
 
+        // Preemptive free-model reroute to avoid provider.free-limit churn.
+        if self.bridge_config.reroute_free_models && provider_id == "opencode" {
+            let m = request.model.to_lowercase();
+            let is_free = m.ends_with("-free") || m == "free";
+            let already_9r = m.contains("9router/free-forever") || m.contains("9router/free_forever");
+            if is_free && !already_9r {
+                let from = request.model.clone();
+                request.model = "opencode/9router/free-forever".to_string();
+                tracing::info!(provider_id=%provider_id, from_model=%from, to_model=%request.model, "reroute_free_model: preemptive reroute to 9router/free-forever");
+            }
+        }
+
         // Create new run with bridge (best-effort; do not block on failure)
         let tool_schemas: Vec<crate::bridge::ToolSchema> = tools.iter().map(|t| crate::bridge::ToolSchema {
             name: t.function.name.clone(),
@@ -1759,6 +1771,7 @@ impl ServiceRegistry {
             let bridge_for_park = self.bridge.clone();
 
             let provider_id_owned = provider_id.to_string();
+            let reroute_free_models = self.bridge_config.reroute_free_models;
             tokio::spawn(async move {
                 use std::sync::atomic::{AtomicBool, Ordering};
                 let had_meaningful_output = Arc::new(AtomicBool::new(false));
@@ -1768,6 +1781,17 @@ impl ServiceRegistry {
                 let mut req = req;
                 let mut run_for_park = run;
                 let provider_id = provider_id_owned;
+                if reroute_free_models && provider_id == "opencode" {
+                    let m = model.to_lowercase();
+                    let is_free = m.ends_with("-free") || m == "free";
+                    let already_9r = m.contains("9router/free-forever") || m.contains("9router/free_forever");
+                    if is_free && !already_9r {
+                        let from = model.clone();
+                        model = "opencode/9router/free-forever".to_string();
+                        req.model = model.clone();
+                        tracing::info!(provider_id=%provider_id, from_model=%from, to_model=%model, "reroute_free_model: preemptive reroute to 9router/free-forever");
+                    }
+                }
                 loop {
                     // Proxy the event channel so we can park the Run at the exact
                     // moment tool_calls are emitted — BEFORE the chunk is forwarded
