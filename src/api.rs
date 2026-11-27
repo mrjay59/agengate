@@ -568,12 +568,14 @@ async fn chat_completions(
                                         tool_calls_finished = true;
                                         break;
                                     } else {
-                                        // All tool calls dropped; emit_event already sent warning content.
-                                        let _ = send_sse(&tx, &ctx.chunk(serde_json::json!({}), Some("stop"))).await;
-                                        let _ = tx
-                                            .send(Ok(axum::response::sse::Event::default().data("[DONE]")))
-                                            .await;
-                                        break;
+                                        // All tool calls were skipped (host/local MCP,
+                                        // raw builtin, or unregistered). The CLI may
+                                        // have executed them locally and will keep
+                                        // emitting. Do NOT send stop/[DONE] or break —
+                                        // that is what made prompting stop.
+                                        tracing::warn!(
+                                            "all tool_calls skipped/not forwarded; continuing stream"
+                                        );
                                     }
                                 }
                             }
@@ -957,15 +959,18 @@ async fn emit_event(
                             "Emitting unregistered tool_call with warning (not in client tools[])"
                         );
                     } else {
-                        // Fail-closed: raw opencode builtins, host MCP tools
-                        // executed locally by the CLI, and stacked-prefix names
-                        // are never forwarded to a client that cannot run them.
+                        // Not client-executable: host MCP tools (vps_*, ...)
+                        // are executed locally by opencode via passthrough, and
+                        // raw builtins are never safe to forward. Skip silently
+                        // (no tool_call delta) but DO NOT push to `dropped`:
+                        // treating this as fatal terminates the turn even though
+                        // the CLI already executed the tool and will continue.
                         tracing::warn!(
                             tool = %name,
-                            "Dropping tool_call not registered by client or session (fail-closed)"
+                            blocked_builtin,
+                            "Skipping unregistered tool_call (not forwarded; likely host/local MCP); stream continues"
                         );
                         crate::metrics::init_metrics().record_guard_violation();
-                        dropped.push(name);
                         continue;
                     }
                 }
@@ -990,16 +995,16 @@ async fn emit_event(
                 }
             }
             if emitted_index == 0 && !dropped.is_empty() {
+                // Non-fatal: never terminate a turn because a tool call was
+                // skipped. The CLI may have executed it locally; stopping here
+                // is what caused "prompting stops" for host MCP tools.
                 let msg = format!(
-                    "Agent requested tool(s) not registered by client: {}. Configure the client to expose these tools, or enable bridge.passthrough_host_mcp with an allowlist.",
+                    "Agent requested tool(s) not registered by client: {}. Skipped (not forwarded).",
                     dropped.join(", ")
                 );
-                tracing::error!(
-                    dropped_tools = %dropped.join(","),
-                    "All tool calls dropped by fail-closed filter; terminating stream with error"
-                );
+                tracing::warn!(dropped_tools = %dropped.join(","), "{}", msg);
                 let _ = send_sse(tx, &ctx.chunk(serde_json::json!({
-                    "content": format!("\n\n⚠️ Error: {}", msg)
+                    "content": format!("\n\n⚠️ Warning: {}", msg)
                 }), None)).await;
             }
             emitted_index

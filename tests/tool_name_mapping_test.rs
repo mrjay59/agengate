@@ -87,7 +87,9 @@ async fn bash_maps_to_execcommand_when_client_registers_it() {
 }
 
 #[tokio::test]
-async fn bash_is_dropped_when_client_has_no_equivalent() {
+async fn bash_is_skipped_non_fatal_when_client_has_no_equivalent() {
+    // A CLI built-in with no client equivalent is skipped (not forwarded) but
+    // must NOT terminate the turn — the CLI may have executed it locally.
     let tools = serde_json::json!([{
         "type": "function",
         "function": {
@@ -99,6 +101,7 @@ async fn bash_is_dropped_when_client_has_no_equivalent() {
     let resp = stream_with_tools(tools).await;
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8_lossy(&bytes);
-    assert!(text.contains("not registered by client"), "expected fail-closed, got: {text}");
+    assert!(text.contains("[DONE]"), "stream must terminate cleanly: {text}");
+    assert!(!text.contains("not registered by client"), "fatal warning emitted: {text}");
     assert!(!text.contains("\"name\":\"Bash\""), "raw builtin leaked: {text}");
 }
