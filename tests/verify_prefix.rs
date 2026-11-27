@@ -24,6 +24,25 @@ fn prefix_normalization_strips_agentgate_ns() {
 }
 
 #[test]
+fn prefix_normalization_strips_repeated_agentgate_ns() {
+    // Replay/resume chains stack the MCP namespace prefix on every turn.
+    // A single strip left garbage names that clients rejected as unknown tools.
+    let cases: &[(&str, &str)] = &[
+        ("agentgate_agentgate_read", "read"),
+        ("agentgate_agentgate__Glob", "Glob"),
+        ("agentgate_agentgate_agentgate_agentgate_agentgate_read", "read"),
+        ("agentgate_agentgate_vps-ssh_ssh_list_servers", "vps-ssh_ssh_list_servers"),
+    ];
+    for (input, expected) in cases {
+        let stripped = BridgeServer::strip_mcp_tool_prefix(input);
+        assert_eq!(
+            &stripped, expected,
+            "strip_mcp_tool_prefix(\"{}\") = \"{}\", expected \"{}\"", input, stripped, expected
+        );
+    }
+}
+
+#[test]
 fn prefix_candidates_explores_all_forms() {
     let cands = BridgeServer::tool_name_candidates("agentgate_Glob");
     assert!(cands.contains(&"Glob".to_string()), "candidates: {:?}", cands);

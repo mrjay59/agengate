@@ -180,8 +180,10 @@ struct ChunkContext {
     /// fail-closed at SSE emit so a raw built-in `execute` never leaks to
     /// AionUI as an unknown tool.
     tool_names: Vec<String>,
-    /// When bridge.passthrough_host_mcp is enabled, allow emitting tool calls
-    /// not declared by the client (host MCP tools) instead of dropping them.
+    /// When bridge.emit_unregistered_tools is explicitly enabled, allow emitting
+    /// tool calls not declared by the client nor known in the bridge session.
+    /// Decoupled from passthrough_host_mcp: host MCP tools are executed locally
+    /// by the CLI and must never be forwarded to a client that cannot run them.
     allow_unregistered_tools: bool,
     /// Tool names registered in the bridge session for this run (client tools + builtins).
     /// Used as an additional allowlist source for emit filtering.
@@ -392,7 +394,7 @@ async fn chat_completions(
             .as_ref()
             .map(|tools| tools.iter().map(|t| t.function.name.clone()).collect())
             .unwrap_or_default();
-        let allow_unregistered_tools = registry.bridge_config.passthrough_host_mcp;
+        let allow_unregistered_tools = registry.bridge_config.emit_unregistered_tools;
         let registry_clone = registry.clone();
         let (mut events, session_tool_names) = registry_clone
             .stream_run_events(&provider_id, request)
@@ -894,13 +896,23 @@ async fn emit_event(
             let mut dropped: Vec<String> = Vec::new();
             for call in calls.iter() {
                 let name = call.function.name.clone();
-                if !ctx.tool_names.is_empty()
-                    && !ctx.tool_names.iter().any(|n| n.eq_ignore_ascii_case(&name))
-                {
-                    let blocked_builtin = matches!(name.to_ascii_lowercase().as_str(),
-                        "execute" | "bash" | "write" | "read" | "edit" | "patch" | "list" | "glob"
-                    );
-                    if ctx.allow_unregistered_tools || !blocked_builtin {
+                // Normalize once: stacked MCP prefixes (agentgate_agentgate_...)
+                // and casing must not hide a legitimately registered tool.
+                let normalized =
+                    crate::bridge::BridgeServer::strip_mcp_tool_prefix(&name).to_ascii_lowercase();
+                let registered = ctx
+                    .tool_names
+                    .iter()
+                    .chain(ctx.session_tool_names.iter())
+                    .any(|n| {
+                        crate::bridge::BridgeServer::strip_mcp_tool_prefix(n)
+                            .eq_ignore_ascii_case(&normalized)
+                    });
+                let blocked_builtin = matches!(normalized.as_str(),
+                    "execute" | "bash" | "shell" | "write" | "read" | "edit" | "patch" | "list" | "glob"
+                );
+                if !registered {
+                    if ctx.allow_unregistered_tools && !blocked_builtin {
                         tracing::warn!(
                             tool = %name,
                             blocked_builtin,
@@ -908,9 +920,12 @@ async fn emit_event(
                             "Emitting unregistered tool_call with warning (not in client tools[])"
                         );
                     } else {
+                        // Fail-closed: raw opencode builtins, host MCP tools
+                        // executed locally by the CLI, and stacked-prefix names
+                        // are never forwarded to a client that cannot run them.
                         tracing::warn!(
                             tool = %name,
-                            "Dropping tool_call not registered by client (fail-closed builtin)"
+                            "Dropping tool_call not registered by client or session (fail-closed)"
                         );
                         crate::metrics::init_metrics().record_guard_violation();
                         dropped.push(name);

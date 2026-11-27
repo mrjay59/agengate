@@ -1,6 +1,6 @@
 [package]
 name = "agentgate"
-version = "0.3.31"
+version = "0.3.32"
 edition = "2021"
 default-run = "agentgate"
 

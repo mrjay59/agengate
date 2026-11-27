@@ -267,6 +267,12 @@ pub struct BridgeConfig {
     /// into the bridge-injected opencode config. Default false for safety.
     #[serde(default)]
     pub allow_client_mcp: bool,
+    /// Emit tool calls whose names are not registered by the client nor known in
+    /// the bridge session. Default false (fail-closed): a raw builtin or a stacked
+    /// `agentgate_` prefix must never reach a client that cannot execute it.
+    /// Only enable when the client is known to expose those tools itself.
+    #[serde(default)]
+    pub emit_unregistered_tools: bool,
     /// Preemptively reroute opencode free-tier models (*-free, except 9router/free-forever)
     /// to opencode/9router/free-forever to avoid provider.free-limit churn.
     #[serde(default = "default_true")]
@@ -328,6 +334,7 @@ impl Default for BridgeConfig {
             passthrough_mcp_allowlist: Vec::new(),
             passthrough_mcp_denylist: Vec::new(),
             allow_client_mcp: false,
+            emit_unregistered_tools: false,
             reroute_free_models: true,
         }
     }

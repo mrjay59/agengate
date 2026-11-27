@@ -691,15 +691,26 @@ impl BridgeServer {
     /// as well as case variants like "AgentGate_" / "AGENTGATE_".
     pub fn strip_mcp_tool_prefix(name: &str) -> String {
         // Check for known prefixes (case-sensitive then case-insensitive fallback).
-        for prefix in ["agentgate__", "agentgate_", "AgentGate__", "AgentGate_", "AGENTGATE__", "AGENTGATE_"] {
-            if name.starts_with(prefix) {
-                let stripped = &name[prefix.len()..];
-                if !stripped.is_empty() {
-                    return stripped.to_string();
+        // Strip repeatedly: replay/resume chains can stack the MCP namespace
+        // prefix on every turn (agentgate_agentgate_..._read). A single strip
+        // left a garbage name that AION UI rejected as "No tool named ...".
+        let mut current = name.to_string();
+        loop {
+            let mut next = current.clone();
+            for prefix in ["agentgate__", "agentgate_", "AgentGate__", "AgentGate_", "AGENTGATE__", "AGENTGATE_"] {
+                if next.starts_with(prefix) {
+                    let stripped = &next[prefix.len()..];
+                    if !stripped.is_empty() {
+                        next = stripped.to_string();
+                        break;
+                    }
                 }
             }
+            if next == current {
+                return current;
+            }
+            current = next;
         }
-        name.to_string()
     }
 
 /// Session that owns a held `tools/call`, if still pending.
