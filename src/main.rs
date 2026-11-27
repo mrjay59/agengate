@@ -214,6 +214,7 @@ async fn main() -> Result<()> {
             registry.bridge.sweep_orphan_session_dirs().await;
             registry.bridge.start_cleanup_task().await;
             let registry = Arc::new(registry);
+            ServiceRegistry::start_quota_watcher(&registry);
             // Warm the model cache in the background so the first
             // `/v1/models` (and the UI's fetch-models check) is a cache hit
             // instead of paying the full CLI scan cost.

@@ -132,6 +132,35 @@ impl Drop for ProviderPermit {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct QuotaDisabledModel {
+    pub model: String,
+    pub provider_id: String,
+    pub disabled_at_unix: u64,
+    pub retry_after_unix: u64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct QuotaState {
+    #[serde(default)]
+    pub disabled: HashMap<String, QuotaDisabledModel>,
+}
+
+impl QuotaState {
+    fn is_disabled(&self, model_key: &str, now: u64) -> bool {
+        self.disabled.get(model_key).map(|e| e.retry_after_unix > now).unwrap_or(false)
+    }
+    fn disable(&mut self, model_key: String, entry: QuotaDisabledModel) {
+        self.disabled.insert(model_key, entry);
+    }
+    fn remove_expired(&mut self, now: u64) -> Vec<String> {
+        let expired: Vec<String> = self.disabled.iter().filter(|(_, v)| v.retry_after_unix <= now).map(|(k, _)| k.clone()).collect();
+        for k in &expired { self.disabled.remove(k); }
+        expired
+    }
+}
+
 pub struct ServiceRegistry {
     providers: RwLock<HashMap<String, Arc<dyn CliProvider + Send + Sync>>>,
     native_providers: RwLock<HashMap<String, Arc<dyn CliProvider + Send + Sync>>>,
@@ -173,6 +202,9 @@ pub struct ServiceRegistry {
     model_negative_cache: RwLock<HashMap<String, Instant>>,
     /// Cache TTL for model scans (default 300s).
     model_cache_ttl: Duration,
+    /// Quota-disabled model state (quota exhaustion -> disable, watcher re-enables).
+    quota_state: Arc<RwLock<QuotaState>>,
+    quota_state_path: std::path::PathBuf,
 }
 
 impl ServiceRegistry {
@@ -187,6 +219,17 @@ impl ServiceRegistry {
     ) -> Self {
         let bridge = Arc::new(BridgeServer::new(bridge_config.clone()));
         let run_registry = RunRegistry::new(bridge.clone(), bridge_config.clone(), crate::permission::ToolActivityPolicy::default());
+        let quota_state_path = std::env::var("AGENTGATE_QUOTA_STATE_PATH")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                let base = std::env::var("XDG_CONFIG_HOME")
+                    .map(std::path::PathBuf::from)
+                    .or_else(|_| std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+                    .or_else(|_| std::env::var("USERPROFILE").map(|h| std::path::PathBuf::from(h).join(".config")))
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                base.join("agentgate").join("quota_state.json")
+            });
+        let quota_state = Self::load_quota_state(&quota_state_path);
         Self {
             providers: RwLock::new(HashMap::new()),
             native_providers: RwLock::new(HashMap::new()),
@@ -215,6 +258,8 @@ impl ServiceRegistry {
             } else {
                 defaults.model_cache_ttl_secs
             }),
+            quota_state: Arc::new(RwLock::new(quota_state)),
+            quota_state_path,
         }
     }
 
@@ -228,6 +273,131 @@ impl ServiceRegistry {
             false,
             LimitsConfig::default(),
         )
+    }
+
+    fn load_quota_state(path: &std::path::Path) -> QuotaState {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<QuotaState>(&s).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_quota_state(&self, state: &QuotaState) {
+        if let Some(parent) = self.quota_state_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(s) = serde_json::to_string_pretty(state) {
+            let _ = std::fs::write(&self.quota_state_path, s);
+        }
+    }
+
+    fn now_unix() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    fn next_utc_day_unix(now: u64) -> u64 {
+        ((now / 86_400) + 1) * 86_400
+    }
+
+    fn quota_model_key(provider_id: &str, model: &str) -> String {
+        let m = model.trim().to_lowercase();
+        if m.starts_with("agg/") { m[4..].to_string() } else { format!("{}/{}", provider_id, m.trim_start_matches(&format!("{}/", provider_id))) }
+    }
+
+    pub async fn mark_model_quota_disabled(&self, provider_id: &str, model: &str, reason: &str) {
+        let now = Self::now_unix();
+        let key = Self::quota_model_key(provider_id, model);
+        let retry_after = Self::next_utc_day_unix(now); // esoknya bisa dipakai lagi
+        let entry = QuotaDisabledModel {
+            model: model.to_string(),
+            provider_id: provider_id.to_string(),
+            disabled_at_unix: now,
+            retry_after_unix: retry_after,
+            reason: reason.to_string(),
+        };
+        let mut st = self.quota_state.write().await;
+        st.disable(key.clone(), entry);
+        self.save_quota_state(&st);
+        tracing::warn!(event="quota.model.disabled", model=%model, provider_id=%provider_id, retry_after_unix=retry_after, reason=%reason, "Model disabled due to quota exhaustion");
+    }
+
+    pub async fn is_model_quota_disabled(&self, provider_id: &str, model: &str) -> bool {
+        let now = Self::now_unix();
+        let key = Self::quota_model_key(provider_id, model);
+        let st = self.quota_state.read().await;
+        st.is_disabled(&key, now)
+    }
+
+    pub async fn pick_available_free_model(&self, provider_id: &str) -> Option<String> {
+        let now = Self::now_unix();
+        let st = self.quota_state.read().await;
+        // Prefer configured provider models filtered to free, not disabled, not 9router/free-forever last-resort unless needed.
+        let providers = self.providers.read().await;
+        let p = providers.get(provider_id)?;
+        let models = p.models();
+        let mut free_candidates: Vec<String> = models.into_iter()
+            .filter(|m| {
+                let ml = m.to_lowercase();
+                (ml.ends_with("-free") || ml.contains("free-forever")) && !ml.contains("9router/free-forever") && !ml.contains("9router/free_forever")
+            })
+            .collect();
+        drop(providers);
+        // stable order by name
+        free_candidates.sort();
+        for m in free_candidates {
+            let key = Self::quota_model_key(provider_id, &m);
+            if !st.is_disabled(&key, now) {
+                return Some(m);
+            }
+        }
+        None
+    }
+
+    pub async fn reroute_model_for_quota(&self, provider_id: &str, requested_model: &str) -> String {
+        if provider_id != "opencode" {
+            return requested_model.to_string();
+        }
+        let now = Self::now_unix();
+        let key = Self::quota_model_key(provider_id, requested_model);
+        let disabled = { self.quota_state.read().await.is_disabled(&key, now) };
+        let req_lower = requested_model.to_lowercase();
+        let is_free = req_lower.ends_with("-free") || req_lower == "free";
+        if !disabled && !is_free {
+            return requested_model.to_string();
+        }
+        if disabled || is_free {
+            if let Some(m) = self.pick_available_free_model(provider_id).await {
+                if Self::quota_model_key(provider_id, &m) != key {
+                    tracing::info!(event="quota.model.reroute", from=%requested_model, to=%m, reason=if disabled {"quota_disabled"} else {"free_policy"}, "Rerouted model");
+                    return m;
+                }
+            }
+            tracing::warn!(event="quota.model.fallback_9router", from=%requested_model, "No available free model; falling back to 9router/free-forever");
+            return "opencode/9router/free-forever".to_string();
+        }
+        requested_model.to_string()
+    }
+
+    pub fn start_quota_watcher(self: &Arc<Self>) {
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                let now = Self::now_unix();
+                let mut st = this.quota_state.write().await;
+                let expired = st.remove_expired(now);
+                if !expired.is_empty() {
+                    this.save_quota_state(&st);
+                    for m in expired {
+                        tracing::info!(event="quota.model.reenabled", model=%m, "Quota-disabled model re-enabled after cooldown");
+                    }
+                }
+            }
+        });
     }
 
     /// Replace the global reasoning configuration.
@@ -916,6 +1086,7 @@ impl ServiceRegistry {
                 {
                     failed_over_to_9router = true;
                     let from_model = model.clone();
+                    self.mark_model_quota_disabled(&provider_id, &from_model, "quota_exhausted").await;
                     model = "opencode/9router/free-forever".to_string();
                     request.model = model.clone();
                     tracing::warn!(
@@ -1251,15 +1422,11 @@ impl ServiceRegistry {
         // Acquire provider semaphore to limit concurrent runs per provider (spec §10.3)
         let permit = self.acquire_provider_permit(provider_id).await?;
 
-        // Preemptive free-model reroute to avoid provider.free-limit churn.
-        if self.bridge_config.reroute_free_models && provider_id == "opencode" {
-            let m = request.model.to_lowercase();
-            let is_free = m.ends_with("-free") || m == "free";
-            let already_9r = m.contains("9router/free-forever") || m.contains("9router/free_forever");
-            if is_free && !already_9r {
-                let from = request.model.clone();
-                request.model = "opencode/9router/free-forever".to_string();
-                tracing::info!(provider_id=%provider_id, from_model=%from, to_model=%request.model, "reroute_free_model: preemptive reroute to 9router/free-forever");
+        // Quota-aware model routing: disabled-quota models reroute to other free models, else 9router/free-forever.
+        if provider_id == "opencode" {
+            let routed = self.reroute_model_for_quota(provider_id, &request.model).await;
+            if routed != request.model {
+                request.model = routed;
             }
         }
 
@@ -1396,6 +1563,7 @@ impl ServiceRegistry {
                 if !failed_over_to_9router && is_opencode_quota_failover_candidate(provider_id, &model) {
                     failed_over_to_9router = true;
                     let from_model = model.clone();
+                    self.mark_model_quota_disabled(provider_id, &from_model, "quota_exhausted").await;
                     model = "opencode/9router/free-forever".to_string();
                     req_for_provider.model = model.clone();
                     tracing::warn!(
@@ -1772,6 +1940,12 @@ impl ServiceRegistry {
 
             let provider_id_owned = provider_id.to_string();
             let reroute_free_models = self.bridge_config.reroute_free_models;
+            let quota_state_clone = self.quota_state.clone();
+            let quota_state_path_clone = self.quota_state_path.clone();
+            let opencode_free_models: Vec<String> = if provider_id_owned == "opencode" {
+                let providers = self.providers.read().await;
+                providers.get(&provider_id_owned).map(|p| p.models()).unwrap_or_default()
+            } else { Vec::new() };
             tokio::spawn(async move {
                 use std::sync::atomic::{AtomicBool, Ordering};
                 let had_meaningful_output = Arc::new(AtomicBool::new(false));
@@ -1781,15 +1955,42 @@ impl ServiceRegistry {
                 let mut req = req;
                 let mut run_for_park = run;
                 let provider_id = provider_id_owned;
-                if reroute_free_models && provider_id == "opencode" {
-                    let m = model.to_lowercase();
-                    let is_free = m.ends_with("-free") || m == "free";
-                    let already_9r = m.contains("9router/free-forever") || m.contains("9router/free_forever");
-                    if is_free && !already_9r {
-                        let from = model.clone();
-                        model = "opencode/9router/free-forever".to_string();
-                        req.model = model.clone();
-                        tracing::info!(provider_id=%provider_id, from_model=%from, to_model=%model, "reroute_free_model: preemptive reroute to 9router/free-forever");
+                if provider_id == "opencode" {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    let model_key = {
+                        let ml = model.trim().to_lowercase();
+                        if ml.starts_with("agg/") { ml[4..].to_string() } else { ml.clone() }
+                    };
+                    let disabled = { quota_state_clone.read().await.is_disabled(&model_key, now) };
+                    let ml = model.to_lowercase();
+                    let is_free = ml.ends_with("-free") || ml == "free";
+                    if disabled || (reroute_free_models && is_free && !ml.contains("9router/free-forever") && !ml.contains("9router/free_forever")) {
+                        // pick another available free model from config
+                        let mut candidates: Vec<String> = opencode_free_models.iter()
+                            .filter(|m| {
+                                let l = m.to_lowercase();
+                                (l.ends_with("-free") || l.contains("free-forever")) && !l.contains("9router/free-forever") && !l.contains("9router/free_forever")
+                            })
+                            .cloned().collect();
+                        candidates.sort();
+                        let mut picked: Option<String> = None;
+                        {
+                            let st = quota_state_clone.read().await;
+                            for c in &candidates {
+                                let ck = { let cl=c.trim().to_lowercase(); if cl.starts_with("agg/") { cl[4..].to_string() } else { cl.clone() } };
+                                if !st.is_disabled(&ck, now) && ck != model_key {
+                                    picked = Some(c.clone());
+                                    break;
+                                }
+                            }
+                        }
+                        let to = picked.unwrap_or_else(|| "opencode/9router/free-forever".to_string());
+                        if to.to_lowercase() != ml {
+                            let from = model.clone();
+                            model = to;
+                            req.model = model.clone();
+                            tracing::info!(event="quota.model.reroute", provider_id=%provider_id, from_model=%from, to_model=%model, reason=if disabled {"quota_disabled"} else {"free_policy"}, "Rerouted model");
+                        }
                     }
                 }
                 loop {
@@ -1899,6 +2100,23 @@ impl ServiceRegistry {
                         if quota {
                             failed_over_to_9router = true;
                             let from_model = model.clone();
+                            // Mark model as quota-disabled until next UTC day
+                            {
+                                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                let retry_after = ((now / 86_400) + 1) * 86_400;
+                                let key = { let ml = from_model.trim().to_lowercase(); if ml.starts_with("agg/") { ml[4..].to_string() } else { ml.clone() } };
+                                let mut st = quota_state_clone.write().await;
+                                st.disable(key.clone(), QuotaDisabledModel {
+                                    model: from_model.clone(),
+                                    provider_id: provider_id.clone(),
+                                    disabled_at_unix: now,
+                                    retry_after_unix: retry_after,
+                                    reason: "quota_exhausted".to_string(),
+                                });
+                                if let Some(parent) = quota_state_path_clone.parent() { let _ = std::fs::create_dir_all(parent); }
+                                if let Ok(s) = serde_json::to_string_pretty(&*st) { let _ = std::fs::write(&quota_state_path_clone, s); }
+                                tracing::warn!(event="quota.model.disabled", model=%from_model, provider_id=%provider_id, retry_after_unix=retry_after, "Model disabled due to quota exhaustion");
+                            }
                             model = "opencode/9router/free-forever".to_string();
                             req.model = model.clone();
                             tracing::warn!(
