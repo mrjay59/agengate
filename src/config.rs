@@ -507,9 +507,15 @@ pub struct DefaultsConfig {
     pub model_cache_ttl_secs: u64,
     #[serde(default = "default_first_token_timeout")]
     pub first_token_timeout_secs: u64,
+    /// Max silence between SSE events before the gateway emits an idle-timeout
+    /// warning and ends the stream. Env `AGENTGATE_STREAM_IDLE_TIMEOUT_SECS`
+    /// overrides this value when set.
+    #[serde(default = "default_stream_idle_timeout")]
+    pub stream_idle_timeout_secs: u64,
 }
 
 fn default_first_token_timeout() -> u64 { 120 }
+fn default_stream_idle_timeout() -> u64 { 120 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReasoningConfig {

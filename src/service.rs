@@ -281,6 +281,10 @@ pub struct ServiceRegistry {
     /// Deadline for the first provider event on a streaming request
     /// (`[defaults] first_token_timeout_secs`, default 120 s).
     pub first_token_timeout: Duration,
+    /// Max silence between SSE events before the gateway emits an idle-timeout
+    /// warning and ends the stream (`[defaults] stream_idle_timeout_secs`,
+    /// default 120 s). `AGENTGATE_STREAM_IDLE_TIMEOUT_SECS` overrides.
+    pub stream_idle_timeout: Duration,
     /// Model cache: provider_id -> (models, cached_at)
     model_cache: RwLock<HashMap<String, (Vec<String>, Instant)>>,
     /// Negative cache: model_id -> cached_at (for models not found, to avoid repeated scans)
@@ -338,6 +342,13 @@ impl ServiceRegistry {
             } else {
                 defaults.first_token_timeout_secs
             }),
+            stream_idle_timeout: Duration::from_secs(
+                std::env::var("AGENTGATE_STREAM_IDLE_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .filter(|v| *v > 0)
+                    .unwrap_or(if defaults.stream_idle_timeout_secs == 0 { 120 } else { defaults.stream_idle_timeout_secs })
+            ),
             request_timeout: Duration::from_secs(600),
             turn_timeout: Duration::from_secs(120),
             timeout_retry_backoff_ms: vec![50, 100, 200, 400, 800],

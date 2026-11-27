@@ -498,11 +498,11 @@ async fn chat_completions(
             //
             //  - before the first event: `defaults.first_token_timeout_secs`
             //    (agentgate.toml, default 120 s so cold CPU model loads fit)
-            //  - after the first event: max silence, also 120 s by default
-            //    (`AGENTGATE_STREAM_IDLE_TIMEOUT_SECS`)
+            //  - after the first event: max silence, default 120 s
+            //    (`defaults.stream_idle_timeout_secs`, env AGENTGATE_STREAM_IDLE_TIMEOUT_SECS overrides)
             let first_token_timeout = registry_clone.first_token_timeout;
             let mut first_token_timer = Box::pin(tokio::time::sleep(first_token_timeout));
-            let idle_timeout = stream_idle_timeout();
+            let idle_timeout = registry_clone.stream_idle_timeout;
             let mut last_provider_activity = Instant::now();
             let mut terminated_by_error = false;
 
@@ -588,16 +588,13 @@ async fn chat_completions(
                             "provider '{}' did not produce first token within {} seconds",
                             provider_id, first_token_timeout.as_secs()
                         );
-                        let chunk = serde_json::json!({
-                            "id": ctx.id,
-                            "object": "chat.completion.chunk",
-                            "created": ctx.created,
-                            "model": ctx.model,
-                            "choices": [{ "index": 0, "delta": {}, "finish_reason": "error" }],
-                            "error": { "message": error_msg, "code": "first_token_timeout" }
-                        });
-                        let _ = send_sse(&tx, &chunk.to_string()).await;
-                        // Emit [DONE] to properly terminate SSE stream
+                        // Emit as normal content warning, NOT a top-level JSON "error"
+                        // object — some clients (Aionrs) misparse that as
+                        // UNKNOWN_UPSTREAM_ERROR "without an HTTP status".
+                        let _ = send_sse(&tx, &ctx.chunk(serde_json::json!({
+                            "content": format!("\n\n⚠️ Warning: {}", error_msg)
+                        }), None)).await;
+                        let _ = send_sse(&tx, &ctx.chunk(serde_json::json!({}), Some("stop"))).await;
                         let _ = tx
                             .send(Ok(axum::response::sse::Event::default().data("[DONE]")))
                             .await;
@@ -621,18 +618,16 @@ async fn chat_completions(
                         // Ongoing idle timeout after first token
                         if ttft_recorded && last_provider_activity.elapsed() >= idle_timeout {
                             let error_msg = format!(
-                                "provider '{}' produced no output for {}s; stream aborted",
+                                "provider '{}' produced no output for {}s; stream idle timeout",
                                 provider_id, idle_timeout.as_secs()
                             );
-                            let chunk = serde_json::json!({
-                                "id": ctx.id,
-                                "object": "chat.completion.chunk",
-                                "created": ctx.created,
-                                "model": ctx.model,
-                                "choices": [{ "index": 0, "delta": {}, "finish_reason": "error" }],
-                                "error": { "message": error_msg, "code": "provider_timeout" }
-                            });
-                            let _ = send_sse(&tx, &chunk.to_string()).await;
+                            // Emit as normal content warning, NOT a top-level JSON "error"
+                            // object — some clients (Aionrs) misparse that as
+                            // UNKNOWN_UPSTREAM_ERROR "without an HTTP status".
+                            let _ = send_sse(&tx, &ctx.chunk(serde_json::json!({
+                                "content": format!("\n\n⚠️ Warning: {}", error_msg)
+                            }), None)).await;
+                            let _ = send_sse(&tx, &ctx.chunk(serde_json::json!({}), Some("stop"))).await;
                             let _ = tx
                                 .send(Ok(axum::response::sse::Event::default().data("[DONE]")))
                                 .await;
@@ -1453,18 +1448,8 @@ async fn bridge_resolve(
 
 
 
-/// How long an SSE stream may stay silent before it is terminated with an
-/// explicit error chunk (default 30 s, reduced from 120s to fail faster on
-/// free-tier quota issues). Override with
-/// `AGENTGATE_STREAM_IDLE_TIMEOUT_SECS`.
-fn stream_idle_timeout() -> Duration {
-    std::env::var("AGENTGATE_STREAM_IDLE_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|v| *v > 0)
-        .map(Duration::from_secs)
-        .unwrap_or_else(|| Duration::from_secs(30))
-}
+// stream idle timeout is plumbed from DefaultsConfig.stream_idle_timeout_secs
+// (env AGENTGATE_STREAM_IDLE_TIMEOUT_SECS overrides) via ServiceRegistry.stream_idle_timeout.
 
 #[cfg(test)]
 mod tool_limit_tests {
