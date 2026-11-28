@@ -866,6 +866,34 @@ async fn send_delta(
     let _ = send_sse(tx, &ctx.chunk(delta, None)).await;
 }
 
+/// Split a string into chunks of at most `max_bytes` bytes, never splitting a
+/// UTF-8 code point. Returns string slices in original order.
+fn utf8_chunks(s: &str, max_bytes: usize) -> Vec<&str> {
+    if s.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let len = s.len();
+    while start < len {
+        let mut end = (start + max_bytes).min(len);
+        while end > start && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            // Should not happen when max_bytes >= 4, but advance by one char.
+            if let Some(ch) = s[start..].chars().next() {
+                end = start + ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        out.push(&s[start..end]);
+        start = end;
+    }
+    out
+}
+
 /// Emits a single `RunEvent` as SSE chunks. Returns the number of tool calls
 /// actually emitted to the client (0 for non-ToolCalls events). Callers use
 /// this to avoid terminating a stream with `finish_reason:"tool_calls"` when
@@ -980,11 +1008,11 @@ async fn emit_event(
                     }]
                 })).await;
                 let args = call.function.arguments.as_str();
-                for chunk in args.as_bytes().chunks(512) {
+                for chunk in utf8_chunks(args, 512) {
                     send_delta(tx, ctx, serde_json::json!({
                         "tool_calls": [{
                             "index": index,
-                            "function": { "arguments": std::str::from_utf8(chunk).unwrap_or("") }
+                            "function": { "arguments": chunk }
                         }]
                     })).await;
                 }
@@ -1468,6 +1496,49 @@ mod tool_limit_tests {
         assert!(err.starts_with("too_many_tools (129 > 128"));
         assert!(err.contains("max_tools"));
         assert!(validate_tool_count(128, 128).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod sse_tool_arg_chunking_tests {
+    use super::utf8_chunks;
+
+    #[test]
+    fn utf8_chunks_never_split_multibyte_char_at_boundary() {
+        // Regression for ExecCommand/code truncation: a 512-byte raw chunk
+        // boundary landed inside '€' (3 bytes), and from_utf8(...).unwrap_or("")
+        // dropped that chunk silently.
+        let prefix = "a".repeat(511);
+        let suffix = "b".repeat(20);
+        let args = format!("{prefix}€{suffix}");
+        assert_eq!("€".len(), 3);
+        assert!(args.as_bytes().len() > 512);
+
+        let chunks = utf8_chunks(&args, 512);
+        assert!(!chunks.is_empty());
+        for c in &chunks {
+            assert!(c.len() <= 512, "chunk exceeds max bytes: {}", c.len());
+            assert!(std::str::from_utf8(c.as_bytes()).is_ok());
+        }
+        let joined: String = chunks.concat();
+        assert_eq!(joined, args, "arguments must round-trip without loss");
+        assert!(joined.contains('€'));
+    }
+
+    #[test]
+    fn utf8_chunks_handles_exact_boundary_and_empty() {
+        assert!(utf8_chunks("", 512).is_empty());
+        let s = "abc";
+        assert_eq!(utf8_chunks(s, 512), vec!["abc"]);
+        let s = "a".repeat(512);
+        let chunks = utf8_chunks(&s, 512);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].len(), 512);
+        let s = "a".repeat(513);
+        let chunks = utf8_chunks(&s, 512);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), 512);
+        assert_eq!(chunks[1].len(), 1);
     }
 }
 
