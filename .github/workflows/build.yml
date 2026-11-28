@@ -2,10 +2,10 @@ name: Build & Test All Platforms
 
 on:
   push:
-    branches: [main]
+    branches: [main, recover]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [main, recover]
   workflow_dispatch:
 
 env:
@@ -190,8 +190,50 @@ jobs:
           path: target/aarch64-unknown-linux-gnu/release/agentgate
           retention-days: 30
 
+  build-macos-x86_64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add macOS x86_64 target
+        run: rustup target add x86_64-apple-darwin
+
+      - name: cargo build --release (macOS x86_64)
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentgate-macos-x86_64
+          path: target/x86_64-apple-darwin/release/agentgate
+          retention-days: 30
+
+  build-macos-aarch64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add macOS aarch64 target
+        run: rustup target add aarch64-apple-darwin
+
+      - name: cargo build --release (macOS aarch64)
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentgate-macos-aarch64
+          path: target/aarch64-apple-darwin/release/agentgate
+          retention-days: 30
+
   verify-all-artifacts:
-    needs: [build-windows-x86_64, build-windows-aarch64, build-linux-x86_64, build-linux-aarch64]
+    needs: [build-windows-x86_64, build-windows-aarch64, build-linux-x86_64, build-linux-aarch64, build-macos-x86_64, build-macos-aarch64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -227,13 +269,15 @@ jobs:
             name=$(basename "$dir")
             (cd "$dir" && zip -r "../../dist/${name}.zip" .)
           done
+          (cd dist && sha256sum *.zip > SHA256SUMS.txt)
           ls -lh dist
+          cat dist/SHA256SUMS.txt
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/*.zip \
+          gh release create "${GITHUB_REF_NAME}" dist/*.zip dist/SHA256SUMS.txt \
             --repo "${GITHUB_REPOSITORY}" \
             --title "AgentGate ${GITHUB_REF_NAME}" \
             --generate-notes \

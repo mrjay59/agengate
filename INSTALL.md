@@ -1,533 +1,362 @@
 # AgentGate Installation Guide
 
-Cross-platform installation guide for AgentGate — an OpenAI-compatible gateway that routes chat requests to local model CLIs (`opencode`, `gemini`, `claude`) and the Ollama HTTP API.
+Simple install and deployment guide for **AgentGate v0.3.43** on Windows, Linux, macOS, Docker, and VPS.
 
-## Quick Start
+AgentGate is an OpenAI-compatible gateway. It listens on HTTP (default `127.0.0.1:8787`) and routes chat requests to configured CLI/HTTP providers.
 
-```bash
-# Linux/macOS (binary release)
-curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-x86_64.zip -o /tmp/agentgate.zip
-unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
-agentgate serve --host 0.0.0.0 --port 8787
+## Before you install
 
-# Windows (PowerShell)
-Invoke-WebRequest -Uri "https://github.com/mrjay59/agengate/releases/latest/download/agentgate-windows-x86_64.zip" -OutFile "$env:TEMP\agentgate.zip"
-Expand-Archive "$env:TEMP\agentgate.zip" -DestinationPath "$env:USERPROFILE\bin" -Force
-agentgate.exe serve --host 0.0.0.0 --port 8787
-
-# ARM64 (Linux)
-curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-aarch64.zip -o /tmp/agentgate.zip
-unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
-agentgate serve --host 0.0.0.0 --port 8787
-```
-
-> The server only needs to be reachable by your client. Ollama-native mode additionally requires a running Ollama server at `base_url` (default `http://127.0.0.1:11434`).
-
-### First run (required)
-
-After extracting the binary, run once to generate the config file:
-
-```bash
-agentgate init          # creates agentgate.toml in the current dir (or ~/.config/agentgate/)
-agentgate doctor        # check provider availability
-agentgate models        # list available models
-agentgate serve         # start the gateway
-```
-
-> Without `agentgate init`, no providers are configured and `agentgate models` returns an empty list. See the **Configuration** section for the full `agentgate.toml` reference.
-
----
-
-## Prerequisites
-
-| Platform | Requirements |
-|----------|--------------|
-| **Linux** | glibc 2.35+ (Ubuntu 22.04+ compatible), ca-certificates |
-| **Windows** | Windows 10+ |
-| **ARM64** | glibc 2.35+ (aarch64/arm64) |
-| **All** | Rust 1.75+ (only when building from source) |
-
-### CLI Providers (optional, for CLI-agent mode)
-
-| Provider | Install |
+| Item | Recommendation |
 |---|---|
-| `opencode` | `npm install -g opencode-ai/opencode` |
-| `gemini` | `npm install -g @google/generative-ai-cli` |
-| `claude` | `npm install -g @anthropic-ai/claude-code` |
+| Config file | Start from `agentgate.example.toml` and save as `agentgate.toml`. |
+| Local-only use | Keep `server.host = "127.0.0.1"`. |
+| Network/VPS use | Set `server.api_keys = ["..."]` before binding to `0.0.0.0` or exposing publicly. |
+| Secrets | Use environment variables for provider keys (e.g. `NVIDIA_API_KEY`). Do not commit secrets. |
+| CLI providers | Install the provider CLI you enable (`opencode`, `gemini`, etc.) and make sure it is on `PATH`. |
 
-### Ollama (optional, for native HTTP mode)
+## Quick install matrix
 
-```bash
-# macOS
-brew install ollama
-
-# Linux (official script)
-curl -fsSL https://ollama.com/install.sh | sh
-
-# Windows
-winget install Ollama.Ollama
-
-# Then pull a model
-ollama pull qwen2.5:7b
-```
-
-No Ollama binary is needed on the AgentGate host for native mode — only the HTTP API.
+| Platform | Recommended install | Run as service |
+|---|---|---|
+| Windows | Release `.exe` or `cargo build --release` | Manual / Task Scheduler / NSSM (optional) |
+| Linux | Release binary or build from source | `systemd` |
+| macOS | Release binary or build from source | `launchd` or manual |
+| Docker | `docker build` / container run | Container runtime restart policy |
+| VPS | Linux binary + systemd | systemd + firewall/reverse proxy |
 
 ---
 
-## Linux Installation
+## 1) Windows (native)
 
-### Method 1: Binary Release (Recommended)
+### Option A: Release binary
 
-```bash
-# x86_64
-curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-x86_64.zip -o /tmp/agentgate.zip
-unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
+1. Download the Windows release from [GitHub Releases](https://github.com/mrjay59/agengate/releases).
+2. Extract `agentgate.exe` to a folder, e.g. `C:\Tools\agentgate\`.
+3. Copy config:
 
-# ARM64 (Raspberry Pi, ARM servers)
-curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-aarch64.zip -o /tmp/agentgate.zip
-unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
-
-# Verify
-agentgate --version
+```powershell
+cd C:\Tools\agentgate
+Copy-Item agentgate.example.toml agentgate.toml
+notepad agentgate.toml
 ```
 
-### Method 2: Cargo (From Source)
+4. Set at least:
 
-```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
+```toml
+[server]
+host = "127.0.0.1"
+port = 8787
+api_keys = ["change-me"]
+```
 
-# Install agentgate
-cargo install --git https://github.com/mrjay59/agengate.git
+5. Run:
 
-# Or build locally
+```powershell
+.\agentgate.exe serve --config .\agentgate.toml
+```
+
+### Option B: Build from source
+
+```powershell
 git clone https://github.com/mrjay59/agengate.git
 cd agentgate
 cargo build --release
-sudo cp target/release/agentgate /usr/local/bin/
+Copy-Item agentgate.example.toml agentgate.toml
+.\target\release\agentgate.exe serve --config .\agentgate.toml
 ```
 
-### Method 3: Package Managers
+### Windows notes
+
+- If a CLI provider is used, ensure its binary is in `PATH` for the same user/session running AgentGate.
+- For local testing, keep `127.0.0.1`. Do not bind `0.0.0.0` without `api_keys`.
+- Logs go to stdout/stderr; run in a terminal first to confirm startup.
+
+---
+
+## 2) Linux (generic + systemd)
+
+### Install binary
 
 ```bash
-# Arch Linux (AUR)
-yay -S agentgate-git
-
-# NixOS
-nix-env -iA nixos.agentgate
-
-# Homebrew (Linux)
-brew install agentgate/tap/agentgate
+# Example: build from source
+git clone https://github.com/mrjay59/agengate.git
+cd agentgate
+cargo build --release
+sudo install -m 0755 target/release/agentgate /usr/local/bin/agentgate
 ```
 
-### systemd Service
+Or download the Linux release asset from GitHub Releases and place it in `/usr/local/bin/agentgate`.
+
+### Configure
 
 ```bash
-sudo tee /etc/systemd/system/agentgate.service > /dev/null <<EOF
+sudo mkdir -p /etc/agentgate /var/lib/agentgate
+sudo cp agentgate.example.toml /etc/agentgate/agentgate.toml
+sudo nano /etc/agentgate/agentgate.toml
+```
+
+Recommended minimum:
+
+```toml
+[server]
+host = "127.0.0.1"      # use 0.0.0.0 only with api_keys and firewall
+port = 8787
+api_keys = ["replace-with-strong-key"]
+
+[defaults]
+workdir = "/var/lib/agentgate"
+```
+
+### systemd service
+
+Create `/etc/systemd/system/agentgate.service`:
+
+```ini
 [Unit]
-Description=AgentGate OpenAI-compatible CLI Gateway
-After=network.target
+Description=AgentGate OpenAI-compatible AI gateway
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=agentgate
 Group=agentgate
-WorkingDirectory=/opt/agentgate
-ExecStart=/usr/local/bin/agentgate serve --host 0.0.0.0 --port 8787
+WorkingDirectory=/var/lib/agentgate
+ExecStart=/usr/local/bin/agentgate serve --config /etc/agentgate/agentgate.toml
 Restart=on-failure
 RestartSec=5
+
+# Process/resource safety
+KillMode=control-group
+TasksMax=1024
+MemoryMax=8G
+
+# Optional hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
 Environment=RUST_LOG=info
 
 [Install]
 WantedBy=multi-user.target
-EOF
+```
 
+Create user and start:
+
+```bash
+sudo useradd --system --home /var/lib/agentgate --shell /usr/sbin/nologin agentgate || true
+sudo chown -R agentgate:agentgate /var/lib/agentgate /etc/agentgate
 sudo systemctl daemon-reload
 sudo systemctl enable --now agentgate
+sudo systemctl status agentgate --no-pager
 ```
+
+Check logs:
+
+```bash
+journalctl -u agentgate -f
+```
+
+> Adjust `User`, paths, `MemoryMax`, and `TasksMax` to your machine. The values above are safe starting points for VPS/small servers.
 
 ---
 
-## Windows Installation
+## 3) macOS (binary + launchd/manual)
 
-### Method 1: Binary Release (Recommended)
+### Install
 
-```powershell
-$url    = "https://github.com/mrjay59/agengate/releases/latest/download/agentgate-windows-x86_64.zip"
-$output = "$env:TEMP\agentgate.zip"
-Invoke-WebRequest -Uri $url -OutFile $output
-Expand-Archive $output -DestinationPath "$env:USERPROFILE\bin" -Force
-
-# Add to PATH (persistent)
-[Environment]::SetEnvironmentVariable("Path",
-  [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\bin", "User")
-
-# Verify
-agentgate.exe --version
-```
-
-### Method 2: Cargo (From Source)
-
-```powershell
-winget install Rustlang.Rust
-# restart shell
-cargo install --git https://github.com/mrjay59/agengate.git
-
-# Or build locally
+```bash
 git clone https://github.com/mrjay59/agengate.git
 cd agentgate
 cargo build --release
-copy target\release\agentgate.exe $env:USERPROFILE\bin\
-$env:Path += ";$env:USERPROFILE\bin"
+sudo install -m 0755 target/release/agentgate /usr/local/bin/agentgate
+mkdir -p ~/.config/agentgate
+cp agentgate.example.toml ~/.config/agentgate/agentgate.toml
 ```
 
-### Method 3: Scoop / Chocolatey
+Edit config:
 
-```powershell
-scoop bucket add agentgate https://github.com/agentgate/scoop-bucket
-scoop install agentgate
-
-# or
-choco install agentgate
+```bash
+nano ~/.config/agentgate/agentgate.toml
 ```
 
-### Windows Service (NSSM)
+### Run manually
 
-```powershell
-scoop install nssm
-nssm install AgentGate "C:\Users\$env:USERNAME\bin\agentgate.exe"
-nssm set AgentGate AppParameters "serve --host 0.0.0.0 --port 8787"
-nssm set AgentGate AppDirectory "C:\Users\$env:USERNAME\AppData\Roaming\agentgate"
-nssm set AgentGate Start SERVICE_AUTO_START
-nssm start AgentGate
+```bash
+agentgate serve --config ~/.config/agentgate/agentgate.toml
 ```
+
+### launchd (user agent)
+
+Create `~/Library/LaunchAgents/com.agentgate.server.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.agentgate.server</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/local/bin/agentgate</string>
+      <string>serve</string>
+      <string>--config</string>
+      <string>/Users/YOUR_USER/.config/agentgate/agentgate.toml</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/agentgate.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/agentgate.err.log</string>
+  </dict>
+</plist>
+```
+
+Load it:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.agentgate.server.plist
+launchctl start com.agentgate.server
+tail -f /tmp/agentgate.err.log
+```
+
+Replace `YOUR_USER` with your macOS username.
 
 ---
 
-## ARM64 / Mobile
+## 4) Docker / container
 
-### Android (Termux)
+A `Dockerfile` is included in the repository. It builds a Linux binary in a Rust builder image and runs it in a slim Debian runtime.
 
-```bash
-pkg update && pkg upgrade
-pkg install rust openssl ca-certificates
-
-git clone https://github.com/mrjay59/agengate.git
-cd agentgate
-cargo build --release
-
-mkdir -p $HOME/bin
-cp target/release/agentgate $HOME/bin/
-echo 'export PATH=$PATH:$HOME/bin' >> $HOME/.bashrc
-source $HOME/.bashrc
-
-agentgate serve --host 0.0.0.0 --port 8787
-```
-
-### Raspberry Pi / ARM SBC
+### Build
 
 ```bash
-# Pre-built binary
-curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-aarch64.zip -o /tmp/agentgate.zip
-unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
-
-# Or build natively
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env
-git clone https://github.com/mrjay59/agengate.git
-cd agentgate
-cargo build --release
-sudo cp target/release/agentgate /usr/local/bin/
+docker build -t agentgate:local .
 ```
 
-### Cross-compile (x86_64 → aarch64)
+### Run
+
+Create a config on the host first (`./agentgate.toml`). Then run:
 
 ```bash
-rustup target add aarch64-unknown-linux-gnu
-sudo apt install gcc-aarch64-linux-gnu
-
-cargo build --release --target aarch64-unknown-linux-gnu
-scp target/aarch64-unknown-linux-gnu/release/agentgate user@pi:/usr/local/bin/
+docker run --rm -p 8787:8787 \
+  -v $(pwd)/agentgate.toml:/app/agentgate.toml:ro \
+  -e RUST_LOG=info \
+  agentgate:local \
+  /app/agentgate serve --config /app/agentgate.toml --host 0.0.0.0 --port 8787
 ```
+
+Windows PowerShell:
+
+```powershell
+docker run --rm -p 8787:8787 `
+  -v ${PWD}\agentgate.toml:/app/agentgate.toml:ro `
+  -e RUST_LOG=info `
+  agentgate:local `
+  /app/agentgate serve --config /app/agentgate.toml --host 0.0.0.0 --port 8787
+```
+
+### Docker notes
+
+- The container only contains AgentGate. CLI providers (like `opencode`) must also be installed inside the image/container if you plan to use them.
+- Mount any provider credentials/configs required by those CLIs.
+- Do not expose port publicly without `server.api_keys`.
+- For HTTP-only providers, container deployment is simpler than CLI-provider deployment.
 
 ---
 
-## Configuration
+## 5) VPS deploy checklist
 
-Config file locations:
+Use this checklist for a Linux VPS:
 
-| Platform | Path |
-|----------|------|
-| Linux/macOS | `~/.config/agentgate/agentgate.toml` or `./agentgate.toml` |
-| Windows | `%APPDATA%\agentgate\agentgate.toml` or `.\agentgate.toml` |
+- [ ] **Binary installed**: `/usr/local/bin/agentgate` (or known path).
+- [ ] **Config placed**: `/etc/agentgate/agentgate.toml`, owned by service user.
+- [ ] **API keys set**: `server.api_keys` has strong random keys.
+- [ ] **Bind address safe**: `127.0.0.1` + reverse proxy, or `0.0.0.0` only with keys + firewall.
+- [ ] **Firewall configured**: allow only required ports (SSH, HTTPS/reverse proxy; avoid exposing raw 8787 publicly).
+- [ ] **systemd hardened**: `KillMode=control-group`, `TasksMax=1024`, `MemoryMax=8G`, `Restart=on-failure`.
+- [ ] **Provider CLIs installed**: required CLIs on `PATH` for the service user.
+- [ ] **Provider secrets set**: env vars/systemd `Environment=`/drop-in files; no secrets in git.
+- [ ] **Health check**: `curl http://127.0.0.1:8787/health` returns OK.
+- [ ] **Model check**: `curl -H "Authorization: Bearer <key>" http://127.0.0.1:8787/v1/models`.
+- [ ] **Logs monitored**: `journalctl -u agentgate -f`.
+- [ ] **Update plan**: keep old binary backup, roll out new binary, restart, smoke test.
 
-Generate a template:
+---
 
-```bash
-agentgate init
+## Verified provider mappings note
+
+Some HTTP providers need exact endpoint/field mappings. Use only mappings marked as verified in docs/config.
+
+- NVIDIA NIM: see [`docs/PROVIDER_NVIDIA_NIM.md`](./docs/PROVIDER_NVIDIA_NIM.md). The example config includes a verified NVIDIA mapping block (disabled by default; set `NVIDIA_API_KEY` and `enabled = true`).
+- Before enabling a new HTTP provider mapping, confirm request/response compatibility (especially `tool_choice`, `response_format`, streaming, and model IDs).
+- If a provider returns 4xx schema errors, disable unsupported forwarded fields and check the provider-specific doc.
+
+---
+
+## Auth & API key safety
+
+- **Never bind `0.0.0.0` without `server.api_keys`.** A public/unprotected gateway can expose your upstream providers and spend quota.
+- Use long random keys; rotate them when shared.
+- Prefer reverse proxy TLS (HTTPS) when exposed outside localhost.
+- Keep provider credentials in environment variables, not in committed config.
+- Restrict firewall access to trusted IPs when possible.
+
+Example safe local config:
+
+```toml
+[server]
+host = "127.0.0.1"
+port = 8787
+api_keys = ["local-dev-key"]
 ```
 
-### Sample `agentgate.toml`
+Example network config:
 
 ```toml
 [server]
 host = "0.0.0.0"
 port = 8787
-# api_keys = ["sk-xxx"]          # enable when auth is needed
-request_timeout_secs = 600
-cors = false
-
-[defaults]
-workdir = "."
-max_concurrency_per_provider = 2
-model_cache_ttl_secs = 300
-
-# CLI-agent providers (spawn a local CLI process per request)
-
-[[provider]]
-id = "opencode"
-bin = "opencode"
-models_cmd = ["models"]
-chat_cmd = ["run", "--model", "{model}", "{prompt}"]
-strip_ansi = true
-enabled = true
-
-[[provider]]
-id = "gemini"
-bin = "gemini"
-models_cmd = ["list", "--format", "json"]
-chat_cmd = ["generate", "--model", "{model}", "{prompt}"]
-strip_ansi = true
-enabled = true
-models = ["gemini-2.5-pro", "gemini-2.5-flash"]
-
-[[provider]]
-id = "claude"
-bin = "claude"
-chat_cmd = ["-p", "--output-format", "stream-json", "--verbose",
-            "--include-partial-messages", "--model", "{model}"]
-strip_ansi = true
-enabled = true
-models = ["sonnet", "opus", "haiku"]
-
-# Native HTTP provider (Ollama)
-
-[[provider]]
-id = "ollama"
-bin = "ollama"
-enabled = true
-base_url = "http://127.0.0.1:11434"
-num_ctx = 16384
-keep_alive = "10m"
-
-# Reasoning / thinking output
-
-[reasoning]
-enabled = true
-format = "reasoning_content"     # reasoning_content | reasoning | both | think_tags | none | passthrough
-fallback = "activity"            # none | activity | induce
-omitted_marker = "activity"      # none | activity
-activity_lang = "id"             # id | en
-activity_prefix = "⏳ "
-null_content = true
-max_chars_per_turn = 200000
-max_blocks_per_turn = 64
-```
-
-See `agentgate.example.toml` in the repo for the full reference.
-
----
-
-## Running & Testing
-
-```bash
-agentgate serve --host 0.0.0.0 --port 8787
-```
-
-### Health check
-
-```bash
-curl http://localhost:8787/health
-# {"status":"ok"}
-```
-
-### List models
-
-```bash
-curl http://localhost:8787/v1/models
-```
-
-### Chat completion
-
-```bash
-curl -X POST http://localhost:8787/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "ollama/qwen2.5:7b",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "stream": false
-  }'
-```
-
-### Streaming chat
-
-```bash
-curl -N -X POST http://localhost:8787/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "opencode/anthropic/claude-sonnet-4",
-    "messages": [{"role": "user", "content": "Think step by step: 47 × 53"}],
-    "stream": true
-  }'
+api_keys = ["long-random-key-1", "long-random-key-2"]
 ```
 
 ---
 
 ## Troubleshooting
 
-### Provider not detected
+| Symptom | Likely cause | What to check / fix | Docs |
+|---|---|---|---|
+| `too_many_tools` / tool count rejected | Model/provider has tool-count limits, or free-model tool filtering/caps apply | Reduce tools in request; use a model/provider with higher tool support; check bridge/tool handling settings | [`docs/tool-handling.md`](./docs/tool-handling.md), [`docs/spec_free_model_combo.md`](./docs/spec_free_model_combo.md) |
+| `quota_exceeded`, `429`, `provider.free-limit` | Upstream quota/rate limit exhausted | Wait/reset window, switch model, enable combo/failover, or use provider with available quota | [`docs/spec_free_model_combo.md`](./docs/spec_free_model_combo.md), [`docs/TRANSPORT_HARDENING.md`](./docs/TRANSPORT_HARDENING.md) |
+| `Broken pipe (os error 32)` | Client disconnected mid-stream, or upstream/stdin/stdout pipe closed | Check client timeout/disconnect behavior; retry request; inspect AgentGate logs for upstream exit; ensure CLI provider is healthy | [`docs/TRANSPORT_HARDENING.md`](./docs/TRANSPORT_HARDENING.md) |
+| `ECONNREFUSED` / connection refused | Upstream not running/listening, wrong host/port, or local CLI/bridge not ready | Verify provider endpoint/CLI, check firewall/port, confirm service is running (`systemctl status`, logs), retry after startup | [`docs/TRANSPORT_HARDENING.md`](./docs/TRANSPORT_HARDENING.md), [`docs/LINUX_VPS_DIAGNOSIS.md`](./docs/LINUX_VPS_DIAGNOSIS.md) |
+| `401 Unauthorized` | Missing/wrong `Authorization: Bearer ...` key | Match client key to `server.api_keys`; rotate/update config and restart/reload as needed | [`README.md`](./README.md) |
+| `model not found` | Model not configured/discovered | Check `/v1/models`, provider config, provider CLI install, and model cache/ID | [`agentgate.example.toml`](./agentgate.example.toml), [`docs/http_gateway.md`](./docs/http_gateway.md) |
+
+### Useful checks
 
 ```bash
-which opencode            # Linux/macOS
-where opencode            # Windows
-```
+# Health
+curl http://127.0.0.1:8787/health
 
-Add the binary directory to `PATH` (or `bin`) and restart the gateway.
+# Models (with key)
+curl http://127.0.0.1:8787/v1/models -H "Authorization: Bearer <key>"
 
-### Port already in use
-
-```bash
-lsof -ti:8787 | xargs kill -9     # Linux/macOS
-netstat -ano | findstr :8787      # Windows
-```
-
-### Ollama connection refused
-
-Ensure `ollama serve` is running and reachable at `base_url`. Default is `http://127.0.0.1:11434`. Pull at least one model (`ollama pull <name>`).
-
-### Windows `.cmd` shims / quoting
-
-Windows `where` resolves `.cmd`/`.bat` wrappers. Use a quoted `bin` path or a `.ps1` shim if you hit quoting issues with `chat_cmd`.
-
-### CLI not exposing reasoning
-
-Verify the CLI version flags. Claude requires `--include-partial-messages --verbose`. `agentgate doctor --probe-reasoning` prints a small SSE probe you can inspect.
-
----
-
-## Linux Compatibility
-
-### Minimum glibc per artifact
-
-| Artifact | Triple | Minimum glibc | Build runner |
-|----------|--------|---------------|--------------|
-| `agentgate-linux-x86_64` | `x86_64-unknown-linux-gnu` | GLIBC_2.35 (Ubuntu 22.04+) | `ubuntu-22.04` |
-| `agentgate-linux-aarch64` | `aarch64-unknown-linux-gnu` | GLIBC_2.35 (Ubuntu 22.04+) | `ubuntu-22.04` |
-
-CI builds both Linux artifacts on `ubuntu-22.04` (glibc 2.35), so the released binary requires no symbol newer than GLIBC_2.35.
-
-### Exact mismatch error text
-
-Running a binary built on Ubuntu 24.04 (glibc 2.39) on Ubuntu 22.04 (glibc 2.35) prints:
-
-```
-agentgate: /lib/x86_64-linux-gnu/libc.so.6: weak version GLIBC_2.39 not found
-```
-
-The process still starts (weak symbol), but the mismatch indicates the binary is not ABI-compatible with the host.
-
-### Workaround
-
-Use the `ubuntu-22.04`-built release artifact from the GitHub Releases page, or rebuild from source on Ubuntu 22.04:
-
-```bash
-rustup target add x86_64-unknown-linux-gnu
-cargo build --release --target x86_64-unknown-linux-gnu
-```
-
-Verify the linked glibc ceiling:
-
-```bash
-objdump -T target/x86_64-unknown-linux-gnu/release/agentgate | grep -o 'GLIBC_[0-9.]*' | sort -u -V | tail -3
-# No symbol newer than GLIBC_2.35
-```
-
-### ARM64
-
-Same glibc floor (2.35). Cross-compile from x86_64:
-
-```bash
-rustup target add aarch64-unknown-linux-gnu
-sudo apt install gcc-aarch64-linux-gnu
-cargo build --release --target aarch64-unknown-linux-gnu
-```
-
-## Model Catalog Truthfulness
-
-`GET /v1/models` advertises only models discovered by scanning each provider (`opencode models`, `gemini list`, `ollama list`, Ollama `/api/tags`). Scan results are cached for 300 seconds (`model_cache_ttl_secs`).
-
-**Fallback behaviour:** If a provider's `models_cmd` scan fails or times out (10s), the gateway falls back to the statically configured `models` list from `agentgate.toml` **only if the provider binary was resolved and answered** (`is_available()`). If the provider is unavailable, its configured models are **not** advertised — requesting such a provider fails immediately with HTTP 503 `provider_unavailable` instead of opening an SSE stream that only sends keep-alives.
-
-**Client guidance:** Treat `/v1/models` as a best-effort advertisement, and expect an explicit `provider_unavailable` / `first_token_timeout` / `provider_timeout` error rather than a silent hang. Run `agentgate doctor` for the resolved binary path of each provider.
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `AGENTGATE_CONFIG` | Config file path | auto-detected |
-| `AGENTGATE_HOST` | Server bind address | `0.0.0.0` |
-| `AGENTGATE_PORT` | Server port | `8787` |
-| `AGENTGATE_PROVIDER_TIMEOUT_SECS` | Deadline for a single non-streaming provider call | `120` |
-| `AGENTGATE_STREAM_IDLE_TIMEOUT_SECS` | Max silence on an SSE stream after the first event | `120` |
-| `AGENTGATE_TEST_TIMEOUT_SECS` | Deadline for `agentgate test` | `180` |
-| `RUST_LOG` | Log level (trace/debug/info/warn/error) | `info` |
-
-### Fail-fast timeouts
-
-A hanging CLI agent used to leave the client with nothing but `: keep-alive` comments. AgentGate now bounds every wait and always terminates the stream:
-
-| Situation | Behaviour |
-|-----------|-----------|
-| Provider binary missing / broken | HTTP `503` with `"code": "provider_unavailable"`, before any streaming starts |
-| Provider produces no event | SSE error chunk `"code": "first_token_timeout"` then `data: [DONE]` (window = `[defaults] first_token_timeout_secs`, default `120`) |
-| Provider goes silent mid-stream | SSE error chunk `"code": "provider_timeout"` then `data: [DONE]` |
-| Provider reports an error but the CLI never exits (e.g. opencode quota error) | The error chunk is forwarded and the stream is terminated immediately |
-| Non-streaming provider call | `502` `"code": "provider_error"` with `produced no result within Ns (timed out)` |
-
----
-
-## Updating
-
-```bash
-# Binary (Linux)
-curl -sSL https://github.com/mrjay59/agengate/releases/latest/download/agentgate-linux-x86_64.zip -o /tmp/agentgate.zip
-unzip -o /tmp/agentgate.zip -d /tmp/agentgate && sudo mv /tmp/agentgate/agentgate /usr/local/bin/
-
-# Cargo
-cargo install --git https://github.com/mrjay59/agengate.git --force
-
-# Verify
-agentgate --version
+# Linux service logs
+journalctl -u agentgate -n 200 --no-pager
 ```
 
 ---
 
-## Uninstalling
+## Related docs
 
-```bash
-sudo rm /usr/local/bin/agentgate
-sudo rm -rf /etc/systemd/system/agentgate.service
-sudo systemctl daemon-reload
-
-# or, if installed via cargo
-cargo uninstall agentgate
-
-# remove config (optional)
-rm -rf ~/.config/agentgate
-```
-
----
-
-*AgentGate v0.2.1*
+- [README.md](./README.md)
+- [agentgate.example.toml](./agentgate.example.toml)
+- [docs/http_gateway.md](./docs/http_gateway.md)
+- [docs/TRANSPORT_HARDENING.md](./docs/TRANSPORT_HARDENING.md)
+- [docs/spec_free_model_combo.md](./docs/spec_free_model_combo.md)
+- [docs/BUILD_AND_RELEASE.md](./docs/BUILD_AND_RELEASE.md)

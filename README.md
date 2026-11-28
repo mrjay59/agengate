@@ -1,158 +1,158 @@
 # AgentGate
 
-Jembatan antara AionUi / GitHub Copilot Chat dan CLI agent. Menyediakan endpoint HTTP kompatibel OpenAI (`/v1/chat/completions`, `/v1/models`) yang meneruskan request ke CLI tool lokal.
+AgentGate is an OpenAI-compatible AI gateway. It exposes HTTP endpoints like `/v1/chat/completions` and `/v1/models`, then routes requests to CLI agents and HTTP providers behind one API.
 
-**Versi: 0.2.11**
+**Current version:** `0.3.43`
 
-## Fitur
+## What it does
 
-- Kompatibel OpenAI Chat Completions (streaming & non-streaming).
-- Mendukung provider CLI (opencode, aionrs, claude, dll).
-- Sanitasi pesan `tool` → `assistant` agar provider ketat tetap menerima.
-- Mendukung `reasoning_content` / thinking (OpenCode: `--thinking --format json`) untuk stream & non-stream.
-- Cross-platform: Windows, Linux x86_64, Linux ARM64.
-- **GitHub Copilot Chat support**: Model alias (`gpt-4o`, `o1-mini`, dll), tool normalization (`read_file`→`read`, `write_file`→`write`, `terminal`→`bash`, `list_dir`→`list`), system prompt forwarding, reduced timeout.
-- **AionUI tool support**: `ExecCommand` (PowerShell via `bash`), `read`, `write`, `edit`, `glob`, `grep`, `execute` (JS Code Mode).
-- **opencode CLI tools**: `Shell`, `Bash`, `List`, `Cat`, `Read`, `Write`, `Edit`, `Glob`, `Grep` (TitleCase).
-- **MCP Bridge**: Session management, tool isolation, parked runs, live continuation.
-- **Free model limit handling**: Skip opencode.json injection for free models.
+- **One OpenAI-style API** for local CLI tools and HTTP model providers.
+- **CLI + HTTP gateway mode**: run local agents (for example `opencode`, `copilot`, `gemini`) or connect OpenAI-compatible HTTP providers.
+- **Streaming and non-streaming** chat completions.
+- **Free-model pool / combo failover**: route across a pool of free models (including 10 free models in the default free-model workflow) when quota/rate limits hit.
+- **API key lifecycle**: manage gateway API keys for client access.
+- **Proxy, load balancer, and combo routing**: route traffic across upstreams/providers with fallback.
+- **Transport hardening**: better handling for transient network/provider errors (retries, classification, safer cleanup).
 
-## Build
+## Quick start
 
-### Prasyarat
+### 1) Get AgentGate
 
-- Rust toolchain (stable): https://rustup.rs
-- Untuk cross-build: Docker Desktop + `cargo install cross`
-
-### Build native (platform saat ini)
+Use a release binary from [GitHub Releases](https://github.com/mrjay59/agengate/releases), or build from source:
 
 ```bash
 cargo build --release
 ```
 
-Binary: `target/release/agentgate` (Linux/macOS) atau `target/release/agentgate.exe` (Windows).
+Binary output:
+- Windows: `target\release\agentgate.exe`
+- Linux/macOS: `target/release/agentgate`
 
-### Build multi-platform
+### 2) Create a config
 
-```bash
-# Linux x86_64 (static, tanpa glibc dependency)
-cross build --release --target x86_64-unknown-linux-musl
-
-# Linux ARM64
-cross build --release --target aarch64-unknown-linux-gnu
-
-# Windows x86_64 (dari Linux/Mac)
-cross build --release --target x86_64-pc-windows-gnu
-```
-
-Output binary ada di `target/<target>/release/`.
-
-### Build semua sekaligus (Windows bat)
-
-```bat
-@echo off
-cross build --release --target x86_64-pc-windows-gnu
-cross build --release --target x86_64-unknown-linux-musl
-cross build --release --target aarch64-unknown-linux-gnu
-echo Selesai. Cek folder target/
-```
-
-## Install
-
-### Windows
-
-1. Copy `agentgate.exe` ke folder yang ada di PATH, misal `C:\tools\agentgate\`.
-2. Atau jalankan langsung dari folder project:
-   ```powershell
-   .\target\release\agentgate.exe serve
-   ```
-
-### Linux (x86_64 / ARM64)
+Copy the example config and edit it:
 
 ```bash
-chmod +x target/release/agentgate
-sudo cp target/release/agentgate /usr/local/bin/agentgate
-agentgate serve
+# Linux / macOS
+cp agentgate.example.toml agentgate.toml
+
+# Windows PowerShell
+Copy-Item agentgate.example.toml agentgate.toml
 ```
 
-Untuk ARM (Raspberry Pi, dll), gunakan binary hasil build `aarch64-unknown-linux-gnu`.
-
-### macOS
-
-```bash
-cargo build --release
-cp target/release/agentgate /usr/local/bin/agentgate
-agentgate serve
-```
-
-## Konfigurasi
-
-Buat config default:
-
-```bash
-agentgate init
-```
-
-File config default berada di lokasi standar OS. Edit `config.toml` untuk menambahkan provider CLI:
+Minimum local config:
 
 ```toml
 [server]
 host = "127.0.0.1"
-port = 8080
+port = 8787
+api_keys = ["change-me"] # required before exposing beyond localhost
 
 [[provider]]
 id = "opencode"
-bin = "opencode"
-models = ["opencode/beam-free"]
-chat_cmd = ["run", "--model", "{model}", "--thinking", "--format", "json", "{prompt}"]
-strip_ansi = true
-
-[[provider]]
-id = "ollama"
-bin = "ollama"
-models_cmd = ["list"]
-chat_cmd = ["run", "{model}"]
-strip_ansi = true
 enabled = true
-models = ["llama3", "deepseek-r1", "phi3"]
 ```
 
-Parameter penting:
-- `bin`: path/nama binary CLI.
-- `models_cmd`: perintah untuk list model (opsional, fallback ke `models`).
-- `chat_cmd`: perintah chat, gunakan placeholder `{model}` dan `{prompt}`.
-- `strip_ansi`: hapus ANSI escape codes dari output.
-
-## Menjalankan
+### 3) Start the server
 
 ```bash
-agentgate serve
-# atau dengan host/port custom
-agentgate serve --host 0.0.0.0 --port 9000
+# Windows
+.\agentgate.exe serve --config agentgate.toml
+
+# Linux / macOS
+./agentgate serve --config agentgate.toml
 ```
 
-## Penggunaan dengan AionUi
+Server default: `http://127.0.0.1:8787`
 
-Di AionUi, tambahkan Custom API provider dengan:
-- Base URL: `http://127.0.0.1:8080/v1`
-- API Key: (bebas, AgentGate tidak validasi)
-- Model: sesuai yang terdaftar (misal `opencode/beam-free`)
+## Quick curl examples
 
-## Endpoint
+> Replace `change-me` with your API key. If `api_keys` is empty and you only bind to `127.0.0.1`, local testing may work without auth depending on your setup; for any shared/networked deployment, set API keys.
 
-| Method | Path | Deskripsi |
-|--------|------|-----------|
-| GET | `/v1/models` | List model tersedia |
-| POST | `/v1/chat/completions` | Chat completion (stream/non-stream) |
-| GET | `/health` | Health check |
+### 1. Health check
 
-## Troubleshooting
+```bash
+curl http://127.0.0.1:8787/health
+```
 
-- **`UNKNOWN_UPSTREAM_ERROR` / `OpenAI stream ended without a terminal event`**: Pastikan AgentGate versi terbaru (sudah wrap SSE + `[DONE]`).
-- **Error 422 `unknown variant tool`**: Versi terbaru sudah map `tool` → `assistant`.
-- **Error 422 `missing field content`**: Versi terbaru sudah pakai `#[serde(default)]`.
-- **Output kosong**: Cek `strip_ansi`, cek path `bin`, cek `chat_cmd`.
+### 2. List models
 
-## Lisensi
+```bash
+curl http://127.0.0.1:8787/v1/models \
+  -H "Authorization: Bearer change-me"
+```
 
-MIT
+### 3. Non-streaming chat completion
+
+```bash
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H "Authorization: Bearer change-me" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "opencode/gpt-5-nano",
+    "messages": [{"role": "user", "content": "Say hello in one sentence."}],
+    "stream": false
+  }'
+```
+
+### 4. Streaming chat completion
+
+```bash
+curl -N http://127.0.0.1:8787/v1/chat/completions \
+  -H "Authorization: Bearer change-me" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "opencode/gpt-5-nano",
+    "messages": [{"role": "user", "content": "Write 3 short bullets about AgentGate."}],
+    "stream": true
+  }'
+```
+
+### 5. Chat with tools (OpenAI tool format)
+
+```bash
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H "Authorization: Bearer change-me" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "opencode/gpt-5-nano",
+    "messages": [{"role": "user", "content": "What time is it? Use the tool if needed."}],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_time",
+          "description": "Get current time",
+          "parameters": {"type": "object", "properties": {}}
+        }
+      }
+    ]
+  }'
+```
+
+## Config essentials
+
+| Setting | Where | Why it matters |
+|---|---|---|
+| `server.host` / `server.port` | `agentgate.toml` | Bind address and port. Use `127.0.0.1` for local-only. |
+| `server.api_keys` | `agentgate.toml` | Client API keys for `/v1/*`. **Set keys before exposing to network.** |
+| `server.request_timeout_secs` | `agentgate.toml` | Overall request timeout. |
+| `defaults.max_concurrency_per_provider` | `agentgate.toml` | Limits concurrent requests per provider. |
+| `defaults.model_cache_ttl_secs` | `agentgate.toml` | How long model discovery is cached. |
+| `[[provider]]` | `agentgate.toml` | Enable/configure CLI or HTTP providers. |
+| `NVIDIA_API_KEY` etc. | Environment | Secrets for HTTP providers; keep them out of git. |
+
+See [`agentgate.example.toml`](./agentgate.example.toml) for a full example.
+
+## Documentation
+
+- [INSTALL.md](./INSTALL.md) - platform install guides (Windows, Linux, macOS, Docker, VPS).
+- [docs/http_gateway.md](./docs/http_gateway.md) - HTTP gateway overview.
+- [docs/TRANSPORT_HARDENING.md](./docs/TRANSPORT_HARDENING.md) - transport errors, retries, diagnostics.
+- [docs/spec_free_model_combo.md](./docs/spec_free_model_combo.md) - free-model combo/failover design.
+- [docs/PROVIDER_NVIDIA_NIM.md](./docs/PROVIDER_NVIDIA_NIM.md) - NVIDIA NIM provider mapping.
+- [docs/BUILD_AND_RELEASE.md](./docs/BUILD_AND_RELEASE.md) - build and release notes.
+
+## Security note
+
+Do **not** bind `server.host = "0.0.0.0"` without configuring `server.api_keys`. If you expose AgentGate on a LAN/VPS/public interface, use strong API keys and put it behind a firewall/reverse proxy as needed.
