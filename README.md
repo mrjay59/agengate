@@ -151,8 +151,13 @@ See [`agentgate.example.toml`](./agentgate.example.toml) for a full example.
 - [docs/TRANSPORT_HARDENING.md](./docs/TRANSPORT_HARDENING.md) - transport errors, retries, diagnostics.
 - [docs/spec_free_model_combo.md](./docs/spec_free_model_combo.md) - free-model combo/failover design.
 - [docs/PROVIDER_NVIDIA_NIM.md](./docs/PROVIDER_NVIDIA_NIM.md) - NVIDIA NIM provider mapping.
+- [docs/CROSS_PLATFORM_PATHS.md](./docs/CROSS_PLATFORM_PATHS.md) - Windows client paths on a Linux gateway.
 - [docs/BUILD_AND_RELEASE.md](./docs/BUILD_AND_RELEASE.md) - build and release notes.
 
 ## Security note
 
 Do **not** bind `server.host = "0.0.0.0"` without configuring `server.api_keys`. If you expose AgentGate on a LAN/VPS/public interface, use strong API keys and put it behind a firewall/reverse proxy as needed.
+
+## Cross-platform note
+
+If a Windows client sends Windows absolute paths (for example `C:\Users\...\file.py`) while AgentGate runs on Linux, those paths are not visible in the Linux session workdir (`/tmp/agentgate/sessions/<id>/work`). Use session-relative paths, inline file content, or run a local Windows gateway. See [docs/CROSS_PLATFORM_PATHS.md](./docs/CROSS_PLATFORM_PATHS.md).

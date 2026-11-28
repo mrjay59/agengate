@@ -894,6 +894,79 @@ fn utf8_chunks(s: &str, max_bytes: usize) -> Vec<&str> {
     out
 }
 
+fn redact_windows_path_snippet(text: &str, max_len: usize) -> String {
+    let mut snippet: String = text.chars().take(max_len).collect();
+    if text.chars().count() > max_len {
+        snippet.push_str("...");
+    }
+    snippet
+}
+
+fn find_windows_abs_path(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        let b = bytes[i];
+        // Drive letter path: C:\ or C:/
+        if b.is_ascii_alphabetic() && i + 2 < len && bytes[i + 1] == b':' {
+            let sep = bytes[i + 2];
+            if sep == b'\\' || sep == b'/' {
+                // capture a small snippet around the match
+                let start = i;
+                let mut end = i + 3;
+                while end < len {
+                    let c = bytes[end];
+                    if c == b'"' || c == b'\'' || c.is_ascii_whitespace() || c == b',' || c == b'}' || c == b']' {
+                        break;
+                    }
+                    end += 1;
+                    if end - start > 120 { break; }
+                }
+                return Some(text[start..end].to_string());
+            }
+        }
+        // UNC path: \\server\share or //server/share
+        if i + 3 < len {
+            let a = bytes[i];
+            let b2 = bytes[i + 1];
+            let c = bytes[i + 2];
+            if ((a == b'\\' && b2 == b'\\') || (a == b'/' && b2 == b'/'))
+                && (c.is_ascii_alphanumeric() || c == b'_' || c == b'.' || c == b'-')
+            {
+                let start = i;
+                let mut end = i + 3;
+                while end < len {
+                    let ch = bytes[end];
+                    if ch == b'"' || ch == b'\'' || ch.is_ascii_whitespace() || ch == b',' || ch == b'}' || ch == b']' {
+                        break;
+                    }
+                    end += 1;
+                    if end - start > 120 { break; }
+                }
+                return Some(text[start..end].to_string());
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn warn_windows_path_on_non_windows_gateway(tool_name: &str, args: &str) {
+    if cfg!(windows) {
+        return;
+    }
+    if let Some(path) = find_windows_abs_path(args) {
+        let snippet = redact_windows_path_snippet(&path, 120);
+        tracing::warn!(
+            code = "windows_path_on_non_windows_gateway",
+            tool = %tool_name,
+            path_snippet = %snippet,
+            "Tool args contain a Windows absolute path on a non-Windows gateway; path likely does not exist in the Linux session workdir. Do not auto-rewrite."
+        );
+    }
+}
+
 /// Emits a single `RunEvent` as SSE chunks. Returns the number of tool calls
 /// actually emitted to the client (0 for non-ToolCalls events). Callers use
 /// this to avoid terminating a stream with `finish_reason:"tool_calls"` when
@@ -999,6 +1072,8 @@ async fn emit_event(
                 }
                 let index = emitted_index;
                 emitted_index += 1;
+                let args = call.function.arguments.as_str();
+                warn_windows_path_on_non_windows_gateway(&emitted_name, args);
                 send_delta(tx, ctx, serde_json::json!({
                     "tool_calls": [{
                         "index": index,
@@ -1007,7 +1082,6 @@ async fn emit_event(
                         "function": { "name": emitted_name, "arguments": "" }
                     }]
                 })).await;
-                let args = call.function.arguments.as_str();
                 for chunk in utf8_chunks(args, 512) {
                     send_delta(tx, ctx, serde_json::json!({
                         "tool_calls": [{
@@ -1539,6 +1613,40 @@ mod sse_tool_arg_chunking_tests {
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].len(), 512);
         assert_eq!(chunks[1].len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod windows_path_warning_tests {
+    use super::{find_windows_abs_path, warn_windows_path_on_non_windows_gateway};
+
+    #[test]
+    fn detects_drive_letter_paths() {
+        assert_eq!(find_windows_abs_path(r#"{"path":"C:\Users\EDN\file.txt"}"#).as_deref(), Some(r"C:\Users\EDN\file.txt"));
+        assert_eq!(find_windows_abs_path(r#"{"path":"D:/work/repo"}"#).as_deref(), Some("D:/work/repo"));
+    }
+
+    #[test]
+    fn detects_unc_paths() {
+        assert_eq!(find_windows_abs_path(r#"\\server\share\dir"#).as_deref(), Some(r"\\server\share\dir"));
+        assert_eq!(find_windows_abs_path("//server/share/dir").as_deref(), Some("//server/share/dir"));
+    }
+
+    #[test]
+    fn ignores_linux_paths() {
+        assert!(find_windows_abs_path(r#"{"path":"/home/user/file.txt"}"#).is_none());
+        assert!(find_windows_abs_path(r#"{"cmd":"ls -la /tmp"}"#).is_none());
+        assert!(find_windows_abs_path("no path here").is_none());
+    }
+
+    #[test]
+    fn warn_does_not_mutate_args() {
+        let original = r#"{"command":"type C:\\Users\\EDN\\secret.txt"}"#.to_string();
+        let mut args = original.clone();
+        warn_windows_path_on_non_windows_gateway("ExecCommand", &args);
+        // Function takes &str and has no way to mutate; this asserts the value is unchanged.
+        assert_eq!(args, original);
+        let _ = &mut args;
     }
 }
 

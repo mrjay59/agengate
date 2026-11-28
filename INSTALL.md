@@ -336,6 +336,7 @@ api_keys = ["long-random-key-1", "long-random-key-2"]
 | `ECONNREFUSED` / connection refused | Upstream not running/listening, wrong host/port, or local CLI/bridge not ready | Verify provider endpoint/CLI, check firewall/port, confirm service is running (`systemctl status`, logs), retry after startup | [`docs/TRANSPORT_HARDENING.md`](./docs/TRANSPORT_HARDENING.md), [`docs/LINUX_VPS_DIAGNOSIS.md`](./docs/LINUX_VPS_DIAGNOSIS.md) |
 | `401 Unauthorized` | Missing/wrong `Authorization: Bearer ...` key | Match client key to `server.api_keys`; rotate/update config and restart/reload as needed | [`README.md`](./README.md) |
 | `model not found` | Model not configured/discovered | Check `/v1/models`, provider config, provider CLI install, and model cache/ID | [`agentgate.example.toml`](./agentgate.example.toml), [`docs/http_gateway.md`](./docs/http_gateway.md) |
+| Windows path on Linux gateway (code appears "cut", agent reads via `sed -n`) | Client sent a Windows absolute path (e.g. `C:\Users\...\file.py`) but gateway runs on Linux; path does not exist in Linux workdir (`/tmp/agentgate/sessions/<id>/work`) | Use a path relative to session workdir, inline file content, or run AgentGate on Windows for Windows-host paths. Gateway may emit a warning log when it detects Windows-style paths on non-Windows hosts. | [`docs/CROSS_PLATFORM_PATHS.md`](./docs/CROSS_PLATFORM_PATHS.md) |
 
 ### Useful checks
 
@@ -359,4 +360,5 @@ journalctl -u agentgate -n 200 --no-pager
 - [docs/http_gateway.md](./docs/http_gateway.md)
 - [docs/TRANSPORT_HARDENING.md](./docs/TRANSPORT_HARDENING.md)
 - [docs/spec_free_model_combo.md](./docs/spec_free_model_combo.md)
+- [docs/CROSS_PLATFORM_PATHS.md](./docs/CROSS_PLATFORM_PATHS.md)
 - [docs/BUILD_AND_RELEASE.md](./docs/BUILD_AND_RELEASE.md)
