@@ -2950,14 +2950,25 @@ impl ServiceRegistry {
                             had_meaningful_output.store(false, Ordering::Relaxed);
                             continue;
                         }
-                        if transient_retries < 1
+                        // FIX-PIPE-RETRY: dead-child broken pipe / readiness before
+                        // any meaningful output is common (Bun crash, stale session,
+                        // EAGAIN spawn). One retry was not enough; allow a small
+                        // bounded budget so we can transparently recover with a fresh
+                        // session instead of surfacing a terminal mid-stream error.
+                        let retry_class = crate::transport::classify_message(&err_str);
+                        let max_transient_retries: u32 = match retry_class {
+                            crate::transport::TransportErrorClass::BrokenPipe
+                            | crate::transport::TransportErrorClass::Readiness
+                            | crate::transport::TransportErrorClass::ConnectionRefused
+                            | crate::transport::TransportErrorClass::ConnectionReset => 3,
+                            _ => 1,
+                        };
+                        if transient_retries < max_transient_retries
                             && !had_meaningful_output.load(Ordering::Relaxed)
                             && is_transient_bridge_error(&err_str)
                         {
                             transient_retries += 1;
-                            // FIX-TRANSPORT-CLASSIFY: structured diagnostics for
-                            // ECONNREFUSED / ECONNRESET / broken pipe / readiness.
-                            let class = crate::transport::classify_message(&err_str);
+                            let class = retry_class;
                             crate::metrics::init_metrics().record_error("bridge_transport_retry", class.as_str());
                             tracing::warn!(
                                 target: "agentgate.transport",
@@ -2965,8 +2976,9 @@ impl ServiceRegistry {
                                 model = %model,
                                 error_class = class.as_str(),
                                 attempt = transient_retries,
+                                max_attempts = max_transient_retries,
                                 error = %crate::transport::redact_diagnostics(&err_str),
-                                "transient bridge/CLI error with no output; retrying once"
+                                "transient bridge/CLI error with no output; retrying with fresh session"
                             );
                             // FIX-RAM-LEAK: close the failed attempt session so
                             // retry does not orphan the CLI child/MCP shim.
@@ -2976,7 +2988,8 @@ impl ServiceRegistry {
                             }
                             run_for_park = returned_run;
                             had_meaningful_output.store(false, Ordering::Relaxed);
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            let backoff_ms = 500u64.saturating_mul(transient_retries as u64);
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                             continue;
                         }
                         // FIX-TRANSPORT-CLASSIFY: terminal stream errors also
